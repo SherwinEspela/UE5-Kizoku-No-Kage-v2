@@ -73,3 +73,26 @@ Plugins/**/Intermediate/*
 
 # Cache files for the editor to use
 DerivedDataCache/*
+KizokuNoKageV2/Binaries/
+KizokuNoKageV2/Build/
+KizokuNoKageV2/Content/00_KNK_Assets/Animations/
+KizokuNoKageV2/Content/Audio/
+KizokuNoKageV2/Content/Blueprints/
+KizokuNoKageV2/Content/Characters/
+KizokuNoKageV2/Content/Input/
+KizokuNoKageV2/Content/Katanas/
+KizokuNoKageV2/Content/LevelPrototyping/
+KizokuNoKageV2/Content/MetaHumans/
+KizokuNoKageV2/Content/ParagonSunWukong/
+KizokuNoKageV2/Content/Shinobi_Rei/
+KizokuNoKageV2/Content/ShinobiReiAnimations/
+KizokuNoKageV2/Content/Widgets/
+KizokuNoKageV2/DerivedDataCache/
+KizokuNoKageV2/Intermediate/
+KizokuNoKageV2/Saved/
+KizokuNoKageV2/Config/DefaultDeviceProfiles.ini
+KizokuNoKageV2/Config/DefaultEditor.ini
+KizokuNoKageV2/Config/DefaultInput.ini
+KizokuNoKageV2/Config/DefaultGameplayTags.ini
+KizokuNoKageV2/Content/Misc/
+KizokuNoKageV2/Content/Levels/
