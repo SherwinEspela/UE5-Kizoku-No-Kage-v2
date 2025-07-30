@@ -96,3 +96,5 @@ KizokuNoKageV2/Config/DefaultInput.ini
 KizokuNoKageV2/Config/DefaultGameplayTags.ini
 KizokuNoKageV2/Content/Misc/
 KizokuNoKageV2/Content/Levels/
+KizokuNoKageV2/Content/00_KNK_Assets/Maps/AnimationEditMap.umap
+KizokuNoKageV2/Content/00_KNK_Assets/Maps/SetupMap.umap
