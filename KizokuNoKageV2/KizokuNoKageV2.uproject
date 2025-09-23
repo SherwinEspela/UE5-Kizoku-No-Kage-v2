@@ -3,6 +3,16 @@
 	"EngineAssociation": "5.6",
 	"Category": "Samples",
 	"Description": "",
+	"Modules": [
+		{
+			"Name": "KizokuNoKageV2",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"AdditionalDependencies": [
+				"Engine"
+			]
+		}
+	],
 	"Plugins": [
 		{
 			"Name": "ModelingToolsEditorMode",
