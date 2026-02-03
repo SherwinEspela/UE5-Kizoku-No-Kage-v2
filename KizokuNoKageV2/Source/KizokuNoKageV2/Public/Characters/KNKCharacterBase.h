@@ -21,4 +21,7 @@ protected:
 	// States
 	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category = "Player Input")
 	bool bIsDead = false;
+
+	UPROPERTY(BlueprintReadWrite)
+	TArray<AActor*> SpawnedDamageFxActors;
 };
