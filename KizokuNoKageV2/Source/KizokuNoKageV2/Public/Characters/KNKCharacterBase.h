@@ -14,6 +14,9 @@ class KIZOKUNOKAGEV2_API AKNKCharacterBase : public ACharacter
 public:
 	AKNKCharacterBase();
 
+	UFUNCTION(BlueprintCallable)
+	void ShouldDisableCapsuleComponent(bool Disable);
+
 protected:
 	// States
 	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category = "Player Input")

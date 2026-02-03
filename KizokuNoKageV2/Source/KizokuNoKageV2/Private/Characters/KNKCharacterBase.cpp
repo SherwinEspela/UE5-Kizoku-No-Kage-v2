@@ -1,4 +1,5 @@
 #include "Characters/KNKCharacterBase.h"
+#include "Components/CapsuleComponent.h"
 
 // Sets default values
 AKNKCharacterBase::AKNKCharacterBase()
@@ -7,3 +8,13 @@ AKNKCharacterBase::AKNKCharacterBase()
 
 }
 
+void AKNKCharacterBase::ShouldDisableCapsuleComponent(bool Disable)
+{
+	if (Disable)
+	{
+		GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+	else {
+		GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::PhysicsOnly);
+	}
+}
