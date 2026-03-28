@@ -22,6 +22,7 @@ enum class EPlayerMovementStates : uint8
 	EPMS_StealthAttacking		UMETA(DisplayName = "Stealth Attacking"),
 	EPMS_StandingToCrouching	UMETA(DisplayName = "Standing to Crouching"),
 	EPMS_CrouchingToStanding	UMETA(DisplayName = "Crouching to Standing"),
+	EPMS_Grappling				UMETA(DisplayName = "Grappling"),
 	EPMS_Default				UMETA(DisplayName = "Default")
 };
 
