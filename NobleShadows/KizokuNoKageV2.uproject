@@ -1,6 +1,6 @@
 {
 	"FileVersion": 3,
-	"EngineAssociation": "{358F98FC-4446-642B-ACD4-9AA39BA25678}",
+	"EngineAssociation": "5.8",
 	"Category": "Samples",
 	"Description": "",
 	"Modules": [
@@ -124,6 +124,10 @@
 		},
 		{
 			"Name": "GeometryCacheAbcFile",
+			"Enabled": true
+		},
+		{
+			"Name": "ProceduralVegetationEditor",
 			"Enabled": true
 		}
 	],
