@@ -129,6 +129,14 @@
 		{
 			"Name": "ProceduralVegetationEditor",
 			"Enabled": true
+		},
+		{
+			"Name": "HairModelingToolset",
+			"Enabled": true
+		},
+		{
+			"Name": "GroomAssetExporter",
+			"Enabled": true
 		}
 	],
 	"TargetPlatforms": [
