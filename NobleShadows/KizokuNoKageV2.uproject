@@ -137,6 +137,10 @@
 		{
 			"Name": "GroomAssetExporter",
 			"Enabled": true
+		},
+		{
+			"Name": "ActorPalette",
+			"Enabled": true
 		}
 	],
 	"TargetPlatforms": [
