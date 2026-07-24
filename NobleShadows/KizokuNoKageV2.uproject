@@ -76,14 +76,17 @@
 			"Enabled": true,
 			"SupportedTargetPlatforms": [
 				"Win64",
-				"Linux"
+				"Linux",
+				"Mac"
 			]
 		},
 		{
 			"Name": "MetaHumanCalibrationDiagnostics",
 			"Enabled": true,
 			"SupportedTargetPlatforms": [
-				"Win64"
+				"Win64",
+				"Linux",
+				"Mac"
 			]
 		},
 		{
@@ -91,16 +94,13 @@
 			"Enabled": true,
 			"SupportedTargetPlatforms": [
 				"Win64",
-				"Linux"
+				"Linux",
+				"Mac"
 			]
 		},
 		{
 			"Name": "MetaHumanCoreTech",
-			"Enabled": true,
-			"SupportedTargetPlatforms": [
-				"Win64",
-				"Linux"
-			]
+			"Enabled": true
 		},
 		{
 			"Name": "MetaHumanCharacter",
@@ -140,6 +140,10 @@
 		},
 		{
 			"Name": "ActorPalette",
+			"Enabled": true
+		},
+		{
+			"Name": "MovieRenderPipeline",
 			"Enabled": true
 		}
 	],
