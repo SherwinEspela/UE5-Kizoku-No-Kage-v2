@@ -255,3 +255,11 @@ NobleShadows/Content/SKM_from57/
 NobleShadows/Content/00_KNK_Assets/SkeletalMesh/
 NobleShadows/Content/00_KNK_Assets/Mutable/
 NobleShadows/Content/ParagonExtractedParts/
+NobleShadows/Content/00_Experiments/Grass/FoliageTypes/
+NobleShadows/Content/00_Experiments/JungleLevel/Heightmaps/
+NobleShadows/Content/00_Experiments/Mission5_TideOfThieves/HeightMaps/
+NobleShadows/Content/Singapore_Canal/
+NobleShadows/Content/Ship/
+
+# Debug symbols (large build artifacts)
+*.pdb

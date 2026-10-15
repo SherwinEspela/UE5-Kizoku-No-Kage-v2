@@ -1,0 +1,32 @@
+{
+    "Version": "1.2",
+    "Data": {
+        "Source": "c:\\projects\\unreal\\kizoku_no_kage_v2_repo\\nobleshadows\\plugins\\animtoolset\\intermediate\\build\\win64\\x64\\unrealeditor\\development\\animtoolset\\module.animtoolset.cpp",
+        "ProvidedModule": "",
+        "PCH": "c:\\projects\\unreal\\kizoku_no_kage_v2_repo\\nobleshadows\\intermediate\\build\\win64\\x64\\kizokunokagev2editor\\development\\unrealed\\sharedpch.unrealed.project.valapi.valexpapi.cpp20.inclorderunreal5_6.h.pch",
+        "Includes": [
+            "c:\\projects\\unreal\\kizoku_no_kage_v2_repo\\nobleshadows\\plugins\\animtoolset\\intermediate\\build\\win64\\x64\\unrealeditor\\development\\animtoolset\\definitions.animtoolset.h",
+            "c:\\projects\\unreal\\kizoku_no_kage_v2_repo\\nobleshadows\\plugins\\animtoolset\\intermediate\\build\\win64\\unrealeditor\\inc\\animtoolset\\uht\\animtoolset.gen.cpp",
+            "c:\\projects\\unreal\\kizoku_no_kage_v2_repo\\nobleshadows\\plugins\\animtoolset\\source\\animtoolset\\public\\animtoolset.h",
+            "c:\\program files\\epic games\\ue_5.8\\engine\\plugins\\experimental\\toolsetregistry\\source\\toolsetregistry\\public\\toolsetregistry\\toolsetdefinition.h",
+            "c:\\program files\\epic games\\ue_5.8\\engine\\plugins\\experimental\\toolsetregistry\\intermediate\\build\\win64\\unrealeditor\\inc\\toolsetregistry\\uht\\toolsetdefinition.generated.h",
+            "c:\\projects\\unreal\\kizoku_no_kage_v2_repo\\nobleshadows\\plugins\\animtoolset\\intermediate\\build\\win64\\unrealeditor\\inc\\animtoolset\\uht\\animtoolset.generated.h",
+            "c:\\projects\\unreal\\kizoku_no_kage_v2_repo\\nobleshadows\\plugins\\animtoolset\\intermediate\\build\\win64\\unrealeditor\\inc\\animtoolset\\uht\\animtoolset.init.gen.cpp",
+            "c:\\projects\\unreal\\kizoku_no_kage_v2_repo\\nobleshadows\\plugins\\animtoolset\\intermediate\\build\\win64\\x64\\unrealeditor\\development\\animtoolset\\permoduleinline.gen.cpp",
+            "c:\\program files\\epic games\\ue_5.8\\engine\\source\\runtime\\core\\public\\hal\\permoduleinline.inl",
+            "c:\\projects\\unreal\\kizoku_no_kage_v2_repo\\nobleshadows\\plugins\\animtoolset\\source\\animtoolset\\private\\animtoolset.cpp",
+            "c:\\program files\\epic games\\ue_5.8\\engine\\source\\runtime\\engine\\classes\\animation\\animnotifies\\animnotifystate.h",
+            "c:\\program files\\epic games\\ue_5.8\\engine\\intermediate\\build\\win64\\unrealeditor\\inc\\engine\\uht\\animnotifystate.generated.h",
+            "c:\\projects\\unreal\\kizoku_no_kage_v2_repo\\nobleshadows\\plugins\\animtoolset\\source\\animtoolset\\private\\animtoolsetmodule.cpp",
+            "c:\\projects\\unreal\\kizoku_no_kage_v2_repo\\nobleshadows\\plugins\\animtoolset\\source\\animtoolset\\public\\animtoolsetmodule.h",
+            "c:\\program files\\epic games\\ue_5.8\\engine\\plugins\\experimental\\toolsetregistry\\source\\toolsetregistry\\public\\toolsetregistry\\utoolsetregistry.h",
+            "c:\\program files\\epic games\\ue_5.8\\engine\\plugins\\experimental\\toolsetregistry\\source\\toolsetregistry\\public\\toolsetregistry\\toolcallasyncresultstring.h",
+            "c:\\program files\\epic games\\ue_5.8\\engine\\plugins\\experimental\\toolsetregistry\\source\\toolsetregistry\\public\\toolsetregistry\\toolcallasyncresult.h",
+            "c:\\program files\\epic games\\ue_5.8\\engine\\plugins\\experimental\\toolsetregistry\\intermediate\\build\\win64\\unrealeditor\\inc\\toolsetregistry\\uht\\toolcallasyncresult.generated.h",
+            "c:\\program files\\epic games\\ue_5.8\\engine\\plugins\\experimental\\toolsetregistry\\intermediate\\build\\win64\\unrealeditor\\inc\\toolsetregistry\\uht\\toolcallasyncresultstring.generated.h",
+            "c:\\program files\\epic games\\ue_5.8\\engine\\plugins\\experimental\\toolsetregistry\\intermediate\\build\\win64\\unrealeditor\\inc\\toolsetregistry\\uht\\utoolsetregistry.generated.h"
+        ],
+        "ImportedModules": [],
+        "ImportedHeaderUnits": []
+    }
+}

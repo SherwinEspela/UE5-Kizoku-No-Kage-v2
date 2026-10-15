@@ -1,0 +1,26 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1",
+	"FriendlyName": "AnimToolset",
+	"Description": "AI-callable animation tools (read-only first): sequence info, notifies, bones, bone trajectories, root motion summary.",
+	"Category": "Other",
+	"CreatedBy": "KizokuNoKage",
+	"CanContainContent": false,
+	"EditorOnly": true,
+	"EnabledByDefault": true,
+	"Modules": [
+		{
+			"Name": "AnimToolset",
+			"Type": "Editor",
+			"LoadingPhase": "PostEngineInit",
+			"TargetAllowList": [ "Editor" ]
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "ToolsetRegistry",
+			"Enabled": true
+		}
+	]
+}

@@ -1,0 +1,26 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1",
+	"FriendlyName": "WidgetToolset",
+	"Description": "AI-callable UMG / CommonUI widget blueprint tools: read the widget tree, properties and animations; add, remove, move, rename widgets; set widget and slot properties; bind widget events; compile.",
+	"Category": "Other",
+	"CreatedBy": "KizokuNoKage",
+	"CanContainContent": false,
+	"EditorOnly": true,
+	"EnabledByDefault": true,
+	"Modules": [
+		{
+			"Name": "WidgetToolset",
+			"Type": "Editor",
+			"LoadingPhase": "PostEngineInit",
+			"TargetAllowList": [ "Editor" ]
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "ToolsetRegistry",
+			"Enabled": true
+		}
+	]
+}

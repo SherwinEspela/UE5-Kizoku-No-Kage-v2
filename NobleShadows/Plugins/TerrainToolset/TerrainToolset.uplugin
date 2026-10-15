@@ -1,0 +1,26 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1",
+	"FriendlyName": "TerrainToolset",
+	"Description": "AI-callable terrain tools: create landscapes from explicit parameters (scale, section size, components).",
+	"Category": "Other",
+	"CreatedBy": "KizokuNoKage",
+	"CanContainContent": false,
+	"EditorOnly": true,
+	"EnabledByDefault": true,
+	"Modules": [
+		{
+			"Name": "TerrainToolset",
+			"Type": "Editor",
+			"LoadingPhase": "PostEngineInit",
+			"TargetAllowList": [ "Editor" ]
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "ToolsetRegistry",
+			"Enabled": true
+		}
+	]
+}

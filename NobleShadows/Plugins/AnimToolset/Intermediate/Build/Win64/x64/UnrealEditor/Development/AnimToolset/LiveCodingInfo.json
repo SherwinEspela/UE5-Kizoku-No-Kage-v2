@@ -1,0 +1,12 @@
+{
+	"RemapUnityFiles": 
+	{
+		"Module.AnimToolset.cpp.obj": [
+			"AnimToolset.gen.cpp.obj",
+			"AnimToolset.init.gen.cpp.obj",
+			"PerModuleInline.gen.cpp.obj",
+			"AnimToolset.cpp.obj",
+			"AnimToolsetModule.cpp.obj"
+		]
+	}
+}

@@ -1,0 +1,12 @@
+/NOLOGO
+/errorReport:prompt
+/MACHINE:x64
+/SUBSYSTEM:WINDOWS
+/experimental:deterministic
+/DEF
+/NAME:"UnrealEditor-AnimToolset.dll"
+/IGNORE:4221
+/NODEFAULTLIB
+"C:/PROJECTS/Unreal/KIZOKU_NO_KAGE_V2_REPO/NobleShadows/Intermediate/Build/Win64/x64/KizokuNoKageV2Editor/Development/UnrealEd/SharedPCH.UnrealEd.Project.ValApi.ValExpApi.Cpp20.InclOrderUnreal5_6.h.obj"
+"C:/PROJECTS/Unreal/KIZOKU_NO_KAGE_V2_REPO/NobleShadows/Plugins/AnimToolset/Intermediate/Build/Win64/x64/UnrealEditor/Development/AnimToolset/Module.AnimToolset.cpp.obj"
+/OUT:"C:/PROJECTS/Unreal/KIZOKU_NO_KAGE_V2_REPO/NobleShadows/Plugins/AnimToolset/Intermediate/Build/Win64/x64/UnrealEditor/Development/AnimToolset/UnrealEditor-AnimToolset.lib"

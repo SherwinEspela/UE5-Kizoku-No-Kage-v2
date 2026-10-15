@@ -1,0 +1,14 @@
+"C:/PROJECTS/Unreal/KIZOKU_NO_KAGE_V2_REPO/NobleShadows/Plugins/TerrainToolset/Intermediate/Build/Win64/x64/UnrealEditor/Development/TerrainToolset/Module.TerrainToolset.cpp"
+@"C:/PROJECTS/Unreal/KIZOKU_NO_KAGE_V2_REPO/NobleShadows/Plugins/TerrainToolset/Intermediate/Build/Win64/x64/UnrealEditor/Development/TerrainToolset/TerrainToolset.Shared.rsp"
+/FI"C:/PROJECTS/Unreal/KIZOKU_NO_KAGE_V2_REPO/NobleShadows/Intermediate/Build/Win64/x64/KizokuNoKageV2Editor/Development/UnrealEd/SharedPCH.UnrealEd.Project.ValApi.ValExpApi.Cpp20.InclOrderUnreal5_6.h"
+/FI"C:/PROJECTS/Unreal/KIZOKU_NO_KAGE_V2_REPO/NobleShadows/Plugins/TerrainToolset/Intermediate/Build/Win64/x64/UnrealEditor/Development/TerrainToolset/Definitions.TerrainToolset.h"
+/Yu"C:/PROJECTS/Unreal/KIZOKU_NO_KAGE_V2_REPO/NobleShadows/Intermediate/Build/Win64/x64/KizokuNoKageV2Editor/Development/UnrealEd/SharedPCH.UnrealEd.Project.ValApi.ValExpApi.Cpp20.InclOrderUnreal5_6.h"
+/Fp"C:/PROJECTS/Unreal/KIZOKU_NO_KAGE_V2_REPO/NobleShadows/Intermediate/Build/Win64/x64/KizokuNoKageV2Editor/Development/UnrealEd/SharedPCH.UnrealEd.Project.ValApi.ValExpApi.Cpp20.InclOrderUnreal5_6.h.pch"
+/Fo"C:/PROJECTS/Unreal/KIZOKU_NO_KAGE_V2_REPO/NobleShadows/Plugins/TerrainToolset/Intermediate/Build/Win64/x64/UnrealEditor/Development/TerrainToolset/Module.TerrainToolset.cpp.obj"
+/experimental:log "C:/PROJECTS/Unreal/KIZOKU_NO_KAGE_V2_REPO/NobleShadows/Plugins/TerrainToolset/Intermediate/Build/Win64/x64/UnrealEditor/Development/TerrainToolset/Module.TerrainToolset.cpp.sarif"
+/sourceDependencies "C:/PROJECTS/Unreal/KIZOKU_NO_KAGE_V2_REPO/NobleShadows/Plugins/TerrainToolset/Intermediate/Build/Win64/x64/UnrealEditor/Development/TerrainToolset/Module.TerrainToolset.cpp.dep.json"
+/nologo
+/TP
+/GR-
+/std:c++20
+/wd5054

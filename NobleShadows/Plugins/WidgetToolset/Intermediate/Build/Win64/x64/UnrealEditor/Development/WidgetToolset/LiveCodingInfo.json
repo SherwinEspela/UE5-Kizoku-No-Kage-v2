@@ -1,0 +1,12 @@
+{
+	"RemapUnityFiles": 
+	{
+		"Module.WidgetToolset.cpp.obj": [
+			"WidgetToolset.gen.cpp.obj",
+			"WidgetToolset.init.gen.cpp.obj",
+			"PerModuleInline.gen.cpp.obj",
+			"WidgetToolset.cpp.obj",
+			"WidgetToolsetModule.cpp.obj"
+		]
+	}
+}

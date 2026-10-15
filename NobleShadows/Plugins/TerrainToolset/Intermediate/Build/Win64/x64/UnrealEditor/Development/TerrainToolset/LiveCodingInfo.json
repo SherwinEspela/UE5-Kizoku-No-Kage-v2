@@ -1,0 +1,12 @@
+{
+	"RemapUnityFiles": 
+	{
+		"Module.TerrainToolset.cpp.obj": [
+			"TerrainToolset.gen.cpp.obj",
+			"TerrainToolset.init.gen.cpp.obj",
+			"PerModuleInline.gen.cpp.obj",
+			"TerrainToolset.cpp.obj",
+			"TerrainToolsetModule.cpp.obj"
+		]
+	}
+}

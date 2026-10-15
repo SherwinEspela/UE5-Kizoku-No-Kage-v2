@@ -1,0 +1,382 @@
+mesh,folder,category,proposed_type,current_collision,what_is_wrong,triangles,size_cm
+SM_Birds_Mesh,Cosmetics/Mesh,SKIP,-,none | UseDefault,none (ok for SKIP),24,1204x1204x341
+SM_Lantern_01a_Proc,RopeCatenaryGenerator/Asset/Mesh,SKIP,-,1x convex(49 verts) | UseDefault,has collision but should have none,20364,58x58x127
+SM_Lantern_02a_Proc,RopeCatenaryGenerator/Asset/Mesh,SKIP,-,1x convex(46 verts) | UseDefault,has collision but should have none,8514,34x34x89
+SM_Lantern_04a_Proc,RopeCatenaryGenerator/Asset/Mesh,SKIP,-,1x convex(50 verts) | UseDefault,has collision but should have none,11424,84x84x120
+SM_rope30_01a_Proc,RopeCatenaryGenerator/Asset/Mesh,SKIP,-,none | UseDefault,none (ok for SKIP),16,30x2x2
+SM_LightRoom,Map/Overview/Mesh,SKIP,-,none | UseDefault,none (ok for SKIP),11648,66234x66234x11072
+SM_Platform,Map/Overview/Mesh,SKIP,-,1x box | UseDefault,has collision but should have none,2,100x100x0
+SM_DirtPatch_01a,Mesh/Floor,SKIP,-,4x convex(64 verts) | UseDefault,has collision but should have none,2238,364x288x25
+SM_Floor_02x02m_01a,Mesh/Floor,STRUCTURAL,Box,1x box | UseDefault,ok,32,200x200x100
+SM_Floor_03x02m_01a,Mesh/Floor,STRUCTURAL,Box,1x box | UseDefault,ok,44,200x300x100
+SM_Floor_04x02m_01a,Mesh/Floor,STRUCTURAL,Box,1x box | UseDefault,ok,56,200x400x100
+SM_Floor_04x04m_01a,Mesh/Floor,STRUCTURAL,Box,1x box | UseDefault,ok,96,400x400x100
+SM_Floor_04x04m_01b,Mesh/Floor,STRUCTURAL,Box,1x box | UseDefault,ok,1880,400x400x20
+SM_Floor_04x05m_01b,Mesh/Floor,STRUCTURAL,Box,1x convex(8 verts) | UseDefault,convex used where a box would fit,116,400x500x100
+SM_PebbleFloor_04m_01a,Mesh/Floor,SKIP,-,1x box | UseDefault,has collision but should have none,3950,405x407x8
+SM_StoneFloor_04m_01a,Mesh/Floor,STRUCTURAL,Box,1x box | UseDefault,ok,5922,401x400x13
+SM_StoneFloor_04m_01b,Mesh/Floor,STRUCTURAL,Box,1x box | UseDefault,ok,6125,403x400x15
+SM_StoneFloor_04x02m_01a,Mesh/Floor,STRUCTURAL,Box,1x box | UseDefault,ok,2636,212x403x103
+SM_StoneFloor_06m_01a,Mesh/Floor,STRUCTURAL,Box,1x box | UseDefault,ok,3129,650x650x16
+SM_StoneFloor_08m_01a,Mesh/Floor,STRUCTURAL,Box,1x box | UseDefault,ok,6799,802x800x13
+SM_StoneFloor_08m_01b,Mesh/Floor,STRUCTURAL,Box,1x box | UseDefault,ok,7823,804x800x15
+SM_StoneFloorDeco_06m_01a,Mesh/Floor,SKIP,-,24x convex(279 verts) | UseDefault,has collision but should have none,2033,496x494x20
+SM_StoneStep_02a,Mesh/Floor,STRUCTURAL,Auto Convex,1x box | UseDefault,single box on complex shape,1244,160x360x20
+SM_StoneStep_04m_01a,Mesh/Floor,STRUCTURAL,Auto Convex,1x box | UseDefault,single box on complex shape,188,400x400x20
+SM_StoneTrim_02m_02a,Mesh/Floor,SKIP,-,1x box | UseDefault,has collision but should have none,1004,200x50x14
+SM_StoneTrim_02m_03a,Mesh/Floor,SKIP,-,1x box | UseDefault,has collision but should have none,766,200x40x40
+SM_StoneTrim_03m_02a,Mesh/Floor,SKIP,-,1x box | UseDefault,has collision but should have none,1304,300x50x14
+SM_StoneTrim_04m_01a,Mesh/Floor,SKIP,-,1x box | UseDefault,has collision but should have none,632,400x50x20
+SM_StoneTrim_04m_01b,Mesh/Floor,SKIP,-,1x box | UseDefault,has collision but should have none,604,400x50x18
+SM_StoneTrim_04m_02a,Mesh/Floor,SKIP,-,1x box | UseDefault,has collision but should have none,1510,400x50x14
+SM_StoneTrim_04m_03a,Mesh/Floor,SKIP,-,1x box | UseDefault,has collision but should have none,1118,400x40x40
+SM_Alder_Spring_01a,Mesh/Foliage,SKIP,-,2x box | UseDefault,has collision but should have none,4661,1567x1786x2689
+SM_bush_01a,Mesh/Foliage,SKIP,-,1x convex(32 verts) | UseDefault,has collision but should have none,36760,270x188x109
+SM_bush_01b,Mesh/Foliage,SKIP,-,1x convex(32 verts) | UseDefault,has collision but should have none,36533,271x187x109
+SM_Bush_02,Mesh/Foliage,SKIP,-,none | UseDefault,none (ok for SKIP),8069,155x147x214
+SM_Cherry_Tree_01,Mesh/Foliage,SKIP,-,1x convex(32 verts) | UseDefault,has collision but should have none,6538,1381x1404x1352
+SM_Foliage_01a,Mesh/Foliage,SKIP,-,none | UseDefault,none (ok for SKIP),40,30x11x7
+SM_Foliage_02a,Mesh/Foliage,SKIP,-,none | UseDefault,none (ok for SKIP),40,25x10x10
+SM_Foliage_03a,Mesh/Foliage,SKIP,-,none | UseDefault,none (ok for SKIP),28,12x12x5
+SM_Foliage_03b,Mesh/Foliage,SKIP,-,none | UseDefault,none (ok for SKIP),28,12x12x5
+SM_Foliage_04a,Mesh/Foliage,SKIP,-,none | UseDefault,none (ok for SKIP),31,11x8x4
+SM_Foliage_05a,Mesh/Foliage,SKIP,-,none | UseDefault,none (ok for SKIP),20,24x12x3
+SM_Maple_01,Mesh/Foliage,SKIP,-,none | UseDefault,none (ok for SKIP),4816,840x675x681
+SM_Maple_Spring_01a,Mesh/Foliage,SKIP,-,5x box | UseDefault,has collision but should have none,2440,955x1014x977
+SM_Pine_01,Mesh/Foliage,SKIP,-,none | UseDefault,none (ok for SKIP),36917,596x565x778
+SM_LightRoom,Mesh/Misc,SKIP,-,none | UseDefault,none (ok for SKIP),11648,66234x66234x11072
+SM_Bridge_01a,Mesh/Miscellaneous,STRUCTURAL,Auto Convex,none | UseComplexAsSimple,missing entirely; uses complex-as-simple,3086,828x555x274
+SM_Bridge_02a,Mesh/Miscellaneous,STRUCTURAL,Auto Convex,4x convex(62 verts) | UseComplexAsSimple,uses complex-as-simple,950,1404x31x259
+SM_Bridge_03a,Mesh/Miscellaneous,STRUCTURAL,Auto Convex,19x convex(243 verts) | UseComplexAsSimple,uses complex-as-simple,1320,795x34x390
+SM_Bridge_04a,Mesh/Miscellaneous,STRUCTURAL,Auto Convex,1x convex(32 verts) | UseComplexAsSimple,uses complex-as-simple,826,44x44x219
+SM_Landscape_01a,Mesh/Miscellaneous,SKIP,-,none | UseDefault,none (ok for SKIP),3629,5004x5012x728
+SM_Mountain_01a,Mesh/Miscellaneous,SKIP,-,none | UseDefault,none (ok for SKIP),4375,5000x5000x1722
+SM_ToriGate_01a,Mesh/Miscellaneous,STRUCTURAL,Auto Convex,11x convex(135 verts) | UseDefault,ok,1006,114x964x658
+SM_ToriGate_02a,Mesh/Miscellaneous,STRUCTURAL,Auto Convex,12x convex(142 verts) | UseDefault,ok,1085,200x1639x1119
+SM_Water_Plane,Mesh/Miscellaneous,SKIP,-,1x box | UseDefault,has collision but should have none,1800,1500x1500x0
+SM_AccountantTable_01a,Mesh/Prop,PROP,Auto Convex,1x convex(16 verts) | UseDefault,ok,622,160x398x106
+SM_Apple_02a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,468,10x10x9
+SM_Apple_02b,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,448,11x11x10
+SM_Apple_02c,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,470,10x10x10
+SM_Banana_01a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,534,21x11x4
+SM_Banana_01b,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,468,21x13x5
+SM_Banana_01c,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,463,18x11x4
+SM_Banner_01a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,1260,12x486x120
+SM_Banner_02a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,1172,9x346x187
+SM_Banner_03a,Mesh/Prop,SKIP,-,2x convex(32 verts) | UseDefault,has collision but should have none,678,106x8x467
+SM_Banner_04a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,288,8x94x252
+SM_Barrel_01a,Mesh/Prop,PROP,Capsule,1x convex(16 verts) | UseDefault,ok,1650,67x68x90
+SM_Bench_01a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,2194,62x159x50
+SM_Bench_02a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,3852,161x73x51
+SM_Boat_01a,Mesh/Prop,PROP,Auto Convex,none | UseDefault,missing entirely,11778,219x1073x259
+SM_Bottle_01a,Mesh/Prop,SKIP,-,1x convex(48 verts) | UseDefault,has collision but should have none,802,18x18x37
+SM_Bottle_02a,Mesh/Prop,SKIP,-,none | UseDefault,none (ok for SKIP),598,16x16x25
+SM_Bowl_01a,Mesh/Prop,SKIP,-,4x convex(64 verts) | UseDefault,has collision but should have none,1044,24x24x7
+SM_Bowl_02a,Mesh/Prop,SKIP,-,4x convex(64 verts) | UseDefault,has collision but should have none,724,20x20x10
+SM_Bucket_01a,Mesh/Prop,PROP,Capsule,1x convex(51 verts) | UseDefault,ok,1356,32x34x44
+SM_Bucket_02a,Mesh/Prop,SKIP,-,1x convex(43 verts) | UseDefault,has collision but should have none,1203,34x34x18
+SM_Cabinate_01a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,2477,78x186x302
+SM_Candle_01a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,2662,26x28x51
+SM_Candle_01b,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,2031,14x15x33
+SM_Candle_02a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,1178,30x30x112
+SM_Carpet_01a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,256,283x440x5
+SM_Chopstick_01a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,264,2x24x1
+SM_Cloth_01a,Mesh/Prop,SKIP,-,1x convex(16 verts) | UseDefault,has collision but should have none,910,242x49x24
+SM_Cloth_02a,Mesh/Prop,SKIP,-,1x convex(16 verts) | UseDefault,has collision but should have none,908,242x47x27
+SM_Cloth_03a,Mesh/Prop,SKIP,-,1x convex(16 verts) | UseDefault,has collision but should have none,1309,128x15x34
+SM_Cloth_04a,Mesh/Prop,SKIP,-,1x convex(16 verts) | UseDefault,has collision but should have none,687,111x18x54
+SM_Crate_01a,Mesh/Prop,PROP,Box,1x box | UseDefault,undersized (76%/97%/100% of mesh extent),4437,88x48x26
+SM_Crate_02a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,3308,82x60x39
+SM_Crate_03a,Mesh/Prop,PROP,Box,1x convex(53 verts) | UseDefault,convex used where a box would fit,2566,67x68x54
+SM_DecorativeTable_01a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,1074,164x416x98
+SM_DineTable_01a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,1530,150x449x45
+SM_DineTable_02a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,256,150x148x45
+SM_DockBeam_01a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,828,46x48x430
+SM_DockBeam_01b,Mesh/Prop,PROP,Box,1x box | UseDefault,undersized (65%/67%/100% of mesh extent),1570,61x65x430
+SM_Door_01a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,460,6x114x217
+SM_Door_01b,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,461,7x114x217
+SM_Door_02a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,298,8x126x262
+SM_Door_02b,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,298,8x126x262
+SM_Door_03a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,540,10x124x264
+SM_Door_03b,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,542,10x124x264
+SM_Door_04a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,334,10x124x264
+SM_Door_04b,Mesh/Prop,PROP,Box,none | UseDefault,missing entirely,315,10x124x264
+SM_DoorBig_01a,Mesh/Prop,PROP,Auto Convex,1x box | UseDefault,undersized (57%/100%/100% of mesh extent); off-centre; single box on complex shape,2356,26x184x320
+SM_DoorBig_01b,Mesh/Prop,PROP,Auto Convex,1x box | UseDefault,undersized (73%/100%/100% of mesh extent); off-centre; single box on complex shape,2380,26x185x320
+SM_DoorCut_04m_01a,Mesh/Prop,STRUCTURAL,Auto Convex,3x box | UseDefault,ok,158,17x400x400
+SM_DoorCut_04m_02a,Mesh/Prop,STRUCTURAL,Auto Convex,3x box | UseDefault,ok,326,21x400x400
+SM_DoorCut_04m_03a,Mesh/Prop,STRUCTURAL,Auto Convex,3x box | UseDefault,ok,683,20x400x400
+SM_DoorCut_04m_03b,Mesh/Prop,STRUCTURAL,Auto Convex,3x box | UseDefault,ok,734,20x400x400
+SM_DrainCover_01a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,691,100x66x9
+SM_Fishy_01a,Mesh/Prop,SKIP,-,1x convex(16 verts) | UseDefault,has collision but should have none,913,34x84x15
+SM_Flower_01a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,3506,16x8x48
+SM_Flower_02a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,1856,21x18x48
+SM_Frame_01a,Mesh/Prop,SKIP,-,1x convex(16 verts) | UseDefault,has collision but should have none,356,66x350x148
+SM_Frame_02a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,166,3x145x220
+SM_Frame_02b,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,166,3x145x220
+SM_Frame_03a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,256,6x300x176
+SM_Frame_03b,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,256,6x430x280
+SM_Frame_04a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,278,6x55x68
+SM_Frame_04b,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,278,6x55x68
+SM_Frame_04c,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,278,6x55x68
+SM_Frame_04d,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,278,6x55x68
+SM_FrameSign,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,602,18x162x208
+SM_HandCart_01a,Mesh/Prop,PROP,Auto Convex,1x convex(16 verts) | UseDefault,ok,2406,184x406x115
+SM_HandCart_01b,Mesh/Prop,PROP,Auto Convex,1x convex(16 verts) | UseDefault,ok,3117,185x406x151
+SM_Lantern_01a,Mesh/Prop,SKIP,-,1x convex(49 verts) | UseDefault,has collision but should have none,2080,60x58x127
+SM_Lantern_02a,Mesh/Prop,SKIP,-,1x convex(46 verts) | UseDefault,has collision but should have none,1428,34x34x89
+SM_Lantern_03a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,1610,34x34x79
+SM_Lantern_04a,Mesh/Prop,SKIP,-,1x convex(50 verts) | UseDefault,has collision but should have none,2073,84x84x120
+SM_LionStatue_01a,Mesh/Prop,PROP,Auto Convex,1x convex(46 verts) | UseComplexAsSimple,uses complex-as-simple,5660,191x152x343
+SM_MarketTent_01a,Mesh/Prop,PROP,Auto Convex,11x box | UseDefault,ok,5028,868x1059x457
+SM_MarketTent_02a,Mesh/Prop,PROP,Auto Convex,3x box | UseComplexAsSimple,uses complex-as-simple,5717,676x585x547
+SM_MetalLantern_01a,Mesh/Prop,SKIP,-,1x convex(16 verts) | UseDefault,has collision but should have none,13668,126x126x263
+SM_Orange_01a,Mesh/Prop,SKIP,-,1x convex(57 verts) | UseDefault,has collision but should have none,384,11x10x10
+SM_Orange_01b,Mesh/Prop,SKIP,-,1x convex(63 verts) | UseDefault,has collision but should have none,386,10x10x9
+SM_Orange_01c,Mesh/Prop,SKIP,-,1x convex(56 verts) | UseDefault,has collision but should have none,432,10x10x11
+SM_Paper_01a,Mesh/Prop,SKIP,-,none | UseDefault,none (ok for SKIP),9,0x22x32
+SM_Paper_02a,Mesh/Prop,SKIP,-,none | UseDefault,none (ok for SKIP),11,0x22x31
+SM_Paper03,Mesh/Prop,SKIP,-,none | UseDefault,none (ok for SKIP),11,1x22x31
+SM_Paper04,Mesh/Prop,SKIP,-,none | UseDefault,none (ok for SKIP),9,1x22x32
+SM_PaperDoor_02m_01a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,477,10x200x408
+SM_PaperDoor_02m_01b,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,937,10x200x299
+SM_PaperDoor_03m_01a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,513,10x300x408
+SM_PaperDoor_1_2m_01b,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,1001,10x121x299
+SM_PaperStack,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,294,32x24x8
+SM_Pebble_01a,Mesh/Prop,SKIP,-,none | UseDefault,none (ok for SKIP),756,8x6x4
+SM_Pebble_02a,Mesh/Prop,SKIP,-,none | UseDefault,none (ok for SKIP),966,10x4x4
+SM_Pebble_03a,Mesh/Prop,SKIP,-,none | UseDefault,none (ok for SKIP),748,6x5x5
+SM_Shelf_01a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,1366,320x140x155
+SM_Shelf_02a,Mesh/Prop,PROP,Box,1x convex(16 verts) | UseDefault,convex used where a box would fit,668,309x138x230
+SM_Shelf_03a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,1300,359x132x144
+SM_Shelf_04a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,1546,368x140x395
+SM_Shelf_05a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,1408,251x140x328
+SM_SignBoard_01a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,894,155x10x176
+SM_SignBoard_02a,Mesh/Prop,PROP,Box,1x convex(16 verts) | UseDefault,convex used where a box would fit,628,140x82x165
+SM_SignBoard_03a,Mesh/Prop,PROP,Box,3x box | UseDefault,ok,554,196x84x130
+SM_SittingPillow_01a,Mesh/Prop,PROP,Box,1x box | UseDefault,undersized (70%/66%/86% of mesh extent),2353,87x81x23
+SM_SmokePot_01a,Mesh/Prop,SKIP,-,1x convex(16 verts) | UseDefault,has collision but should have none,5128,64x84x48
+SM_Spear_01a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,1796,9x8x205
+SM_Spear_02a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,948,12x8x207
+SM_SpearStand_01a,Mesh/Prop,PROP,Auto Convex,1x convex(14 verts) | UseDefault,ok,483,210x84x138
+SM_Spoon_01a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,1872,4x16x3
+SM_Stall_02a,Mesh/Prop,PROP,Auto Convex,3x box | UseComplexAsSimple,uses complex-as-simple,4736,154x270x236
+SM_Stall01a,Mesh/Prop,PROP,Auto Convex,2x box | UseComplexAsSimple,undersized (30%/91%/100% of mesh extent); uses complex-as-simple,4016,170x274x239
+SM_StoneLamp_01a,Mesh/Prop,PROP,Capsule,1x convex(16 verts) | UseDefault,ok,3320,84x84x221
+SM_Stove_01a,Mesh/Prop,PROP,Box,1x convex(16 verts) | UseDefault,convex used where a box would fit,2355,344x134x127
+SM_SupportBeam_01a,Mesh/Prop,PROP,Box,1x convex(16 verts) | UseDefault,convex used where a box would fit,710,46x175x430
+SM_Sword_01a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,1610,24x10x115
+SM_Sword_02a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,1564,17x8x94
+SM_SwordCap_01a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,356,23x4x88
+SM_SwordCap_02a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,2652,17x4x72
+SM_SwordDeco_01a,Mesh/Prop,SKIP,-,1x convex(16 verts) | UseDefault,has collision but should have none,1299,58x23x86
+SM_SwordStand_01a,Mesh/Prop,PROP,Auto Convex,1x box | UseDefault,single box on complex shape,539,40x180x244
+SM_Table_01a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,3792,100x140x63
+SM_TatamiMat_01a,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,256,400x202x7
+SM_TatamiMat_01b,Mesh/Prop,SKIP,-,1x box | UseDefault,has collision but should have none,256,200x202x7
+SM_ToriRope_01a,Mesh/Prop,SKIP,-,1x convex(51 verts) | UseDefault,has collision but should have none,3370,42x882x156
+SM_Umbrela_01a,Mesh/Prop,SKIP,-,2x convex(26 verts) | UseDefault,has collision but should have none,784,230x230x262
+SM_Umbrela_01b,Mesh/Prop,SKIP,-,2x convex(25 verts) | UseDefault,has collision but should have none,680,258x258x303
+SM_UmbrelaStand_01a,Mesh/Prop,PROP,Auto Convex,1x convex(16 verts) | UseDefault,ok,412,10x23x102
+SM_Vase_01a,Mesh/Prop,SKIP,-,1x convex(50 verts) | UseDefault,has collision but should have none,2275,44x44x69
+SM_Vase_02a,Mesh/Prop,SKIP,-,1x convex(50 verts) | UseDefault,has collision but should have none,870,36x37x58
+SM_Vase_03a,Mesh/Prop,SKIP,-,1x convex(50 verts) | UseDefault,has collision but should have none,824,40x40x93
+SM_Vase_04a,Mesh/Prop,SKIP,-,1x convex(49 verts) | UseDefault,has collision but should have none,936,54x54x84
+SM_Washer_01a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,1090,226x122x138
+SM_Window_01a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,255,8x280x135
+SM_Window_02a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,501,10x280x135
+SM_Window_02b,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,355,10x178x109
+SM_Window_03a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,690,10x280x135
+SM_Window_04a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,579,8x280x135
+SM_Window_04b,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,410,8x160x158
+SM_Window_05a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,354,12x204x189
+SM_WoodFence_01a,Mesh/Prop,PROP,Box,1x box | UseDefault,ok,756,416x18x104
+SM_MainRoof_3_5m_01a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,5479,364x336x180
+SM_MainRoof_3_5m_01b,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,6230,364x216x136
+SM_MainRoof_3m_01a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,4925,313x336x180
+SM_MainRoof_3m_01b,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,5584,313x216x136
+SM_MainRoof_4m_01a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,5951,414x336x180
+SM_MainRoof_4m_01b,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,6685,414x216x136
+SM_MainRoofCorner_01a,Mesh/Roof,STRUCTURAL,Auto Convex,2x convex(32 verts) | UseDefault,ok,6091,422x416x195
+SM_MainRoofCorner_01b,Mesh/Roof,STRUCTURAL,Auto Convex,none | UseDefault,missing entirely,5945,312x301x154
+SM_MainRoofCorner_02a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,7755,361x384x222
+SM_MainRoofCorner_02b,Mesh/Roof,STRUCTURAL,Auto Convex,none | UseDefault,missing entirely,7171,360x384x183
+SM_MainRoofTop_01a_3m,Mesh/Roof,STRUCTURAL,Box,1x box | UseDefault,ok,4340,306x280x25
+SM_MainTopRoof_01a_3M,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,7664,1631x313x600
+SM_MainTopRoof_01a_4M,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,9475,1632x414x600
+SM_MainTopRoof_02a_4m,Mesh/Roof,STRUCTURAL,Auto Convex,none | UseDefault,missing entirely,5932,414x444x281
+SM_MainTopRoofEnd_01a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,12430,1634x707x637
+SM_MainTopRoofEnd_02a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,18824,424x1148x316
+SM_Roof_2m_05a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,2644,185x213x105
+SM_Roof_3m_01a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,9139,1301x319x413
+SM_Roof_3m_01b,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,10051,330x320x113
+SM_Roof_3m_02a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,5484,1336x310x412
+SM_Roof_3m_02b,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,4984,1093x311x340
+SM_Roof_3m_03a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,7433,238x320x115
+SM_Roof_3m_04a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,13352,970x321x255
+SM_Roof_3m_05a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,3442,185x313x105
+SM_Roof_4m_01a,Mesh/Roof,STRUCTURAL,Auto Convex,13x convex(148 verts) | UseDefault,ok,11397,1301x417x413
+SM_Roof_4m_01b,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,7109,331x422x113
+SM_Roof_4m_02a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,5510,1335x415x412
+SM_Roof_4m_02b,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,6496,1093x416x340
+SM_Roof_4m_03a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,11774,238x420x115
+SM_Roof_4m_04a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,11858,970x423x255
+SM_Roof_4m_05a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,3636,185x412x105
+SM_Roof_4m_06a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,6194,1249x403x330
+SM_RoofCorner_01a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,17088,240x241x113
+SM_RoofCorner_02a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,4646,406x400x105
+SM_RoofCornerSideTrim_01a,Mesh/Roof,SKIP,-,1x convex(16 verts) | UseDefault,has collision but should have none,1916,245x245x109
+SM_RoofCornerSideTrim_02a,Mesh/Roof,SKIP,-,1x convex(16 verts) | UseDefault,has collision but should have none,1106,241x242x87
+SM_RoofDeco_01a,Mesh/Roof,SKIP,-,3x convex(56 verts) | UseDefault,has collision but should have none,2454,36x98x85
+SM_RoofDeco_02a,Mesh/Roof,SKIP,-,3x convex(48 verts) | UseDefault,has collision but should have none,668,114x28x82
+SM_RoofDeco_03a,Mesh/Roof,SKIP,-,1x box | UseDefault,has collision but should have none,8233,82x34x60
+SM_RoofShed_05a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,12041,462x639x209
+SM_RoofSideEnd_01a,Mesh/Roof,STRUCTURAL,Auto Convex,17x convex(184 verts) | UseDefault,ok,4673,1268x109x400
+SM_RoofSideEnd_01b,Mesh/Roof,STRUCTURAL,Auto Convex,34x convex(305 verts) | UseDefault,ok,4723,1268x109x400
+SM_RoofSideEnd_02a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,2714,330x102x118
+SM_RoofSideEnd_02b,Mesh/Roof,STRUCTURAL,Auto Convex,5x convex(74 verts) | UseDefault,ok,2691,330x102x118
+SM_RoofSideEnd_03a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,1172,1328x65x429
+SM_RoofSideEnd_03b,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,1172,1328x65x429
+SM_RoofSideEnd_04a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,1526,1082x69x367
+SM_RoofSideEnd_04b,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,1518,1082x69x367
+SM_RoofSideEnd_05a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,10329,969x237x249
+SM_RoofSideEnd_05b,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(36 verts) | UseDefault,ok,9874,969x237x249
+SM_RoofSideEnd_06a,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,2038,1252x60x353
+SM_RoofSideEnd_06b,Mesh/Roof,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,1955,1252x60x353
+SM_RoofSideTrim_01a,Mesh/Roof,SKIP,-,11x convex(126 verts) | UseDefault,has collision but should have none,2050,580x48x378
+SM_RoofSideTrim_02a,Mesh/Roof,SKIP,-,1x convex(16 verts) | UseDefault,has collision but should have none,440,663x26x389
+SM_RoofSideTrim_02b,Mesh/Roof,SKIP,-,1x convex(16 verts) | UseDefault,has collision but should have none,438,525x25x309
+SM_RoofSideTrim_03a,Mesh/Roof,SKIP,-,1x convex(16 verts) | UseDefault,has collision but should have none,2330,374x48x213
+SM_RoofSideTrim_04a,Mesh/Roof,SKIP,-,1x convex(16 verts) | UseDefault,has collision but should have none,1488,519x48x294
+SM_RoofTopTrim_3m_01a,Mesh/Roof,SKIP,-,1x box | UseDefault,has collision but should have none,5224,48x301x49
+SM_RoofTopTrim_3m_02a,Mesh/Roof,SKIP,-,1x box | UseDefault,has collision but should have none,2236,49x301x28
+SM_RoofTopTrim_4m_01a,Mesh/Roof,SKIP,-,2x convex(37 verts) | UseDefault,has collision but should have none,5696,48x403x49
+SM_RoofTopTrim_4m_02a,Mesh/Roof,SKIP,-,1x box | UseDefault,has collision but should have none,2454,48x402x29
+SM_BalconyColumn_01a,Mesh/Structure,STRUCTURAL,Capsule,1x convex(16 verts) | UseDefault,ok,80,40x40x500
+SM_BalconyCut_06m_01a,Mesh/Structure,STRUCTURAL,Box,3x convex(45 verts) | UseDefault,ok,1515,51x600x600
+SM_BalconyFloor_02m_01a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,1703,172x200x102
+SM_BalconyFloor_03m_01a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,2168,172x300x103
+SM_BalconyFloor_04m_01a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,2385,172x400x103
+SM_BalconyFloorCorner_01a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,2505,272x272x103
+SM_BalconyTopDeco_01a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,362,16x400x79
+SM_Beam_01a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,651,30x30x400
+SM_Beam_02a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,714,22x400x30
+SM_Beam_03a,Mesh/Structure,STRUCTURAL,Box,1x convex(16 verts) | UseDefault,convex used where a box would fit,701,54x30x400
+SM_Beam_04a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,480,48x400x94
+SM_Beam_05a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,608,48x400x64
+SM_Beam_06a,Mesh/Structure,STRUCTURAL,Box,1x convex(16 verts) | UseDefault,convex used where a box would fit,398,48x200x94
+SM_Beam_07a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,456,50x200x44
+SM_BeamCorner_02a,Mesh/Structure,STRUCTURAL,Box,2x convex(28 verts) | UseDefault,ok,414,111x111x30
+SM_CircularWindow_4m_01a,Mesh/Structure,STRUCTURAL,Auto Convex,1x box | UseDefault,single box on complex shape,1782,40x400x650
+SM_CircularWindow_4m_01b,Mesh/Structure,STRUCTURAL,Auto Convex,1x box | UseDefault,single box on complex shape,1327,40x400x650
+SM_CornerWall_01m_01a,Mesh/Structure,STRUCTURAL,Box,2x convex(21 verts) | UseDefault,ok,20,100x100x400
+SM_DecoGate_01a,Mesh/Structure,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,7328,360x499x490
+SM_DecoGate_02a,Mesh/Structure,STRUCTURAL,Auto Convex,2x convex(32 verts) | UseDefault,ok,8044,251x1071x420
+SM_DecoGatePillar_01a,Mesh/Structure,STRUCTURAL,Auto Convex,2x box | UseDefault,ok,18376,68x68x412
+SM_DecoGatePillar_01b,Mesh/Structure,STRUCTURAL,Auto Convex,2x box | UseDefault,ok,14616,92x92x518
+SM_DecorativeWall_01a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,2347,72x722x482
+SM_DecorativeWall_02a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,2288,32x440x502
+SM_FacadeGate_06m_05a,Mesh/Structure,STRUCTURAL,Auto Convex,3x box | UseDefault,ok,1990,51x606x600
+SM_FacadeWindow_06m_05a,Mesh/Structure,STRUCTURAL,Auto Convex,1x box | UseDefault,single box on complex shape,3174,53x606x600
+SM_FortifiedGate_01a,Mesh/Structure,STRUCTURAL,Auto Convex,5x convex(66 verts) | UseDefault,ok,5076,801x225x634
+SM_FortifiedWall_01a,Mesh/Structure,STRUCTURAL,Box,2x convex(24 verts) | UseDefault,ok,3072,402x225x634
+SM_FortifiedWall_02a,Mesh/Structure,STRUCTURAL,Box,2x convex(27 verts) | UseDefault,ok,5100,502x423x844
+SM_FortifiedWallCorner_01a,Mesh/Structure,STRUCTURAL,Box,4x convex(64 verts) | UseDefault,ok,3686,383x382x634
+SM_InteriorPillar_01a,Mesh/Structure,STRUCTURAL,Capsule,1x box | UseDefault,single box on round shape,918,72x72x602
+SM_InteriorPillar_02a,Mesh/Structure,STRUCTURAL,Capsule,1x convex(54 verts) | UseDefault,ok,2004,78x78x600
+SM_InteriorStairs_01a,Mesh/Structure,STRUCTURAL,Auto Convex,4x box | UseDefault,undersized (113%/100%/52% of mesh extent),2059,938x414x722
+SM_InteriorStairs_02a,Mesh/Structure,STRUCTURAL,Auto Convex,4x box | UseDefault,undersized (104%/100%/71% of mesh extent),2152,817x871x811
+SM_InteriorWall_04m_01a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,474,52x400x600
+SM_InteriorWall_04m_01b,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,1385,52x403x501
+SM_InteriorWall_04m_02a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,850,52x400x193
+SM_InteriorWall_04m_02b,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,1872,52x403x194
+SM_InteriorWall_05m_01a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,502,52x507x600
+SM_InteriorWall_05m_01b,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,1413,52x500x501
+SM_InteriorWall_05m_02b,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,2032,52x500x194
+SM_InteriorWall_06m_01a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,508,52x600x600
+SM_InteriorWall_06m_01b,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,1564,52x603x501
+SM_InteriorWall_06m_02a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,892,52x600x193
+SM_InteriorWall_06m_02b,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,2153,52x603x194
+SM_MainBalcony_01a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,4644,542x472x103
+SM_Pillar_01a,Mesh/Structure,STRUCTURAL,Capsule,1x convex(32 verts) | UseDefault,ok,1865,62x62x600
+SM_Railing_02m_01a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,449,14x200x93
+SM_Railing_02m_02a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,1116,14x200x83
+SM_Railing_02m_03a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,2034,10x200x99
+SM_RailingPillar_01a,Mesh/Structure,STRUCTURAL,Capsule,1x box | UseDefault,single box on round shape,814,16x16x115
+SM_RailingPillar_02a,Mesh/Structure,STRUCTURAL,Capsule,1x box | UseDefault,single box on round shape,878,16x16x120
+SM_RailingPillar_03a,Mesh/Structure,STRUCTURAL,Capsule,1x box | UseDefault,single box on round shape,1210,14x14x120
+SM_RiverbankWall_01a,Mesh/Structure,STRUCTURAL,Box,1x convex(16 verts) | UseDefault,convex used where a box would fit,2568,217x402x501
+SM_RiverWall_01a,Mesh/Structure,STRUCTURAL,Box,2x convex(32 verts) | UseDefault,ok,15904,1204x214x701
+SM_RoofDeco_02m_03a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,256,16x200x95
+SM_RoofDeco_02m_04a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,502,18x126x98
+SM_RoofDeco_04m_01a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,1546,60x412x38
+SM_RoofDeco_04m_01b,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,1324,60x400x38
+SM_RoofDeco_04m_02a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,1775,57x400x51
+SM_RoofDeco_04m_02b,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,1762,57x314x51
+SM_RoofDeco_04m_03a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,256,16x400x95
+SM_RoofDeco_04m_04a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,704,18x326x98
+SM_RoofDeco_04m_05a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,2055,104x400x102
+SM_RoofDecoCorner_05a,Mesh/Structure,SKIP,-,none | UseDefault,none (ok for SKIP),1166,166x166x87
+SM_RoomDivider_03m_01a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,224,30x300x8
+SM_RoomDivider_04m_01a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,224,30x400x8
+SM_SmallSteps_01a,Mesh/Structure,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,1260,96x400x60
+SM_Stairs_01a_04m,Mesh/Structure,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,49708,407x503x231
+SM_Stairs_01a_06m,Mesh/Structure,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,12558,610x510x235
+SM_Stairs_04m_02a,Mesh/Structure,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,3134,406x222x86
+SM_StairsCorner_01a,Mesh/Structure,STRUCTURAL,Auto Convex,3x box | UseDefault,ok,13971,564x520x260
+SM_StairsRail_01a,Mesh/Structure,STRUCTURAL,Auto Convex,1x box | UseDefault,undersized (100%/110%/16% of mesh extent); single box on complex shape,4126,38x502x271
+SM_StairsRail_02a,Mesh/Structure,STRUCTURAL,Auto Convex,1x box | UseDefault,single box on complex shape,1068,38x400x46
+SM_UpperWall_03m_02a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,310,18x300x79
+SM_UpperWall_04m_02a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,256,18x400x79
+SM_Wall_01m_02a,Mesh/Structure,STRUCTURAL,Box,none | UseDefault,missing entirely,444,18x100x400
+SM_Wall_02m_01a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,12,10x200x400
+SM_Wall_03m_01a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,12,10x300x400
+SM_Wall_03m_02a,Mesh/Structure,STRUCTURAL,Box,none | UseDefault,missing entirely,699,18x300x400
+SM_Wall_04m_01a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,12,10x400x400
+SM_Wall_04m_02a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,825,18x400x400
+SM_Wall_04m_05a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,256,36x400x600
+SM_Wall_05m_05a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,255,36x500x600
+SM_WallDeco_01m_01a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,232,7x100x77
+SM_WallDeco_01m_02a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,256,7x105x66
+SM_WallDeco_01m_03a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,256,9x100x157
+SM_WallDeco_01m_04a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,228,6x100x55
+SM_WallDeco_01m_05a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,1478,10x100x112
+SM_WallDeco_01m_06a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,256,8x100x79
+SM_WallDeco_02m_07a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,3978,20x205x83
+SM_WallDeco_03m_01a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,263,7x300x77
+SM_WallDeco_03m_02a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,256,7x300x66
+SM_WallDeco_03m_03a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,256,9x303x157
+SM_WallDeco_03m_03b,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,276,9x303x405
+SM_WallDeco_03m_04a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,228,6x300x55
+SM_WallDeco_03m_05a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,2116,10x300x112
+SM_WallDeco_03m_06a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,256,8x300x79
+SM_WallDeco_04m_01a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,302,7x400x77
+SM_WallDeco_04m_02a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,256,7x400x66
+SM_WallDeco_04m_03a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,256,9x400x157
+SM_WallDeco_04m_03b,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,278,9x400x405
+SM_WallDeco_04m_04a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,228,6x400x55
+SM_WallDeco_04m_05a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,2119,10x400x112
+SM_WallDeco_04m_06a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,256,8x400x79
+SM_WallDeco_04m_07a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,5863,23x406x83
+SM_WallDeco_05m_07a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,7382,23x506x83
+SM_WallSideEnd_01a,Mesh/Structure,STRUCTURAL,Box,1x convex(12 verts) | UseDefault,oversized (162%/100%/101%); convex used where a box would fit,516,8x1200x368
+SM_WallStone_01a,Mesh/Structure,STRUCTURAL,Box,1x box | UseDefault,ok,7428,403x70x239
+SM_WallStoneAngled_02m_01a,Mesh/Structure,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,5245,71x213x345
+SM_WallStoneAngled_04m_01a,Mesh/Structure,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,7150,71x410x432
+SM_WallStoneAngled_05m_01a,Mesh/Structure,STRUCTURAL,Auto Convex,1x convex(16 verts) | UseDefault,ok,6486,70x510x425
+SM_WallStoneCorner_01a,Mesh/Structure,STRUCTURAL,Box,2x convex(32 verts) | UseDefault,ok,6052,203x203x239
+SM_Window_04m_01a,Mesh/Structure,STRUCTURAL,Auto Convex,1x box | UseDefault,single box on complex shape,252,18x400x400
+SM_Window_04m_01b,Mesh/Structure,STRUCTURAL,Auto Convex,1x box | UseDefault,single box on complex shape,256,18x400x400
+SM_Window_04m_02a,Mesh/Structure,STRUCTURAL,Auto Convex,1x box | UseDefault,single box on complex shape,252,18x300x400
+SM_Window_04m_02b,Mesh/Structure,STRUCTURAL,Auto Convex,none | UseDefault,missing entirely,252,18x300x400
+SM_Window_04m_03a,Mesh/Structure,STRUCTURAL,Auto Convex,1x box | UseDefault,single box on complex shape,256,18x400x400
+SM_Window_04m_04a,Mesh/Structure,STRUCTURAL,Auto Convex,1x box | UseDefault,single box on complex shape,4411,18x400x400
+SM_Window_04m_04b,Mesh/Structure,STRUCTURAL,Auto Convex,1x box | UseDefault,single box on complex shape,4428,19x400x400
+SM_Window_04m_05a,Mesh/Structure,STRUCTURAL,Auto Convex,1x box | UseDefault,single box on complex shape,1073,50x400x600
+SM_Window_04m_05b,Mesh/Structure,STRUCTURAL,Auto Convex,1x box | UseDefault,single box on complex shape,1900,61x400x600
+SM_Window_05m_05a,Mesh/Structure,STRUCTURAL,Auto Convex,1x box | UseDefault,single box on complex shape,2242,50x506x600
+SM_Window_05m_05b,Mesh/Structure,STRUCTURAL,Auto Convex,1x box | UseDefault,single box on complex shape,2936,61x501x600
+SM_WindowDeco_01m_01a,Mesh/Structure,SKIP,-,none | UseDefault,none (ok for SKIP),351,12x302x250
+SM_WoodDeco_01a,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,4437,18x132x186
+SM_WoodDeco_01b,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,2069,18x185x186
+SM_WoodDeco_01c,Mesh/Structure,SKIP,-,1x box | UseDefault,has collision but should have none,5244,18x234x186

@@ -1,0 +1,14 @@
+"C:/PROJECTS/Unreal/KIZOKU_NO_KAGE_V2_REPO/NobleShadows/Plugins/WidgetToolset/Intermediate/Build/Win64/x64/UnrealEditor/Development/WidgetToolset/Module.WidgetToolset.cpp"
+@"C:/PROJECTS/Unreal/KIZOKU_NO_KAGE_V2_REPO/NobleShadows/Plugins/WidgetToolset/Intermediate/Build/Win64/x64/UnrealEditor/Development/WidgetToolset/WidgetToolset.Shared.rsp"
+/FI"C:/PROJECTS/Unreal/KIZOKU_NO_KAGE_V2_REPO/NobleShadows/Intermediate/Build/Win64/x64/KizokuNoKageV2Editor/Development/UnrealEd/SharedPCH.UnrealEd.Project.ValApi.ValExpApi.Cpp20.InclOrderUnreal5_6.h"
+/FI"C:/PROJECTS/Unreal/KIZOKU_NO_KAGE_V2_REPO/NobleShadows/Plugins/WidgetToolset/Intermediate/Build/Win64/x64/UnrealEditor/Development/WidgetToolset/Definitions.WidgetToolset.h"
+/Yu"C:/PROJECTS/Unreal/KIZOKU_NO_KAGE_V2_REPO/NobleShadows/Intermediate/Build/Win64/x64/KizokuNoKageV2Editor/Development/UnrealEd/SharedPCH.UnrealEd.Project.ValApi.ValExpApi.Cpp20.InclOrderUnreal5_6.h"
+/Fp"C:/PROJECTS/Unreal/KIZOKU_NO_KAGE_V2_REPO/NobleShadows/Intermediate/Build/Win64/x64/KizokuNoKageV2Editor/Development/UnrealEd/SharedPCH.UnrealEd.Project.ValApi.ValExpApi.Cpp20.InclOrderUnreal5_6.h.pch"
+/Fo"C:/PROJECTS/Unreal/KIZOKU_NO_KAGE_V2_REPO/NobleShadows/Plugins/WidgetToolset/Intermediate/Build/Win64/x64/UnrealEditor/Development/WidgetToolset/Module.WidgetToolset.cpp.obj"
+/experimental:log "C:/PROJECTS/Unreal/KIZOKU_NO_KAGE_V2_REPO/NobleShadows/Plugins/WidgetToolset/Intermediate/Build/Win64/x64/UnrealEditor/Development/WidgetToolset/Module.WidgetToolset.cpp.sarif"
+/sourceDependencies "C:/PROJECTS/Unreal/KIZOKU_NO_KAGE_V2_REPO/NobleShadows/Plugins/WidgetToolset/Intermediate/Build/Win64/x64/UnrealEditor/Development/WidgetToolset/Module.WidgetToolset.cpp.dep.json"
+/nologo
+/TP
+/GR-
+/std:c++20
+/wd5054
