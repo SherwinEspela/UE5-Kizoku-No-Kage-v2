@@ -263,3 +263,7 @@ NobleShadows/Content/Ship/
 
 # Debug symbols (large build artifacts)
 *.pdb
+
+# AnimStitch build output
+NobleShadows/Plugins/AnimStitch/Intermediate/
+NobleShadows/Plugins/AnimStitch/Binaries/

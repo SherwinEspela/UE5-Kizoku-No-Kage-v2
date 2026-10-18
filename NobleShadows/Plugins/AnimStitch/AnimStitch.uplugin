@@ -1,0 +1,25 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "AnimStitch",
+	"Description": "A miniature NLE-style timeline for animation clips: trim, overlap for crossfades, preview live and bake to a single animation sequence.",
+	"Category": "Animation",
+	"CreatedBy": "AnimStitch",
+	"CanContainContent": false,
+	"IsBetaVersion": true,
+	"EnabledByDefault": true,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "AnimStitch",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "AnimStitchEditor",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		}
+	]
+}
