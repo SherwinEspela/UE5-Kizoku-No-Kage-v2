@@ -35,6 +35,12 @@ FAnimStitchPreview::FAnimStitchPreview()
 			MID->SetScalarParameterValue(TEXT("Opacity"), 0.35f);
 			return MID;
 		};
+		const FLinearColor ControlColors[6] = { FLinearColor(0.35f, 0.95f, 0.45f), FLinearColor(0.95f, 0.6f, 0.2f), FLinearColor(1.f, 0.45f, 0.1f), FLinearColor(0.7f, 0.4f, 1.f), FLinearColor(0.3f, 1.f, 0.5f), FLinearColor(1.f, 0.9f, 0.2f) };
+		for (int32 i = 0; i < 6; ++i)
+		{
+			ControlMaterials[i] = MakeGhost(ControlColors[i]);
+			ControlMaterials[i]->SetScalarParameterValue(TEXT("Opacity"), i == 5 ? 0.3f : 0.2f);
+		}
 		OutgoingGhostMaterial = MakeGhost(FLinearColor(1.f, 0.55f, 0.1f));
 		IncomingGhostMaterial = MakeGhost(FLinearColor(0.15f, 0.8f, 1.f));
 	}
@@ -50,6 +56,7 @@ void FAnimStitchPreview::AddReferencedObjects(FReferenceCollector& Collector)
 	Collector.AddReferencedObject(MainComponent);
 	Collector.AddReferencedObjects(GhostComponents);
 	Collector.AddReferencedObjects(AttachmentComponents);
+	for (TObjectPtr<UMaterialInstanceDynamic>& Material : ControlMaterials) { Collector.AddReferencedObject(Material); }
 	Collector.AddReferencedObject(OutgoingGhostMaterial);
 	Collector.AddReferencedObject(IncomingGhostMaterial);
 }
@@ -90,6 +97,7 @@ void FAnimStitchPreview::ClearCorrectedPoses()
 
 void FAnimStitchPreview::SetTimeline(const FAnimStitchTimeline& Timeline)
 {
+	bPlantFeetResolved = false;
 	CorrectedPoses.Reset(); // stale until the foot lock pass has been re-run for the new timeline
 	ManualTracks = Timeline.Tracks;
 	FString Error;
@@ -246,7 +254,12 @@ void FAnimStitchPreview::SetPlayhead(double Time)
 			Evaluator.EvaluatePose(Time, Pose);
 		}
 		// Manual corrections come last: they win over foot prediction and foot lock.
-		FAnimStitchManualEdits::Apply(Evaluator.GetSkeleton()->GetReferenceSkeleton(), ManualTracks, Time, Pose);
+		if (!bPlantFeetResolved)
+		{
+			FAnimStitchFootLock::ResolveFootBones(Evaluator.GetSkeleton(), Evaluator.GetTimeline().FootLock, PlantFeet[0], PlantFeet[1]);
+			bPlantFeetResolved = true;
+		}
+		FAnimStitchManualEdits::Apply(Evaluator.GetSkeleton()->GetReferenceSkeleton(), ManualTracks, Time, Pose, PlantFeet);
 		if (bPinRoot && Pose.Num() > 0)
 		{
 			FVector Loc = Pose[0].GetTranslation();
@@ -477,12 +490,23 @@ void FAnimStitchPreview::Draw(const FSceneView* View, FPrimitiveDrawInterface* P
 		constexpr double Cell = 100.0;
 		constexpr double Z = 0.5;
 		const double Extent = HalfCells * Cell;
+		// Fine 10 cm lines near the origin (+-5 m).
+		constexpr int32 FineHalf = 50;
+		constexpr double FineCell = 10.0;
+		for (int32 i = -FineHalf; i <= FineHalf; ++i)
+		{
+			if ((i % 10) == 0) { continue; } // the 1 m lines are drawn below
+			const FLinearColor Fine(0.2f, 0.2f, 0.2f); // minor subdivisions: dark gray
+			PDI->DrawLine(FVector(-FineHalf * FineCell, i * FineCell, Z), FVector(FineHalf * FineCell, i * FineCell, Z), Fine, SDPG_World, 0.f);
+			PDI->DrawLine(FVector(i * FineCell, -FineHalf * FineCell, Z), FVector(i * FineCell, FineHalf * FineCell, Z), Fine, SDPG_World, 0.f);
+		}
 		for (int32 i = -HalfCells; i <= HalfCells; ++i)
 		{
 			const bool bAxis = i == 0;
 			const bool bMajor = (i % 5) == 0;
-			const FLinearColor LineX = bAxis ? FLinearColor(0.9f, 0.2f, 0.2f) : FLinearColor(1.f, 1.f, 1.f, bMajor ? 0.55f : 0.22f);
-			const FLinearColor LineY = bAxis ? FLinearColor(0.2f, 0.9f, 0.2f) : FLinearColor(1.f, 1.f, 1.f, bMajor ? 0.55f : 0.22f);
+			const FLinearColor Major(0.f, 0.f, 0.f); // major lines: black
+			const FLinearColor LineX = bAxis ? FLinearColor(0.9f, 0.2f, 0.2f) : Major;
+			const FLinearColor LineY = bAxis ? FLinearColor(0.2f, 0.9f, 0.2f) : Major;
 			PDI->DrawLine(FVector(-Extent, i * Cell, Z), FVector(Extent, i * Cell, Z), LineX, SDPG_World, bMajor ? 1.f : 0.f);
 			PDI->DrawLine(FVector(i * Cell, -Extent, Z), FVector(i * Cell, Extent, Z), LineY, SDPG_World, bMajor ? 1.f : 0.f);
 		}
@@ -506,25 +530,46 @@ void FAnimStitchPreview::Draw(const FSceneView* View, FPrimitiveDrawInterface* P
 				return FLinearColor::MakeFromHSV8(uint8((Depth * 37) & 0xFF), 200, uint8(255.f * Brightness));
 			};
 			const float Size = BoneDrawSize;
+			// Animation Sequence editor style: every bone is an elongated octahedron from its parent joint to its own joint.
+			auto DrawBoneShape = [&](const FVector& Start, const FVector& End, const FLinearColor& Color, float Thickness)
+			{
+				const FVector Axis = End - Start;
+				const double Length = Axis.Size();
+				if (Length < 0.01) { return; }
+				const FVector Dir = Axis / Length;
+				const FVector Side0 = FVector::CrossProduct(Dir, FMath::Abs(Dir.Z) < 0.9 ? FVector::UpVector : FVector::RightVector).GetSafeNormal();
+				const FVector Side1 = FVector::CrossProduct(Dir, Side0);
+				const double Width = FMath::Clamp(Length * 0.12, 0.35, 3.0) * Size;
+				const FVector Mid = Start + Dir * Length * 0.15;
+				const FVector Ring[4] = { Mid + Side0 * Width, Mid + Side1 * Width, Mid - Side0 * Width, Mid - Side1 * Width };
+				for (int32 k = 0; k < 4; ++k)
+				{
+					PDI->DrawLine(Start, Ring[k], Color, SDPG_Foreground, Thickness);
+					PDI->DrawLine(End, Ring[k], Color, SDPG_Foreground, Thickness);
+					PDI->DrawLine(Ring[k], Ring[(k + 1) % 4], Color, SDPG_Foreground, Thickness);
+				}
+			};
 			for (int32 i = 0; i < Component.Num(); ++i)
 			{
 				if (!Drawn[i]) { continue; }
 				const int32 Parent = RefSkel.GetParentIndex(i);
 				if (Parent != INDEX_NONE)
 				{
-					PDI->DrawLine(World(Parent), World(i), BoneColor(i, 1.f), SDPG_Foreground, i == SelectedBone ? 2.f * Size : 0.5f * Size);
+					DrawBoneShape(World(Parent), World(i), BoneColor(i, 1.f), 0.f);
 				}
-				PDI->DrawPoint(World(i), BoneColor(i, 1.f), 4.f * Size, SDPG_Foreground);
-			}
-			if (Component.IsValidIndex(SelectedBone) && Drawn[SelectedBone])
+				else
+				{
+					PDI->DrawPoint(World(i), BoneColor(i, 1.f), 5.f * Size, SDPG_Foreground);
+				}
+			}			if (Component.IsValidIndex(SelectedBone) && Drawn[SelectedBone])
 			{
 				const FVector P = World(SelectedBone);
 				const int32 Parent = RefSkel.GetParentIndex(SelectedBone);
 				if (Parent != INDEX_NONE)
 				{
-					PDI->DrawLine(World(Parent), P, FLinearColor(1.f, 0.55f, 0.1f), SDPG_Foreground, 2.f * Size);
+					DrawBoneShape(World(Parent), P, FLinearColor(1.f, 0.55f, 0.1f), 1.5f);
 				}
-				PDI->DrawPoint(P, FLinearColor(1.f, 0.9f, 0.1f), 10.f * Size, SDPG_Foreground);
+				PDI->DrawPoint(P, FLinearColor(1.f, 0.9f, 0.1f), 8.f * Size, SDPG_Foreground);
 				const FQuat Rotation = ToWorld.GetRotation() * Component[SelectedBone].GetRotation();
 				const double AxisLength = 12.0 * Size;
 				PDI->DrawLine(P, P + Rotation.GetAxisX() * AxisLength, FLinearColor::Red, SDPG_Foreground, 1.5f);
@@ -546,19 +591,26 @@ void FAnimStitchPreview::Draw(const FSceneView* View, FPrimitiveDrawInterface* P
 	{
 		return;
 	}
-	const FLinearColor Color(1.f, 0.9f, 0.1f);
+	// Animation Sequence editor style: dark gray curve, small division points, dark circles at the start and end.
+	const FLinearColor CurveColor(0.12f, 0.12f, 0.12f);
+	const FLinearColor DotColor(0.2f, 0.2f, 0.2f);
 	auto OnGround = [](const FVector& P) { return FVector(P.X, P.Y, 1.0); };
 	for (int32 i = 1; i < TrajectoryPoints.Num(); ++i)
 	{
-		PDI->DrawLine(OnGround(TrajectoryPoints[i - 1]), OnGround(TrajectoryPoints[i]), Color, SDPG_Foreground, 1.5f);
+		PDI->DrawLine(OnGround(TrajectoryPoints[i - 1]), OnGround(TrajectoryPoints[i]), CurveColor, SDPG_Foreground, 1.5f);
 	}
-	// One tick per second so speed changes and snaps read clearly.
+	// One small division point per second so speed changes and snaps read clearly.
 	for (int32 i = 0; i < TrajectoryPoints.Num(); i += int32(TrajectorySampleRate))
 	{
-		PDI->DrawPoint(OnGround(TrajectoryPoints[i]), FLinearColor::White, 6.f, SDPG_Foreground);
+		PDI->DrawPoint(OnGround(TrajectoryPoints[i]), DotColor, 4.f, SDPG_Foreground);
+	}
+	for (const FVector& End : { TrajectoryPoints[0], TrajectoryPoints.Last() })
+	{
+		const FVector Centre = OnGround(End);
+		DrawCircle(PDI, Centre, FVector::ForwardVector, FVector::RightVector, FLinearColor(0.02f, 0.02f, 0.02f), 14.0, 24, SDPG_Foreground, 2.f);
+		PDI->DrawPoint(Centre, FLinearColor(0.02f, 0.02f, 0.02f), 9.f, SDPG_Foreground);
 	}
 }
-
 // ---------------------------------------------------------------------------------------------
 
 FAnimStitchViewportClient::FAnimStitchViewportClient(const TSharedRef<FAnimStitchPreview>& InPreview, const TSharedRef<SEditorViewport>& InViewport)
@@ -601,7 +653,7 @@ void FAnimStitchViewportClient::ProcessClick(FSceneView& View, HHitProxy* HitPro
 	if (const TSharedPtr<FAnimStitchPreview> Pinned = Preview.Pin())
 	{
 		// Control shapes first, then bones.
-		const FAnimStitchControlId Control = Pinned->PickControl(View.ViewMatrices.GetWorldToClip(), View.UnconstrainedViewRect, FVector2D(HitX, HitY), 14.f);
+		const FAnimStitchControlId Control = Pinned->PickControl(View, FVector2D(HitX, HitY));
 		if (Control.IsValid())
 		{
 			Pinned->SelectControl(Control);
@@ -620,6 +672,13 @@ void FAnimStitchViewportClient::UpdateDrag(FViewport* InViewport, int32 X, int32
 {
 	if (const TSharedPtr<FAnimStitchPreview> Pinned = Preview.Pin())
 	{
+		if (!InViewport->KeyState(EKeys::LeftMouseButton))
+		{
+			// The release was missed (button let go outside the viewport): never stay stuck in a drag.
+			bGizmoDrag = false;
+			Pinned->EndGizmoDrag();
+			return;
+		}
 		FSceneViewFamilyContext Family(FSceneViewFamily::ConstructionValues(InViewport, GetScene(), EngineShowFlags).SetRealtimeUpdate(true));
 		if (FSceneView* View = CalcSceneView(&Family))
 		{
@@ -633,6 +692,11 @@ bool FAnimStitchViewportClient::InputKey(const FInputKeyEventArgs& EventArgs)
 	const TSharedPtr<FAnimStitchPreview> Pinned = Preview.Pin();
 	if (Pinned && EventArgs.Key == EKeys::LeftMouseButton)
 	{
+		if (EventArgs.Event == IE_Pressed && bGizmoDrag)
+		{
+			bGizmoDrag = false;
+			Pinned->EndGizmoDrag(); // a stale drag from a missed release
+		}
 		if (EventArgs.Event == IE_Pressed && !EventArgs.Viewport->KeyState(EKeys::LeftAlt) && !EventArgs.Viewport->KeyState(EKeys::RightAlt))
 		{
 			FSceneViewFamilyContext Family(FSceneViewFamily::ConstructionValues(EventArgs.Viewport, GetScene(), EngineShowFlags).SetRealtimeUpdate(true));
@@ -666,6 +730,16 @@ void FAnimStitchViewportClient::MouseMove(FViewport* InViewport, int32 X, int32 
 {
 	if (bGizmoDrag) { UpdateDrag(InViewport, X, Y); return; }
 	FEditorViewportClient::MouseMove(InViewport, X, Y);
+}
+
+bool FAnimStitchViewportClient::InputAxis(const FInputKeyEventArgs& Args)
+{
+	if (bGizmoDrag && Args.Viewport && (Args.Key == EKeys::MouseX || Args.Key == EKeys::MouseY))
+	{
+		UpdateDrag(Args.Viewport, Args.Viewport->GetMouseX(), Args.Viewport->GetMouseY());
+		return true;
+	}
+	return FEditorViewportClient::InputAxis(Args);
 }
 
 void FAnimStitchViewportClient::CapturedMouseMove(FViewport* InViewport, int32 InMouseX, int32 InMouseY)

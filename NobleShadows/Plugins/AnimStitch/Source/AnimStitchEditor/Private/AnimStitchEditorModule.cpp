@@ -1,4 +1,4 @@
-#include "AnimStitchEditorModule.h"
+﻿#include "AnimStitchEditorModule.h"
 #include "Modules/ModuleManager.h"
 #include "Framework/Docking/TabManager.h"
 #include "Widgets/Docking/SDockTab.h"
@@ -32,10 +32,12 @@ void FAnimStitchEditorModule::ShutdownModule()
 
 TSharedRef<SDockTab> FAnimStitchEditorModule::SpawnTab(const FSpawnTabArgs& Args)
 {
-	TSharedPtr<SAnimStitchPanel> Panel;
+	TSharedRef<SAnimStitchPanel> Panel = SNew(SAnimStitchPanel);
+	TWeakPtr<SAnimStitchPanel> WeakPanel = Panel;
 	TSharedRef<SDockTab> Tab = SNew(SDockTab).TabRole(ETabRole::NomadTab)
+	.Label_Lambda([WeakPanel]() { const TSharedPtr<SAnimStitchPanel> Pinned = WeakPanel.Pin(); return Pinned.IsValid() ? Pinned->GetTabTitle() : LOCTEXT("TabTitle", "AnimStitch"); })
 	[
-		SAssignNew(Panel, SAnimStitchPanel)
+		Panel
 	];
 	ActivePanel = Panel;
 	return Tab;

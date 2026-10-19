@@ -177,6 +177,10 @@ struct ANIMSTITCHEDITOR_API FAnimStitchTrack
 	UPROPERTY()
 	bool bRotationOnly = false;
 
+	/** Bone tracks: when this bone moves the legs (pelvis etc.), keep the feet planted where the animation had them (leg IK). */
+	UPROPERTY()
+	bool bKeepFeetPlanted = true;
+
 	/** Tracks created together as the FK joints of one limb share a group (0 = none). */
 	UPROPERTY()
 	int32 GroupId = 0;

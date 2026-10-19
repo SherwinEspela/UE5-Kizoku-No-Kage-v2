@@ -67,11 +67,36 @@ public:
 	void TrimEndAtPlayhead();
 
 	double GetPlayhead() const { return Playhead; }
+	UAnimStitchTimelineAsset* GetAsset() const { return Asset; }
+
+	// ---- Key value expander (numeric entry under a track lane) ----
+	/** Width of the track column on the left (Sequencer style); the time area starts to its right. */
+	static constexpr float LabelWidth = 290.f;
+	static constexpr float ExpanderHeight = 112.f;
+
+	// ---- View range (used by the scroll and zoom bar at the bottom) ----
+	void GetVisibleTimeRange(double& OutStart, double& OutEnd) const;
+	/** Shows [Start, End] seconds in the time area. */
+	void SetVisibleTimeRange(double Start, double End);
+	/** Frames / seconds ruler units. */
+	void SetShowFrames(bool bFrames) { bShowFrames = bFrames; }
+	bool GetShowFrames() const { return bShowFrames; }
+	double GetDisplayFps() const;
+	/** Jumps to the next (+1) / previous (-1) key of the selected track, or of all tracks when none is selected. Returns false if there is none. */
+	bool JumpToAdjacentKey(int32 Direction);
+	bool IsExpanderOpen() const { return Asset && Asset->Timeline.Tracks.IsValidIndex(ExpandedTrack); }
+	int32 GetExpandedTrack() const { return IsExpanderOpen() ? ExpandedTrack : INDEX_NONE; }
+	/** Top (widget-local) of the area under the expanded lane. */
+	float GetExpanderTop() const { return IsExpanderOpen() ? GetTrackLaneTop(ExpandedTrack) + TrackLaneHeight + 2.f : 0.f; }
+	/** Key shown in the expander: the selected key of the expanded track, else INDEX_NONE (the value at the playhead is shown). */
+	int32 GetExpandedKey() const { return (IsExpanderOpen() && SelectedTrack == ExpandedTrack) ? SelectedKey : INDEX_NONE; }
+	/** Moves the playhead to the next / previous key of a lane and selects it. */
+	void JumpToKey(int32 Track, int32 Direction);
 	void SetPlayhead(double Time) { Playhead = FMath::Clamp(Time, 0.0, Asset->Timeline.GetTotalLength()); }
 
 	// SWidget
 	virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const override;
-	virtual FVector2D ComputeDesiredSize(float) const override { return FVector2D(400.0, 140.0 + 32.0 * Asset->Timeline.Tracks.Num()); }
+	virtual FVector2D ComputeDesiredSize(float) const override { return FVector2D(400.0, 140.0 + 32.0 * Asset->Timeline.Tracks.Num() + (IsExpanderOpen() ? ExpanderHeight : 0.f)); }
 	virtual bool SupportsKeyboardFocus() const override { return true; }
 	virtual FReply OnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override;
 	virtual FReply OnMouseButtonUp(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override;
@@ -89,7 +114,7 @@ public:
 	virtual void PostRedo(bool bSuccess) override { ClampSelection(); }
 
 private:
-	enum class EHit : uint8 { None, Ruler, Body, TrimLeft, TrimRight, Overlap, MarkerStart, MarkerEnd, FootLane, TrackLane, TrackKey };
+	enum class EHit : uint8 { None, Ruler, Body, TrimLeft, TrimRight, Overlap, MarkerStart, MarkerEnd, FootLane, TrackLane, TrackKey, TrackPrev, TrackNext, TrackExpand, TrackAddKey };
 	struct FHit
 	{
 		EHit Type = EHit::None;
@@ -97,7 +122,7 @@ private:
 		/** Track keys: the key index. */
 		int32 Sub = INDEX_NONE;
 	};
-	enum class EDrag : uint8 { None, Scrub, Move, TrimLeft, TrimRight, Overlap, Pan, MarkerStart, MarkerEnd, FootLane, KeyMove };
+	enum class EDrag : uint8 { None, Scrub, Move, TrimLeft, TrimRight, Overlap, Pan, MarkerStart, MarkerEnd, FootLane, KeyMove, Marquee };
 
 	void AddSequencesAt(const TArray<UAnimSequence*>& Sequences, int32 Index);
 	bool bPendingZoomFit = false;
@@ -109,7 +134,12 @@ private:
 	// ---- Manual bone correction lanes (Phase 9) ----
 	static constexpr float TrackLaneHeight = 30.f;
 	float GetTracksTop() const { return GetTrackTop() + TrackHeight + 10.f; }
-	float GetTrackLaneTop(int32 Track) const { return GetTracksTop() + Track * (TrackLaneHeight + 2.f); }
+	float GetTrackLaneTop(int32 Track) const { return GetTracksTop() + Track * (TrackLaneHeight + 2.f) + (IsExpanderOpen() && Track > ExpandedTrack ? ExpanderHeight : 0.f); }
+	int32 ExpandedTrack = INDEX_NONE;
+	bool bShowFrames = false;
+	void PaintLeftColumn(FSlateWindowElementList& Out, int32 Layer, const FGeometry& G) const;
+	mutable float CachedWidth = 600.f;
+	bool GetLaneButton(float X, float Y, int32 Track, EHit& OutType) const;
 	void PaintTrackLanes(FSlateWindowElementList& Out, int32 Layer, const FGeometry& G) const;
 	void OpenAddTrackMenu(const FPointerEvent& Event);
 	void OpenTrackMenu(const FPointerEvent& Event, int32 Track, int32 Key, double Time);
@@ -118,14 +148,27 @@ private:
 	void PickOtherBone();
 	int32 SelectedTrack = INDEX_NONE;
 	int32 SelectedKey = INDEX_NONE;
+
+	// ---- Multi-key selection, marquee and clipboard (Phase 10) ----
+	struct FKeyRef { int32 Track = INDEX_NONE; int32 Key = INDEX_NONE; bool operator==(const FKeyRef& O) const { return Track == O.Track && Key == O.Key; } };
+	/** Every selected key (the primary SelectedTrack / SelectedKey is one of them). */
+	TArray<FKeyRef> SelectedKeys;
+	TArray<FKeyRef> MarqueeInitial;
+	FVector2f MarqueeStart = FVector2f::ZeroVector;
+	FVector2f MarqueeCurrent = FVector2f::ZeroVector;
+	bool IsKeySelected(int32 Track, int32 Key) const { return SelectedKeys.Contains(FKeyRef{ Track, Key }) || (Track == SelectedTrack && Key == SelectedKey); }
+	void UpdateMarquee(const FVector2f& Local);
+	void CopySelectedKeys();
+	void PasteKeys();
+	void DeleteSelectedKeys();
 	double InitialKeyTime = 0.0;
 	void OpenFootLaneMenu(const FPointerEvent& Event, int32 Foot, double Time);
 	int32 FindCutTarget() const;
 	void BrowseToSelectedAsset();
 	void OpenContextMenu(const FPointerEvent& Event);
 	FHit HitTest(const FVector2f& LocalPos) const;
-	float TimeToX(double Time) const { return float((Time - ViewStart) * PxPerSec); }
-	double XToTime(float X) const { return ViewStart + X / PxPerSec; }
+	float TimeToX(double Time) const { return LabelWidth + float((Time - ViewStart) * PxPerSec); }
+	double XToTime(float X) const { return ViewStart + (X - LabelWidth) / PxPerSec; }
 	void SelectClip(int32 Index, bool bOverlap);
 	void ClampSelection();
 	void OnDragMove(float LocalX);

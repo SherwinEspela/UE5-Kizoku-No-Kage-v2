@@ -108,6 +108,21 @@ UAnimSequence* FAnimStitchBaker::Bake(const FAnimStitchTimeline& Timeline, const
 		}
 	}
 	TrackBones.Sort();
+	// Pelvis-style corrections re-plant the feet with leg IK, so the legs need tracks too.
+	FName PlantFeet[2];
+	bool bPlantFeet = false;
+	for (const FAnimStitchTrack& Track : Timeline.Tracks) { bPlantFeet |= Track.Kind == EAnimStitchTrackKind::Bone && Track.bKeepFeetPlanted; }
+	if (bPlantFeet)
+	{
+		FAnimStitchFootLock::ResolveFootBones(Evaluator.GetSkeleton(), Timeline.FootLock, PlantFeet[0], PlantFeet[1]);
+		for (const FName FootBone : PlantFeet)
+		{
+			const FAnimStitchFootChain Chain = FAnimStitchFootLock::BuildChain(RefSkel, FootBone);
+			if (Chain.IsValid()) { TrackBones.AddUnique(Chain.Thigh); TrackBones.AddUnique(Chain.Calf); TrackBones.AddUnique(Chain.Foot); }
+			else { bPlantFeet = false; }
+		}
+		TrackBones.Sort();
+	}
 	if (bFootLock || bPredict)
 	{
 		FName Left, Right;
@@ -205,7 +220,7 @@ UAnimSequence* FAnimStitchBaker::Bake(const FAnimStitchTimeline& Timeline, const
 			// Manual edits come last: they win over foot prediction and foot lock. Same function the preview uses.
 			for (int32 f = 0; f < FramePoses.Num(); ++f)
 			{
-				FAnimStitchManualEdits::Apply(RefSkel, Timeline.Tracks, f / FrameRate.AsDecimal(), FramePoses[f]);
+				FAnimStitchManualEdits::Apply(RefSkel, Timeline.Tracks, f / FrameRate.AsDecimal(), FramePoses[f], bPlantFeet ? PlantFeet : nullptr);
 			}
 		}
 		for (const TArray<FTransform>& Frame : FramePoses)

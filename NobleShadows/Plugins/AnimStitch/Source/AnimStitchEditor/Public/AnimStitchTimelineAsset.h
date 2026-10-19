@@ -70,6 +70,8 @@ public:
 	/** Returns the key's index after re-sorting. */
 	int32 MoveTrackKey(int32 Track, int32 KeyIndex, double NewTime);
 	void SetTrackKeyWeight(int32 Track, int32 KeyIndex, float Weight);
+	/** Bone tracks: keep the feet planted (leg IK) while this bone moves the legs. */
+	void SetTrackKeepFeet(int32 Track, bool bKeep);
 	/** Moves the pin of a manual foot lock (free IK target). */
 	void SetPinOffset(int32 ClipIndex, int32 EventIndex, const FVector& Offset);
 	void AddPreviewAttachment(const FAnimStitchPreviewAttachment& Attachment);

@@ -1,5 +1,8 @@
 ﻿#include "SAnimStitchPanel.h"
 #include "SAnimStitchTimeline.h"
+#include "SAnimStitchKeyPanel.h"
+#include "SAnimStitchTransportBar.h"
+#include "Widgets/SOverlay.h"
 #include "AnimStitchPreview.h"
 #include "AnimStitchSettings.h"
 #include "Engine/SkeletalMesh.h"
@@ -115,6 +118,11 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 			.OnClicked_Lambda([OnClick]() { OnClick(); return FReply::Handled(); });
 	};
 
+	SAssignNew(Timeline, SAnimStitchTimeline)
+		.TimelineAsset(Asset)
+		.OnPlayheadChanged(FSimpleDelegate::CreateSP(this, &SAnimStitchPanel::OnTimelineScrubbed))
+		.OnWarnings(FAnimStitchWarningsDelegate::CreateSP(this, &SAnimStitchPanel::HandleWarnings));
+
 	ChildSlot
 	[
 		SNew(SSplitter).Orientation(Orient_Horizontal)
@@ -153,19 +161,19 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 				SNew(SHorizontalBox)
 				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
 				[
-					AssetButton(LOCTEXT("NewTimeline", "New"), LOCTEXT("NewTimelineTip", "Start a new, empty timeline"), [this]() { NewTimeline(); })
+					IconButton(TAttribute<const FSlateBrush*>(FAppStyle::GetBrush("Icons.Plus")), LOCTEXT("NewTimelineTip", "New: start a new, empty timeline"), [this]() { NewTimeline(); })
 				]
 				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
 				[
-					AssetButton(LOCTEXT("OpenTimeline", "Open..."), LOCTEXT("OpenTimelineTip", "Open a saved AnimStitch timeline asset"), [this]() { OpenFromDisk(); })
+					IconButton(TAttribute<const FSlateBrush*>(FAppStyle::GetBrush("Icons.FolderOpen")), LOCTEXT("OpenTimelineTip", "Open a saved AnimStitch timeline asset"), [this]() { OpenFromDisk(); })
 				]
 				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
 				[
-					AssetButton(LOCTEXT("SaveTimeline", "Save"), LOCTEXT("SaveTimelineTip", "Save the timeline as an asset (Ctrl+S)"), [this]() { Save(); })
+					IconButton(TAttribute<const FSlateBrush*>(FAppStyle::GetBrush("AssetEditor.SaveAsset")), LOCTEXT("SaveTimelineTip", "Save the timeline as an asset (Ctrl+S)"), [this]() { Save(); })
 				]
 				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
 				[
-					AssetButton(LOCTEXT("SaveTimelineAs", "Save As..."), LOCTEXT("SaveTimelineAsTip", "Save a copy of the timeline as a new asset"), [this]() { SaveAs(); })
+					IconButton(TAttribute<const FSlateBrush*>(FAppStyle::GetBrush("AssetEditor.SaveAssetAs")), LOCTEXT("SaveTimelineAsTip", "Save a copy of the timeline as a new asset"), [this]() { SaveAs(); })
 				]
 				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
 				[
@@ -241,26 +249,6 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 				]
 				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
 				[
-					IconButton(TAttribute<const FSlateBrush*>(FAppStyle::GetBrush("Animation.Forward")), LOCTEXT("PlayTip", "Play (Space)"), [this]() { Play(); })
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
-				[
-					IconButton(TAttribute<const FSlateBrush*>(FAppStyle::GetBrush("Animation.Pause")), LOCTEXT("PauseTip", "Pause (Space)"), [this]() { Pause(); })
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
-				[
-					IconButton(TAttribute<const FSlateBrush*>(FAppStyle::GetBrush("Animation.Stop")), LOCTEXT("StopTip", "Stop and return to the start of the playback range"), [this]() { Stop(); })
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 12, 0)
-				[
-					IconButton(TAttribute<const FSlateBrush*>::CreateLambda([this]() { return FAppStyle::GetBrush(bLoop ? "Animation.Loop.Enabled" : "Animation.Loop.Disabled"); }), LOCTEXT("LoopTip", "Toggle looping of the playback range"), [this]() { bLoop = !bLoop; })
-				]
-				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 12, 0)
-				[
-					SNew(STextBlock).Text(this, &SAnimStitchPanel::GetTimeText)
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
-				[
 					ToggleButton(LOCTEXT("Ghosts", "Ghost Joins"), LOCTEXT("GhostsTip", "Show the last pose of the outgoing clip (orange) and the first pose of the incoming clip (blue) at every join"),
 						[this]() { return bShowGhosts; }, [this](bool b) { bShowGhosts = b; Preview->SetShowGhosts(b); })
 				]
@@ -319,11 +307,36 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 			[
 				SNew(SBorder).Padding(0)
 				[
-					SAssignNew(Timeline, SAnimStitchTimeline)
-					.TimelineAsset(Asset)
-					.OnPlayheadChanged(FSimpleDelegate::CreateSP(this, &SAnimStitchPanel::OnTimelineScrubbed))
-					.OnWarnings(FAnimStitchWarningsDelegate::CreateSP(this, &SAnimStitchPanel::HandleWarnings))
+					SNew(SOverlay)
+					+ SOverlay::Slot()
+					[
+						Timeline.ToSharedRef()
+					]
+					+ SOverlay::Slot().VAlign(VAlign_Top).HAlign(HAlign_Left)
+					.Padding(TAttribute<FMargin>::CreateLambda([this]() { return FMargin(0.f, Timeline.IsValid() ? Timeline->GetExpanderTop() : 0.f, 0.f, 0.f); }))
+					[
+						SNew(SBox).WidthOverride(SAnimStitchTimeline::LabelWidth - 2.f)
+						.Visibility_Lambda([this]() { return Timeline.IsValid() && Timeline->IsExpanderOpen() ? EVisibility::Visible : EVisibility::Collapsed; })
+						[
+							SNew(SAnimStitchKeyPanel).Timeline(Timeline)
+							.LiveIK([this](int32 Track, FAnimStitchTrackKey& OutKey) { return Preview->GetIKLiveKey(Track, OutKey); })
+						]
+					]
 				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(6.f, 0.f, 6.f, 2.f)
+			[
+				SNew(SAnimStitchTransportBar).Timeline(Timeline)
+				.OnGoToStart([this]() { double S, E; Asset->GetPlaybackRange(S, E); Timeline->SetPlayhead(S); OnTimelineScrubbed(); })
+				.OnPreviousKey([this]() { Timeline->JumpToAdjacentKey(-1); })
+				.OnPlayPause([this]() { TogglePlayback(); })
+				.OnNextKey([this]() { Timeline->JumpToAdjacentKey(1); })
+				.OnGoToEnd([this]() { double S, E; Asset->GetPlaybackRange(S, E); Timeline->SetPlayhead(E); OnTimelineScrubbed(); })
+				.OnStop([this]() { Stop(); })
+				.OnToggleLoop([this]() { bLoop = !bLoop; })
+				.OnSetPlayhead([this](double T) { Timeline->SetPlayhead(T); OnTimelineScrubbed(); })
+				.IsPlaying([this]() { return bPlaying; })
+				.IsLooping([this]() { return bLoop; })
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(8.f, 4.f)
 			[
@@ -671,6 +684,16 @@ void SAnimStitchPanel::FillControlsMenu(FMenuBuilder& Menu)
 			.OnValueCommitted_Lambda([this](float V, ETextCommit::Type) { Preview->SetControlDrawSize(V); })
 		],
 		LOCTEXT("ControlSize", "Control Size"));
+	Menu.AddWidget(
+		SNew(SBox).WidthOverride(120.f)
+		[
+			SNew(SSpinBox<float>).MinValue(0.3f).MaxValue(4.f).MinSliderValue(0.3f).MaxSliderValue(3.f).Delta(0.1f)
+			.ToolTipText(LOCTEXT("GizmoSizeTip", "Size of the move / rotate / scale manipulator"))
+			.Value_Lambda([this]() { return Preview->GetGizmoDrawSize(); })
+			.OnValueChanged_Lambda([this](float V) { Preview->SetGizmoDrawSize(V); })
+			.OnValueCommitted_Lambda([this](float V, ETextCommit::Type) { Preview->SetGizmoDrawSize(V); })
+		],
+		LOCTEXT("GizmoSize", "Gizmo Size"));
 	Menu.EndSection();
 }
 
@@ -852,6 +875,15 @@ TSharedPtr<SWidget> SAnimStitchPanel::OnGetAssetContextMenu(const TArray<FAssetD
 			}
 		})));
 	return Menu.MakeWidget();
+}
+
+FText SAnimStitchPanel::GetTabTitle() const
+{
+	if (Asset->GetOutermost() == GetTransientPackage())
+	{
+		return LOCTEXT("TabTitleUntitled", "AnimStitch");
+	}
+	return FText::Format(LOCTEXT("TabTitleAsset", "{0}{1}"), FText::FromString(Asset->GetName()), Asset->GetOutermost()->IsDirty() ? FText::FromString(TEXT("*")) : FText::GetEmpty());
 }
 
 FText SAnimStitchPanel::GetAssetLabel() const

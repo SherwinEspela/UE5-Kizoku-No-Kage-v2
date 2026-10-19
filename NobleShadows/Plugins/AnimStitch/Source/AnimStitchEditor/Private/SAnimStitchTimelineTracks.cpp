@@ -30,8 +30,9 @@ void SAnimStitchTimeline::PaintTrackLanes(FSlateWindowElementList& Out, int32 La
 		return;
 	}
 	const FVector2f Size = G.GetLocalSize();
+	CachedWidth = Size.X;
 	const FSlateBrush* White = FAppStyle::GetBrush("WhiteBrush");
-	static const FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle("Regular", 9);
+	const FSlateBrush* Circle = FAppStyle::GetBrush("Icons.FilledCircle");
 
 	for (int32 i = 0; i < TL.Tracks.Num(); ++i)
 	{
@@ -40,7 +41,7 @@ void SAnimStitchTimeline::PaintTrackLanes(FSlateWindowElementList& Out, int32 La
 		const bool bIK = Track.Kind == EAnimStitchTrackKind::IKLimb;
 		const FLinearColor Base = bIK ? FLinearColor(0.95f, 0.5f, 0.15f) : (Track.bRotationOnly ? FLinearColor(0.9f, 0.6f, 0.2f) : FLinearColor(0.35f, 0.85f, 0.5f));
 
-		FSlateDrawElement::MakeBox(Out, Layer, G.ToPaintGeometry(FVector2f(Size.X, TrackLaneHeight), FSlateLayoutTransform(FVector2f(0.f, Top))), White, ESlateDrawEffect::None,
+		FSlateDrawElement::MakeBox(Out, Layer, G.ToPaintGeometry(FVector2f(Size.X - LabelWidth, TrackLaneHeight), FSlateLayoutTransform(FVector2f(LabelWidth, Top))), White, ESlateDrawEffect::None,
 			i == SelectedTrack ? FLinearColor(0.16f, 0.16f, 0.2f) : FLinearColor(0.09f, 0.09f, 0.1f));
 
 		// IK: shade the stretches where the IK weight is above zero.
@@ -51,28 +52,88 @@ void SAnimStitchTimeline::PaintTrackLanes(FSlateWindowElementList& Out, int32 La
 				const float W = FMath::Max(Track.Keys[k].Weight, Track.Keys[k + 1].Weight);
 				if (W <= 0.001f) { continue; }
 				const float X0 = TimeToX(Track.Keys[k].Time), X1 = TimeToX(Track.Keys[k + 1].Time);
-				FSlateDrawElement::MakeBox(Out, Layer + 1, G.ToPaintGeometry(FVector2f(FMath::Max(1.f, X1 - X0), 8.f), FSlateLayoutTransform(FVector2f(X0, Top + TrackLaneHeight - 10.f))), White, ESlateDrawEffect::None, Base * 0.55f);
+				FSlateDrawElement::MakeBox(Out, Layer + 1, G.ToPaintGeometry(FVector2f(FMath::Max(1.f, X1 - X0), 6.f), FSlateLayoutTransform(FVector2f(X0, Top + TrackLaneHeight - 8.f))), White, ESlateDrawEffect::None, Base * 0.55f);
 			}
 		}
 
-		FString Label = Track.Bone.ToString();
-		if (bIK) { Label += TEXT("  (IK)"); }
-		else if (Track.bRotationOnly) { Label += TEXT("  (FK)"); }
-		FSlateDrawElement::MakeText(Out, Layer + 2, G.ToPaintGeometry(G.GetLocalSize(), FSlateLayoutTransform(FVector2f(6.f, Top + 8.f))), Label, Font, ESlateDrawEffect::None, FLinearColor(1.f, 1.f, 1.f, 0.55f));
+		if (i == ExpandedTrack && IsExpanderOpen())
+		{
+			// The area under the lane belongs to the numeric value rows (in the track column); stripe the time side to match.
+			const float PanelTop = Top + TrackLaneHeight + 2.f;
+			const float RowH = (ExpanderHeight - 2.f) / 4.f;
+			for (int32 r = 0; r < 4; ++r)
+			{
+				FSlateDrawElement::MakeBox(Out, Layer, G.ToPaintGeometry(FVector2f(Size.X - LabelWidth, RowH), FSlateLayoutTransform(FVector2f(LabelWidth, PanelTop + r * RowH))), White, ESlateDrawEffect::None,
+					(r & 1) ? FLinearColor(0.075f, 0.075f, 0.085f) : FLinearColor(0.06f, 0.06f, 0.07f));
+			}
+		}
 
+		// Keys: solid red circles, solid blue when selected (Sequencer style).
 		for (int32 k = 0; k < Track.Keys.Num(); ++k)
 		{
 			const float X = TimeToX(Track.Keys[k].Time);
 			const float Y = Top + TrackLaneHeight * 0.5f;
-			const bool bSelected = i == SelectedTrack && k == SelectedKey;
-			const float R = bSelected ? 10.f : 8.f;
-			const FLinearColor Color = bSelected ? FLinearColor(1.f, 0.95f, 0.3f) : (bIK && Track.Keys[k].Weight < 0.5f ? FLinearColor(0.6f, 0.6f, 0.65f) : Base);
-			const TArray<FVector2f> Diamond = { FVector2f(X, Y - R), FVector2f(X + R, Y), FVector2f(X, Y + R), FVector2f(X - R, Y), FVector2f(X, Y - R) };
-			FSlateDrawElement::MakeLines(Out, Layer + 3, G.ToPaintGeometry(), Diamond, ESlateDrawEffect::None, Color, true, 2.f);
+			const bool bSelected = IsKeySelected(i, k);
+			const float D = bSelected ? 13.f : 11.f;
+			const FLinearColor Color = bSelected ? FLinearColor(0.2f, 0.5f, 1.f) : FLinearColor(0.9f, 0.15f, 0.12f);
+			FSlateDrawElement::MakeBox(Out, Layer + 3, G.ToPaintGeometry(FVector2f(D, D), FSlateLayoutTransform(FVector2f(X - D * 0.5f, Y - D * 0.5f))), Circle ? Circle : White, ESlateDrawEffect::None, Color);
 		}
 	}
 }
 
+/** The Sequencer-like track column: titles with an expand arrow, key navigation buttons and the area behind the value rows. */
+void SAnimStitchTimeline::PaintLeftColumn(FSlateWindowElementList& Out, int32 Layer, const FGeometry& G) const
+{
+	const FAnimStitchTimeline& TL = Asset->Timeline;
+	const FVector2f Size = G.GetLocalSize();
+	const FSlateBrush* White = FAppStyle::GetBrush("WhiteBrush");
+	static const FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle("Regular", 9);
+	static const FSlateFontInfo BoldFont = FCoreStyle::GetDefaultFontStyle("Bold", 10);
+
+	FSlateDrawElement::MakeBox(Out, Layer, G.ToPaintGeometry(FVector2f(LabelWidth, Size.Y), FSlateLayoutTransform(FVector2f::ZeroVector)), White, ESlateDrawEffect::None, FLinearColor(0.07f, 0.07f, 0.08f));
+	FSlateDrawElement::MakeBox(Out, Layer + 1, G.ToPaintGeometry(FVector2f(LabelWidth, RulerHeight), FSlateLayoutTransform(FVector2f::ZeroVector)), White, ESlateDrawEffect::None, FLinearColor(0.1f, 0.1f, 0.115f));
+	FSlateDrawElement::MakeBox(Out, Layer + 2, G.ToPaintGeometry(FVector2f(1.f, Size.Y), FSlateLayoutTransform(FVector2f(LabelWidth - 1.f, 0.f))), White, ESlateDrawEffect::None, FLinearColor(0.f, 0.f, 0.f, 0.8f));
+	FSlateDrawElement::MakeText(Out, Layer + 3, G.ToPaintGeometry(Size, FSlateLayoutTransform(FVector2f(10.f, GetTrackTop() + 24.f))), FString(TEXT("Clips")), BoldFont, ESlateDrawEffect::None, FLinearColor(1.f, 1.f, 1.f, 0.6f));
+	if (IsFootLaneVisible())
+	{
+		for (int32 Foot = 0; Foot < 2; ++Foot)
+		{
+			FSlateDrawElement::MakeText(Out, Layer + 3, G.ToPaintGeometry(Size, FSlateLayoutTransform(FVector2f(10.f, GetLaneTop(Foot) - 2.f))), Foot == 0 ? FString(TEXT("Left foot lock")) : FString(TEXT("Right foot lock")), Font, ESlateDrawEffect::None, FLinearColor(1.f, 1.f, 1.f, 0.55f));
+		}
+	}
+
+	for (int32 i = 0; i < TL.Tracks.Num(); ++i)
+	{
+		const FAnimStitchTrack& Track = TL.Tracks[i];
+		const float Top = GetTrackLaneTop(i);
+		const bool bIK = Track.Kind == EAnimStitchTrackKind::IKLimb;
+		const bool bOpen = i == ExpandedTrack && IsExpanderOpen();
+		const FLinearColor Base = bIK ? FLinearColor(0.95f, 0.5f, 0.15f) : (Track.bRotationOnly ? FLinearColor(0.9f, 0.6f, 0.2f) : FLinearColor(0.35f, 0.85f, 0.5f));
+
+		FSlateDrawElement::MakeBox(Out, Layer + 3, G.ToPaintGeometry(FVector2f(LabelWidth - 1.f, TrackLaneHeight), FSlateLayoutTransform(FVector2f(0.f, Top))), White, ESlateDrawEffect::None,
+			i == SelectedTrack ? FLinearColor(0.17f, 0.2f, 0.27f) : FLinearColor(0.11f, 0.11f, 0.125f));
+		FSlateDrawElement::MakeBox(Out, Layer + 4, G.ToPaintGeometry(FVector2f(3.f, TrackLaneHeight), FSlateLayoutTransform(FVector2f(LabelWidth - 4.f, Top))), White, ESlateDrawEffect::None, Base);
+		FSlateDrawElement::MakeText(Out, Layer + 5, G.ToPaintGeometry(Size, FSlateLayoutTransform(FVector2f(7.f, Top + 7.f))), FString(bOpen ? TEXT("v") : TEXT(">")), Font, ESlateDrawEffect::None, FLinearColor(1.f, 1.f, 1.f, 0.8f));
+		FString Label = Track.Bone.ToString();
+		if (bIK) { Label += TEXT("  (IK)"); }
+		else if (Track.bRotationOnly) { Label += TEXT("  (FK)"); }
+		FSlateDrawElement::MakeText(Out, Layer + 5, G.ToPaintGeometry(Size, FSlateLayoutTransform(FVector2f(24.f, Top + 7.f))), Label, BoldFont, ESlateDrawEffect::None, FLinearColor(1.f, 1.f, 1.f, 0.9f));
+
+		// Previous key, add key at the playhead, next key.
+		const TCHAR* Glyphs[3] = { TEXT("<"), TEXT("+"), TEXT(">") };
+		for (int32 b = 0; b < 3; ++b)
+		{
+			const FVector2f Pos(LabelWidth - 4.f - 3 * 24.f + b * 24.f, Top + 4.f);
+			FSlateDrawElement::MakeBox(Out, Layer + 5, G.ToPaintGeometry(FVector2f(22.f, TrackLaneHeight - 8.f), FSlateLayoutTransform(Pos)), White, ESlateDrawEffect::None, FLinearColor(0.2f, 0.2f, 0.25f));
+			FSlateDrawElement::MakeText(Out, Layer + 6, G.ToPaintGeometry(Size, FSlateLayoutTransform(Pos + FVector2f(8.f, 2.f))), FString(Glyphs[b]), Font, ESlateDrawEffect::None, FLinearColor(1.f, 1.f, 1.f, 0.85f));
+		}
+
+		if (bOpen)
+		{
+			FSlateDrawElement::MakeBox(Out, Layer + 3, G.ToPaintGeometry(FVector2f(LabelWidth - 1.f, ExpanderHeight - 2.f), FSlateLayoutTransform(FVector2f(0.f, Top + TrackLaneHeight + 2.f))), White, ESlateDrawEffect::None, FLinearColor(0.085f, 0.085f, 0.1f));
+		}
+	}
+}
 // ---------------------------------------------------------------------------------------------
 
 void SAnimStitchTimeline::AddBoneTrack(FName Bone, bool bRotationOnly, int32 GroupId)
@@ -120,6 +181,7 @@ void SAnimStitchTimeline::AddLimb(bool bLeft, bool bLeg, bool bIK)
 			Track.Kind = EAnimStitchTrackKind::Bone;
 			Track.Bone = Ref.GetBoneName(Joint);
 			Track.bRotationOnly = true;
+			Track.bKeepFeetPlanted = false; // an FK thigh/knee rotation is meant to move the leg
 			Track.GroupId = Group;
 			SelectedTrack = Asset->AddTrack(Track);
 		}
@@ -268,6 +330,7 @@ void SAnimStitchTimeline::OpenTrackMenu(const FPointerEvent& Event, int32 TrackI
 	{
 		const FScopedTransaction Tx(LOCTEXT("RemoveTrackTx", "Remove Track"));
 		Asset->RemoveTrack(TrackIndex);
+		ExpandedTrack = INDEX_NONE;
 		SelectedTrack = INDEX_NONE;
 		SelectedKey = INDEX_NONE;
 	})));

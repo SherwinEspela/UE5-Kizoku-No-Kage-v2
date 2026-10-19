@@ -8,6 +8,7 @@
 #include "Styling/AppStyle.h"
 #include "Styling/CoreStyle.h"
 #include "Fonts/FontMeasure.h"
+#include "AnimStitchManualEdits.h"
 
 #define LOCTEXT_NAMESPACE "AnimStitch"
 
@@ -74,21 +75,24 @@ int32 SAnimStitchTimeline::OnPaint(const FPaintArgs& Args, const FGeometry& G, c
 	DrawRect(Out, Layer + 1, G, FVector2f::ZeroVector, FVector2f(Size.X, RulerHeight), RulerBg);
 
 	// Ruler ticks
+	const double DisplayFps = GetDisplayFps();
 	static const double Steps[] = { 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0 };
-	double Step = Steps[UE_ARRAY_COUNT(Steps) - 1];
-	for (double S : Steps)
+	static const double FrameSteps[] = { 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600 };
+	double Step = bShowFrames ? FrameSteps[UE_ARRAY_COUNT(FrameSteps) - 1] / DisplayFps : Steps[UE_ARRAY_COUNT(Steps) - 1];
+	if (bShowFrames)
 	{
-		if (S * PxPerSec >= 70.0)
-		{
-			Step = S;
-			break;
-		}
+		for (double S : FrameSteps) { if (S / DisplayFps * PxPerSec >= 60.0) { Step = S / DisplayFps; break; } }
 	}
-	for (double T = FMath::CeilToDouble(XToTime(0.f) / Step) * Step; TimeToX(T) < Size.X; T += Step)
+	else
+	{
+		for (double S : Steps) { if (S * PxPerSec >= 70.0) { Step = S; break; } }
+	}
+	for (double T = FMath::CeilToDouble(XToTime(LabelWidth) / Step) * Step; TimeToX(T) < Size.X; T += Step)
 	{
 		const float X = TimeToX(T);
 		DrawLine(Out, Layer + 2, G, { FVector2f(X, RulerHeight - 8.f), FVector2f(X, RulerHeight) }, FLinearColor(1, 1, 1, 0.6f));
-		PaintLabel(Out, Layer + 2, G, FVector2f(X + 3.f, 4.f), Step >= 1.0 ? FString::Printf(TEXT("%.0fs"), T) : FString::Printf(TEXT("%.2fs"), T), FLinearColor(1, 1, 1, 0.65f));
+		const FString TickLabel = bShowFrames ? FString::Printf(TEXT("%04d"), FMath::RoundToInt(T * DisplayFps)) : (Step >= 1.0 ? FString::Printf(TEXT("%.0fs"), T) : FString::Printf(TEXT("%.2fs"), T));
+		PaintLabel(Out, Layer + 2, G, FVector2f(X + 3.f, 4.f), TickLabel, FLinearColor(1, 1, 1, 0.65f));
 		if (T > 1e6) { break; }
 	}
 
@@ -264,8 +268,18 @@ int32 SAnimStitchTimeline::OnPaint(const FPaintArgs& Args, const FGeometry& G, c
 	// Grab handle on the lower ruler (the flags above own the top strip).
 	DrawRect(Out, Layer + 15, G, FVector2f(PX - 5.f, RulerHeight - 12.f), FVector2f(10.f, 12.f), FLinearColor(1.f, 0.25f, 0.25f));
 
+	if (DragMode == EDrag::Marquee && bDragStarted)
+	{
+		const FVector2f Min(FMath::Min(MarqueeStart.X, MarqueeCurrent.X), FMath::Min(MarqueeStart.Y, MarqueeCurrent.Y));
+		const FVector2f Max(FMath::Max(MarqueeStart.X, MarqueeCurrent.X), FMath::Max(MarqueeStart.Y, MarqueeCurrent.Y));
+		DrawRect(Out, Layer + 15, G, Min, Max - Min, FLinearColor(0.2f, 0.5f, 1.f, 0.18f));
+		DrawLine(Out, Layer + 15, G, { Min, FVector2f(Max.X, Min.Y), Max, FVector2f(Min.X, Max.Y), Min }, FLinearColor(0.35f, 0.65f, 1.f, 0.9f), 1.f);
+	}
+
+	PaintLeftColumn(Out, Layer + 16, G);
+
 	Out.PopClip();
-	return Layer + 16;
+	return Layer + 24;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -275,6 +289,22 @@ int32 SAnimStitchTimeline::OnPaint(const FPaintArgs& Args, const FGeometry& G, c
 SAnimStitchTimeline::FHit SAnimStitchTimeline::HitTest(const FVector2f& P) const
 {
 	FHit Result;
+	if (P.X < LabelWidth)
+	{
+		// Track column: only the manual-correction rows react.
+		for (int32 i = 0; i < Asset->Timeline.Tracks.Num(); ++i)
+		{
+			const float Top = GetTrackLaneTop(i);
+			if (P.Y >= Top && P.Y <= Top + TrackLaneHeight)
+			{
+				Result.Type = EHit::TrackLane;
+				Result.Index = i;
+				GetLaneButton(P.X, P.Y - Top, i, Result.Type);
+				return Result;
+			}
+		}
+		return Result;
+	}
 	if (P.Y < RulerHeight)
 	{
 		double RangeStart, RangeEnd;
@@ -369,6 +399,116 @@ SAnimStitchTimeline::FHit SAnimStitchTimeline::HitTest(const FVector2f& P) const
 	return Result;
 }
 
+void SAnimStitchTimeline::UpdateMarquee(const FVector2f& Local)
+{
+	MarqueeCurrent = Local;
+	bDragStarted = bDragStarted || (Local - MarqueeStart).Size() >= 3.f;
+	if (!bDragStarted) { return; }
+	const float X0 = FMath::Min(MarqueeStart.X, Local.X), X1 = FMath::Max(MarqueeStart.X, Local.X);
+	const float Y0 = FMath::Min(MarqueeStart.Y, Local.Y), Y1 = FMath::Max(MarqueeStart.Y, Local.Y);
+	SelectedKeys = MarqueeInitial;
+	const FAnimStitchTimeline& TL = Asset->Timeline;
+	FKeyRef Last;
+	for (int32 i = 0; i < TL.Tracks.Num(); ++i)
+	{
+		const float CenterY = GetTrackLaneTop(i) + TrackLaneHeight * 0.5f;
+		if (CenterY < Y0 || CenterY > Y1) { continue; }
+		for (int32 k = 0; k < TL.Tracks[i].Keys.Num(); ++k)
+		{
+			const float X = TimeToX(TL.Tracks[i].Keys[k].Time);
+			if (X >= LabelWidth && X >= X0 && X <= X1) { SelectedKeys.AddUnique(FKeyRef{ i, k }); Last = FKeyRef{ i, k }; }
+		}
+	}
+	// The primary selection (what the value panel shows) follows a single hit.
+	if (SelectedKeys.Num() == 1) { SelectedTrack = SelectedKeys[0].Track; SelectedKey = SelectedKeys[0].Key; }
+	else { SelectedKey = INDEX_NONE; if (Last.Track != INDEX_NONE) { SelectedTrack = Last.Track; } }
+}
+
+namespace
+{
+	struct FClipboardEntry
+	{
+		FName Bone;
+		EAnimStitchTrackKind Kind = EAnimStitchTrackKind::Bone;
+		TArray<FAnimStitchTrackKey> Keys; // Time is relative to the earliest copied key
+	};
+	TArray<FClipboardEntry> KeyClipboard;
+}
+
+void SAnimStitchTimeline::CopySelectedKeys()
+{
+	const FAnimStitchTimeline& TL = Asset->Timeline;
+	TArray<FKeyRef> Refs = SelectedKeys;
+	if (Refs.Num() == 0 && TL.Tracks.IsValidIndex(SelectedTrack) && TL.Tracks[SelectedTrack].Keys.IsValidIndex(SelectedKey)) { Refs.Add(FKeyRef{ SelectedTrack, SelectedKey }); }
+	double Earliest = TNumericLimits<double>::Max();
+	for (const FKeyRef& Ref : Refs)
+	{
+		if (TL.Tracks.IsValidIndex(Ref.Track) && TL.Tracks[Ref.Track].Keys.IsValidIndex(Ref.Key)) { Earliest = FMath::Min(Earliest, TL.Tracks[Ref.Track].Keys[Ref.Key].Time); }
+	}
+	if (Earliest == TNumericLimits<double>::Max()) { return; }
+	KeyClipboard.Reset();
+	for (const FKeyRef& Ref : Refs)
+	{
+		if (!TL.Tracks.IsValidIndex(Ref.Track) || !TL.Tracks[Ref.Track].Keys.IsValidIndex(Ref.Key)) { continue; }
+		const FAnimStitchTrack& Track = TL.Tracks[Ref.Track];
+		FClipboardEntry* Entry = KeyClipboard.FindByPredicate([&Track](const FClipboardEntry& E) { return E.Bone == Track.Bone && E.Kind == Track.Kind; });
+		if (!Entry) { Entry = &KeyClipboard.AddDefaulted_GetRef(); Entry->Bone = Track.Bone; Entry->Kind = Track.Kind; }
+		FAnimStitchTrackKey Key = Track.Keys[Ref.Key];
+		Key.Time -= Earliest;
+		Entry->Keys.Add(Key);
+	}
+}
+
+void SAnimStitchTimeline::PasteKeys()
+{
+	if (KeyClipboard.Num() == 0) { return; }
+	FAnimStitchTimeline& TL = Asset->Timeline;
+	const FScopedTransaction Tx(LOCTEXT("PasteKeysTx", "Paste Keys"));
+	for (const FClipboardEntry& Entry : KeyClipboard)
+	{
+		// The same bone track: the selected track if it matches, else the first track for that bone.
+		int32 TrackIndex = INDEX_NONE;
+		if (TL.Tracks.IsValidIndex(SelectedTrack) && TL.Tracks[SelectedTrack].Bone == Entry.Bone && TL.Tracks[SelectedTrack].Kind == Entry.Kind) { TrackIndex = SelectedTrack; }
+		for (int32 i = 0; i < TL.Tracks.Num() && TrackIndex == INDEX_NONE; ++i)
+		{
+			if (TL.Tracks[i].Bone == Entry.Bone && TL.Tracks[i].Kind == Entry.Kind) { TrackIndex = i; }
+		}
+		if (TrackIndex == INDEX_NONE) { continue; }
+		for (const FAnimStitchTrackKey& Source : Entry.Keys)
+		{
+			FAnimStitchTrackKey Key = Source;
+			Key.Time = FMath::Max(0.0, Playhead + Source.Time);
+			Asset->SetTrackKey(TrackIndex, Key);
+		}
+	}
+	// Select what was pasted.
+	SelectedKeys.Reset();
+	for (const FClipboardEntry& Entry : KeyClipboard)
+	{
+		for (int32 i = 0; i < TL.Tracks.Num(); ++i)
+		{
+			if (TL.Tracks[i].Bone != Entry.Bone || TL.Tracks[i].Kind != Entry.Kind) { continue; }
+			for (const FAnimStitchTrackKey& Source : Entry.Keys)
+			{
+				const int32 Index = FAnimStitchManualEdits::FindKey(TL.Tracks[i], FMath::Max(0.0, Playhead + Source.Time));
+				if (Index != INDEX_NONE) { SelectedKeys.AddUnique(FKeyRef{ i, Index }); }
+			}
+			break;
+		}
+	}
+	SelectedKey = INDEX_NONE;
+}
+
+void SAnimStitchTimeline::DeleteSelectedKeys()
+{
+	TArray<FKeyRef> Refs = SelectedKeys;
+	Refs.Sort([](const FKeyRef& A, const FKeyRef& B) { return A.Track != B.Track ? A.Track < B.Track : A.Key > B.Key; }); // highest key first so indices stay valid
+	const FScopedTransaction Tx(LOCTEXT("DeleteKeysTx", "Delete Keys"));
+	for (const FKeyRef& Ref : Refs) { Asset->RemoveTrackKey(Ref.Track, Ref.Key); }
+	SelectedKeys.Reset();
+	SelectedKey = INDEX_NONE;
+}
+
 void SAnimStitchTimeline::SelectClip(int32 Index, bool bOverlap)
 {
 	SelectedClip = Index;
@@ -376,8 +516,99 @@ void SAnimStitchTimeline::SelectClip(int32 Index, bool bOverlap)
 	OnSelectionChangedDelegate.ExecuteIfBound();
 }
 
+void SAnimStitchTimeline::JumpToKey(int32 Track, int32 Direction)
+{
+	if (!Asset->Timeline.Tracks.IsValidIndex(Track)) { return; }
+	const TArray<FAnimStitchTrackKey>& Keys = Asset->Timeline.Tracks[Track].Keys;
+	constexpr double Eps = 1e-4;
+	int32 Target = INDEX_NONE;
+	if (Direction > 0)
+	{
+		for (int32 k = 0; k < Keys.Num(); ++k) { if (Keys[k].Time > Playhead + Eps) { Target = k; break; } }
+	}
+	else
+	{
+		for (int32 k = Keys.Num() - 1; k >= 0; --k) { if (Keys[k].Time < Playhead - Eps) { Target = k; break; } }
+	}
+	SelectedTrack = Track;
+	if (Target == INDEX_NONE) { return; }
+	SelectedKey = Target;
+	SelectedKeys.Reset();
+	SelectedKeys.Add(FKeyRef{ Track, Target });
+	SelectClip(INDEX_NONE, false);
+	Playhead = FMath::Clamp(Keys[Target].Time, 0.0, Asset->Timeline.GetTotalLength());
+	OnPlayheadChangedDelegate.ExecuteIfBound();
+}
+
+bool SAnimStitchTimeline::GetLaneButton(float X, float YInLane, int32 Track, EHit& OutType) const
+{
+	// In the track column: an expand arrow at the left; previous key, add key, next key at the right.
+	if (X < 24.f) { OutType = EHit::TrackExpand; return true; }
+	const float Left = LabelWidth - 4.f - 3 * 24.f;
+	if (X < Left || X > LabelWidth - 4.f || YInLane < 4.f || YInLane > TrackLaneHeight - 4.f) { return false; }
+	const int32 Which = FMath::Clamp(int32((X - Left) / 24.f), 0, 2);
+	OutType = Which == 0 ? EHit::TrackPrev : (Which == 1 ? EHit::TrackAddKey : EHit::TrackNext);
+	return true;
+}
+
+void SAnimStitchTimeline::GetVisibleTimeRange(double& OutStart, double& OutEnd) const
+{
+	const double Width = FMath::Max(GetCachedGeometry().GetLocalSize().X - LabelWidth, 50.f);
+	OutStart = ViewStart;
+	OutEnd = ViewStart + Width / PxPerSec;
+}
+
+void SAnimStitchTimeline::SetVisibleTimeRange(double Start, double End)
+{
+	const double Width = FMath::Max(GetCachedGeometry().GetLocalSize().X - LabelWidth, 50.f);
+	const double Span = FMath::Max(End - Start, 0.05);
+	PxPerSec = FMath::Clamp(Width / Span, 10.0, 4000.0);
+	ViewStart = Start;
+}
+
+double SAnimStitchTimeline::GetDisplayFps() const
+{
+	for (const FAnimStitchClip& Clip : Asset->Timeline.Clips)
+	{
+		if (Clip.Sequence)
+		{
+			const double Fps = Clip.Sequence->GetSamplingFrameRate().AsDecimal();
+			if (Fps > 1.0) { return Fps; }
+		}
+	}
+	return 30.0;
+}
+
+bool SAnimStitchTimeline::JumpToAdjacentKey(int32 Direction)
+{
+	constexpr double Eps = 1e-4;
+	bool bFound = false;
+	double Best = 0.0;
+	auto Consider = [&](const FAnimStitchTrack& Track)
+	{
+		for (const FAnimStitchTrackKey& Key : Track.Keys)
+		{
+			const bool bOk = Direction > 0 ? Key.Time > Playhead + Eps : Key.Time < Playhead - Eps;
+			if (bOk && (!bFound || (Direction > 0 ? Key.Time < Best : Key.Time > Best))) { Best = Key.Time; bFound = true; }
+		}
+	};
+	if (Asset->Timeline.Tracks.IsValidIndex(SelectedTrack))
+	{
+		Consider(Asset->Timeline.Tracks[SelectedTrack]);
+	}
+	else
+	{
+		for (const FAnimStitchTrack& Track : Asset->Timeline.Tracks) { Consider(Track); }
+	}
+	if (!bFound) { return false; }
+	Playhead = FMath::Clamp(Best, 0.0, Asset->Timeline.GetTotalLength());
+	OnPlayheadChangedDelegate.ExecuteIfBound();
+	return true;
+}
 void SAnimStitchTimeline::ClampSelection()
 {
+	SelectedKeys.Reset(); // key indices may have shifted
+	if (!Asset->Timeline.Tracks.IsValidIndex(ExpandedTrack)) { ExpandedTrack = INDEX_NONE; }
 	if (!Asset->Timeline.Clips.IsValidIndex(SelectedClip))
 	{
 		SelectClip(INDEX_NONE, false);
@@ -416,15 +647,63 @@ FReply SAnimStitchTimeline::OnMouseButtonDown(const FGeometry& G, const FPointer
 	case EHit::MarkerEnd:
 		DragMode = Hit.Type == EHit::MarkerStart ? EDrag::MarkerStart : EDrag::MarkerEnd;
 		break;
+	case EHit::TrackPrev:
+	case EHit::TrackNext:
+		JumpToKey(Hit.Index, Hit.Type == EHit::TrackNext ? 1 : -1);
+		return FReply::Handled();
+	case EHit::TrackExpand:
+		SelectedTrack = Hit.Index;
+		ExpandedTrack = (ExpandedTrack == Hit.Index) ? INDEX_NONE : Hit.Index;
+		return FReply::Handled();
+	case EHit::TrackAddKey:
+	{
+		SelectedTrack = Hit.Index;
+		const FAnimStitchTrack& Track = Asset->Timeline.Tracks[Hit.Index];
+		const FScopedTransaction Tx(LOCTEXT("AddKeyTx", "Add Key"));
+		FAnimStitchTrackKey Key = Track.Keys.Num() > 0 ? FAnimStitchManualEdits::Sample(Track, Playhead) : FAnimStitchTrackKey();
+		Key.Time = Playhead;
+		Asset->SetTrackKey(Hit.Index, Key);
+		SelectedKey = FAnimStitchManualEdits::FindKey(Asset->Timeline.Tracks[Hit.Index], Playhead);
+		return FReply::Handled();
+	}
 	case EHit::TrackLane:
 	case EHit::TrackKey:
-		SelectedTrack = Hit.Index;
-		SelectedKey = Hit.Type == EHit::TrackKey ? Hit.Sub : INDEX_NONE;
 		SelectClip(INDEX_NONE, false);
 		if (Hit.Type == EHit::TrackKey)
 		{
-			DragMode = EDrag::KeyMove;
-			InitialKeyTime = Asset->Timeline.Tracks[Hit.Index].Keys[Hit.Sub].Time;
+			const bool bAdd = Event.IsControlDown() || Event.IsShiftDown();
+			const bool bAlready = IsKeySelected(Hit.Index, Hit.Sub);
+			if (bAdd)
+			{
+				if (bAlready) { SelectedKeys.Remove(FKeyRef{ Hit.Index, Hit.Sub }); if (SelectedTrack == Hit.Index && SelectedKey == Hit.Sub) { SelectedKey = INDEX_NONE; } }
+				else { SelectedKeys.AddUnique(FKeyRef{ Hit.Index, Hit.Sub }); }
+			}
+			else if (!bAlready || SelectedKeys.Num() <= 1)
+			{
+				SelectedKeys.Reset();
+				SelectedKeys.Add(FKeyRef{ Hit.Index, Hit.Sub });
+			}
+			SelectedTrack = Hit.Index;
+			if (!bAdd || !bAlready) { SelectedKey = Hit.Sub; }
+			// Dragging moves a single key; with several keys selected the drag is ignored (copy / paste and delete work on all of them).
+			if (SelectedKeys.Num() <= 1)
+			{
+				DragMode = EDrag::KeyMove;
+				InitialKeyTime = Asset->Timeline.Tracks[Hit.Index].Keys[Hit.Sub].Time;
+			}
+		}
+		else
+		{
+			// Empty lane space: select the track and start a marquee.
+			SelectedTrack = Hit.Index;
+			SelectedKey = INDEX_NONE;
+			if (Local.X >= LabelWidth)
+			{
+				MarqueeInitial = (Event.IsControlDown() || Event.IsShiftDown()) ? SelectedKeys : TArray<FKeyRef>();
+				SelectedKeys = MarqueeInitial;
+				DragMode = EDrag::Marquee;
+				MarqueeStart = MarqueeCurrent = Local;
+			}
 		}
 		break;
 	case EHit::FootLane:
@@ -452,6 +731,17 @@ FReply SAnimStitchTimeline::OnMouseButtonDown(const FGeometry& G, const FPointer
 		break;
 	}
 	default:
+		if (Local.X < LabelWidth) { return FReply::Handled(); } // the track column does not scrub
+		if (Local.Y > GetTracksTop() && TL.Tracks.Num() > 0)
+		{
+			// Below the clip lane, among the correction lanes: drag a rectangle to select keys.
+			MarqueeInitial = (Event.IsControlDown() || Event.IsShiftDown()) ? SelectedKeys : TArray<FKeyRef>();
+			SelectedKeys = MarqueeInitial;
+			SelectedKey = INDEX_NONE;
+			DragMode = EDrag::Marquee;
+			MarqueeStart = MarqueeCurrent = Local;
+			break;
+		}
 		// Empty space deselects and also scrubs, so the playhead can be dragged from anywhere.
 		SelectClip(INDEX_NONE, false);
 		DragMode = EDrag::Scrub;
@@ -521,6 +811,11 @@ FReply SAnimStitchTimeline::OnMouseMove(const FGeometry& G, const FPointerEvent&
 	{
 		return FReply::Unhandled();
 	}
+	if (DragMode == EDrag::Marquee)
+	{
+		UpdateMarquee(G.AbsoluteToLocal(Event.GetScreenSpacePosition()));
+		return FReply::Handled();
+	}
 	OnDragMove(G.AbsoluteToLocal(Event.GetScreenSpacePosition()).X);
 	return FReply::Handled();
 }
@@ -549,6 +844,8 @@ void SAnimStitchTimeline::OnDragMove(float LocalX)
 			DragTransaction = MakeUnique<FScopedTransaction>(LOCTEXT("MoveKeyTx", "Move Key"));
 		}
 		SelectedKey = Asset->MoveTrackKey(SelectedTrack, SelectedKey, InitialKeyTime + (LocalX - DragStartX) / PxPerSec);
+		SelectedKeys.Reset();
+		SelectedKeys.Add(FKeyRef{ SelectedTrack, SelectedKey });
 		return;
 	}
 	if (DragMode == EDrag::FootLane)
@@ -635,7 +932,7 @@ void SAnimStitchTimeline::OnDragMove(float LocalX)
 
 FReply SAnimStitchTimeline::OnMouseWheel(const FGeometry& G, const FPointerEvent& Event)
 {
-	const float Local = G.AbsoluteToLocal(Event.GetScreenSpacePosition()).X;
+	const float Local = G.AbsoluteToLocal(Event.GetScreenSpacePosition()).X - LabelWidth;
 	if (Event.IsShiftDown())
 	{
 		ViewStart -= Event.GetWheelDelta() * 60.0 / PxPerSec;
@@ -683,6 +980,9 @@ FCursorReply SAnimStitchTimeline::OnCursorQuery(const FGeometry& G, const FPoint
 
 FReply SAnimStitchTimeline::OnKeyDown(const FGeometry& G, const FKeyEvent& Event)
 {
+	if (Event.IsControlDown() && Event.GetKey() == EKeys::C) { CopySelectedKeys(); return FReply::Handled(); }
+	if (Event.IsControlDown() && Event.GetKey() == EKeys::V) { PasteKeys(); return FReply::Handled(); }
+	if (SelectedKeys.Num() > 1 && (Event.GetKey() == EKeys::Delete || Event.GetKey() == EKeys::BackSpace)) { DeleteSelectedKeys(); return FReply::Handled(); }
 	if ((Event.GetKey() == EKeys::Delete || Event.GetKey() == EKeys::BackSpace) && Asset->Timeline.Tracks.IsValidIndex(SelectedTrack) && Asset->Timeline.Tracks[SelectedTrack].Keys.IsValidIndex(SelectedKey))
 	{
 		const FScopedTransaction Tx(LOCTEXT("DeleteKeyTx", "Delete Key"));
@@ -882,7 +1182,7 @@ void SAnimStitchTimeline::SetSelectedBlendCurve(EAnimStitchBlendCurve Curve)
 void SAnimStitchTimeline::ZoomToFit()
 {
 	const double Length = FMath::Max(Asset->Timeline.GetTotalLength(), 0.5);
-	const double Width = FMath::Max(GetTickSpaceGeometry().GetLocalSize().X, 100.f);
+	const double Width = FMath::Max(GetTickSpaceGeometry().GetLocalSize().X - LabelWidth, 100.f);
 	PxPerSec = (Width - 40.0) / Length;
 	ViewStart = -20.0 / PxPerSec;
 }

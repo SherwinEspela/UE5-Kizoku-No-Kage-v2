@@ -61,6 +61,10 @@ private:
 	void OpenBatch();
 	void OpenBake();
 	FText GetAssetLabel() const;
+public:
+	/** Title for the dock tab: the opened timeline asset name. */
+	FText GetTabTitle() const;
+private:
 	FGetCurrentSelectionDelegate BrowserSelectionDelegate;
 
 	/** Fills the right-hand browser with the animation sequences of the preview mesh's skeleton. */

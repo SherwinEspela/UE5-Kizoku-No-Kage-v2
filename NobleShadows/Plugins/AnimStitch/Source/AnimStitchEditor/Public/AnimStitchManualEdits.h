@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "AnimStitchTimeline.h"
@@ -22,8 +22,15 @@ public:
 	/** Inserts (or replaces the key at the same moment) keeping the keys sorted. Returns its index. */
 	static int32 SetKey(FAnimStitchTrack& Track, const FAnimStitchTrackKey& Key);
 
-	/** Applies all tracks to a skeleton-local pose (indexed by skeleton reference bone) at a timeline time. */
-	static void Apply(const FReferenceSkeleton& RefSkeleton, const TArray<FAnimStitchTrack>& Tracks, double Time, TArray<FTransform>& LocalPose);
+	/**
+	 * Applies all tracks to a skeleton-local pose (indexed by skeleton reference bone) at a timeline time.
+	 * PlantFootBones (left, right; optional): when a bone track moves a leg (pelvis...), these feet stay where they were via leg IK,
+	 * unless the foot has its own active IK track.
+	 */
+	static void Apply(const FReferenceSkeleton& RefSkeleton, const TArray<FAnimStitchTrack>& Tracks, double Time, TArray<FTransform>& LocalPose, const FName* PlantFootBones = nullptr);
+
+	/** Where an IK pole sits by default for a pose: out from the knee/elbow, away from the leg axis (falls back to the reference pose, then forward). */
+	static FVector DefaultPoleForPose(const FReferenceSkeleton& RefSkeleton, const FAnimStitchFootChain& Chain, const TArray<FTransform>& ComponentPose);
 
 	/** Limb chain (thigh/calf/foot or upper arm/forearm/hand) ending at the effector bone. */
 	static FAnimStitchFootChain ChainFor(const FReferenceSkeleton& RefSkeleton, FName EffectorBone);

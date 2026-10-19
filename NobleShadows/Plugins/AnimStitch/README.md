@@ -115,3 +115,17 @@ Right-click **below the clip lanes** > *Add Bone Track* to add a Sequencer-style
 - Adding a bone track adds keys at the timeline start and end (IK tracks start with weight 0).
 - Preview Attachments (Show menu): attach static/skeletal meshes to a socket or any bone with an offset. Saved in the timeline asset, shown in the preview only, never baked.
 - The transform manipulator is a modern-style thin, long gizmo drawn by the plugin (the engine gizmo cannot be hosted without an edit mode).
+
+## Controls, gizmo and numeric key entry
+- Control shapes are solid translucent cubes (the whole cube is clickable). Show > Controls has Control Size and Gizmo Size.
+- Move / Rotate / Scale each remember their own World / Local choice.
+- Dragging updates the pose live. A missed mouse release can no longer leave the gizmo stuck.
+- Every bone-track lane has `<` / `>` buttons (previous / next key, moves the playhead) and a `v` button that opens a value panel under the lane: translate, rotate, scale (IK: target, rotate, pole, weight). With no key selected, edits key the playhead.
+- Bone tracks have **Keep feet planted**: when the bone (pelvis...) moves the legs, both feet stay where the animation had them, solved with leg IK. A foot with its own active IK track is left to it. Out-of-reach feet lift (legs fully extended). FK limb tracks have it off.
+- IK pole controls start at the knee/elbow pushed out along the bend direction; the fine 10 cm grid shows within 5 m of the origin.
+
+## Timeline layout, transport and key clipboard
+- The timeline has a Sequencer-style track column on the left: each bone track has an expand arrow (numeric translate / rotate / scale, or target / pole / weight for IK, plus Keep feet planted), previous key, add key and next key buttons. Keys are red circles, blue when selected.
+- The bar under the timeline has go to start, previous key, play / pause, next key, go to end, stop, loop, a time or frame entry, a frames / seconds toggle and a pan / zoom range bar (drag the body to pan, the ends to zoom).
+- Drag a rectangle over the correction lanes to select keys (Ctrl / Shift adds). Ctrl+C copies the selected keys, Ctrl+V pastes them onto the same bone tracks at the playhead keeping their relative timing, Delete removes them. Dragging moves one key at a time.
+- Show > Controls: control cubes are translucent; the gizmo defaults to size 2 with thick lines.

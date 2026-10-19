@@ -355,6 +355,15 @@ void UAnimStitchTimelineAsset::SetTrackKeyWeight(int32 TrackIndex, int32 KeyInde
 	}
 }
 
+void UAnimStitchTimelineAsset::SetTrackKeepFeet(int32 TrackIndex, bool bKeep)
+{
+	if (Timeline.Tracks.IsValidIndex(TrackIndex))
+	{
+		TouchManual();
+		Timeline.Tracks[TrackIndex].bKeepFeetPlanted = bKeep;
+	}
+}
+
 void UAnimStitchTimelineAsset::SetPinOffset(int32 ClipIndex, int32 EventIndex, const FVector& Offset)
 {
 	if (Timeline.Clips.IsValidIndex(ClipIndex) && Timeline.Clips[ClipIndex].FootEvents.IsValidIndex(EventIndex))

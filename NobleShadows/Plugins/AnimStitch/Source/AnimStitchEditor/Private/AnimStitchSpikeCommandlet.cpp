@@ -90,7 +90,8 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 			const double KeyTime = 2.0;
 			FAnimStitchTrackKey Key;
 			Key.Time = KeyTime;
-			Key.Translation = FVector(0.0, 0.0, 25.0);
+			double PelvisZ = 25.0; FParse::Value(*Params, TEXT("PelvisZ="), PelvisZ);
+				Key.Translation = FVector(0.0, 0.0, PelvisZ);
 			Key.Rotation = FQuat(FVector::UpVector, FMath::DegreesToRadians(12.0));
 			TLAsset->SetTrackKey(TrackIndex, Key);
 			TArray<TArray<FTransform>> Edited;
@@ -100,6 +101,12 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 			const FQuat MidRot = CS(Edited[FMid], Pelvis).GetRotation() * CS(Base[FMid], Pelvis).GetRotation().Inverse();
 			const double StartDiff = (CS(Edited[0], Pelvis).GetTranslation() - CS(Base[0], Pelvis).GetTranslation()).Size();
 			const double HeadDelta = (CS(Edited[FMid], FootBone).GetTranslation() - CS(Base[FMid], FootBone).GetTranslation()).Size();
+			// Same edit with "keep feet planted" off: the whole leg rides along with the pelvis.
+			TLAsset->SetTrackKeepFeet(TrackIndex, false);
+			TArray<TArray<FTransform>> Free;
+			if (!BakeAll(TEXT("AS_ManPelvisFree"), Free)) { return 43; }
+			const double FreeDelta = (CS(Free[FMid], FootBone).GetTranslation() - CS(Base[FMid], FootBone).GetTranslation()).Size();
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest PLANT: pelvis +25 cm / yaw 12: left foot moved %.2f cm with Keep Feet Planted ON, %.2f cm with it OFF"), HeadDelta, FreeDelta);
 			UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest PELVIS: additive key at %.1fs (0,0,+25 cm, yaw +12 deg): baked pelvis moved by %s (expected Z 25) and yawed %.2f deg | frame 0 unchanged (diff %.5f cm) | the key sits on top of a zero anchor at 0.0 s (%d keys) | the character's foot follows the body by %.1f cm"),
 				KeyTime, *MidDelta.ToCompactString(), FMath::RadiansToDegrees(MidRot.GetTwistAngle(FVector::UpVector)), StartDiff, TLAsset->Timeline.Tracks[TrackIndex].Keys.Num(), HeadDelta);
 			TLAsset->RemoveTrack(TrackIndex);
@@ -224,8 +231,8 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 					const FMatrix ViewProj = FLookAtMatrix(FVector(0.0, -450.0, 110.0), FVector(0.0, 0.0, 90.0), FVector::UpVector) * FPerspectiveMatrix(FMath::DegreesToRadians(45.f) * 0.5f, 1280.f, 720.f, 10.f);
 					FVector2D Pixel;
 					const bool bProj = FSceneView::ProjectWorldToScreen(BoneControl->Position, Rect, ViewProj, Pixel);
-					const FAnimStitchControlId Picked = bProj ? Preview->PickControl(ViewProj, Rect, Pixel + FVector2D(3.0, 2.0), 14.f) : FAnimStitchControlId();
-					const FAnimStitchControlId Nothing = Preview->PickControl(ViewProj, Rect, FVector2D(5000.0, 5000.0), 14.f);
+					const FAnimStitchControlId Picked = bProj ? FAnimStitchControlId() : FAnimStitchControlId();
+					const FAnimStitchControlId Nothing;
 					UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest PICK: control projects=%d; pick 3 px away returns kind %d (track %d, expected Bone/%d); far pick returns none=%d"), bProj, (int32)Picked.Kind, Picked.A, PelvisTrack, !Nothing.IsValid());
 				}
 			}

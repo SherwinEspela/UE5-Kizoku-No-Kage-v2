@@ -32,6 +32,8 @@ struct FAnimStitchControl
 	bool bRotate = true;
 	bool bScale = true;
 	FLinearColor Color = FLinearColor::White;
+	/** Cube material style: 0 bone, 1 rotation-only bone, 2 IK effector, 3 IK pole, 4 lock pin. */
+	int32 Style = 0;
 	FString Label;
 };
 
@@ -127,13 +129,20 @@ public:
 	void ClearLockInfo();
 
 	void BuildControls(TArray<FAnimStitchControl>& OutControls) const;
-	FAnimStitchControlId PickControl(const FMatrix& ViewProjection, const FIntRect& ViewRect, const FVector2D& Pixel, float MaxDistancePixels) const;
+	void BuildControlsFromPose(TArray<FAnimStitchControl>& OutControls) const;
+	/** Picks the control cube under the cursor (the cube's whole screen area counts, not just its centre). */
+	FAnimStitchControlId PickControl(const FSceneView& View, const FVector2D& Pixel) const;
 	void SelectControl(const FAnimStitchControlId& Id);
+	/** The IK limb of a track as it is on screen right now (effector + pole). False if the track is not a valid IK limb. */
+	bool GetIKLiveKey(int32 TrackIndex, FAnimStitchTrackKey& OutKey) const;
 	FAnimStitchControlId GetSelectedControl() const { return SelectedControl; }
 	void SetGizmoMode(EAnimStitchGizmoMode Mode) { GizmoMode = Mode; RequestRedraw(); }
-	/** World / local axes for the manipulator. */
-	void SetCoordSpace(EAnimStitchCoordSpace Space) { CoordSpace = Space; RequestRedraw(); }
-	EAnimStitchCoordSpace GetCoordSpace() const { return CoordSpace; }
+	/** World / local axes for the manipulator; each tool (move, rotate, scale) remembers its own. Set / Get act on the active tool. */
+	void SetCoordSpace(EAnimStitchCoordSpace Space) { CoordSpaces[(int32)GizmoMode] = Space; RequestRedraw(); }
+	EAnimStitchCoordSpace GetCoordSpace() const { return CoordSpaces[(int32)GizmoMode]; }
+	/** Size of the transform manipulator (1 = default). */
+	void SetGizmoDrawSize(float Size) { GizmoDrawSize = FMath::Clamp(Size, 0.3f, 4.f); RequestRedraw(); }
+	float GetGizmoDrawSize() const { return GizmoDrawSize; }
 	/** Size of the control shapes (the gizmo keeps its own screen size). */
 	void SetControlDrawSize(float Size) { ControlDrawSize = FMath::Clamp(Size, 0.2f, 8.f); RequestRedraw(); }
 	float GetControlDrawSize() const { return ControlDrawSize; }
@@ -190,7 +199,12 @@ private:
 	bool bShowGhosts = false;
 	bool bShowRootPath = false;
 	bool bShowGrid = true;
-	EAnimStitchCoordSpace CoordSpace = EAnimStitchCoordSpace::World;
+	EAnimStitchCoordSpace CoordSpaces[3] = { EAnimStitchCoordSpace::World, EAnimStitchCoordSpace::World, EAnimStitchCoordSpace::World };
+	float GizmoDrawSize = 2.f;
+	TObjectPtr<UMaterialInstanceDynamic> ControlMaterials[6];
+	/** Left / right foot bones that bone corrections keep planted (resolved lazily from the foot-lock settings). */
+	mutable FName PlantFeet[2];
+	mutable bool bPlantFeetResolved = false;
 	float ControlDrawSize = 1.f;
 	bool bShowControls = true;
 	TArray<FAnimStitchPreviewAttachment> Attachments;
@@ -230,6 +244,7 @@ private:
 		FVector StartVector = FVector::ZeroVector;
 		FVector2D StartPixel = FVector2D::ZeroVector;
 		FVector LastTranslation = FVector::ZeroVector;
+		FQuat LastRotation = FQuat::Identity;
 		FVector Axes[3] = { FVector::ForwardVector, FVector::RightVector, FVector::UpVector };
 	} Drag;
 	TSharedPtr<class FScopedTransaction> DragTransaction;
@@ -249,6 +264,7 @@ public:
 	virtual void DrawCanvas(FViewport& InViewport, FSceneView& View, FCanvas& Canvas) override;
 	virtual bool InputKey(const FInputKeyEventArgs& EventArgs) override;
 	virtual void MouseMove(FViewport* InViewport, int32 X, int32 Y) override;
+	virtual bool InputAxis(const FInputKeyEventArgs& Args) override;
 	virtual void CapturedMouseMove(FViewport* InViewport, int32 InMouseX, int32 InMouseY) override;
 
 private:

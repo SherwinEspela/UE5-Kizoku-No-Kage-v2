@@ -181,7 +181,27 @@ TArray<FName> FAnimStitchManualEdits::GetCoreBoneSuggestions(const FReferenceSke
 	return Result;
 }
 
-void FAnimStitchManualEdits::Apply(const FReferenceSkeleton& Ref, const TArray<FAnimStitchTrack>& Tracks, double Time, TArray<FTransform>& Local)
+FVector FAnimStitchManualEdits::DefaultPoleForPose(const FReferenceSkeleton& Ref, const FAnimStitchFootChain& Chain, const TArray<FTransform>& ComponentPose)
+{
+	if (!Chain.IsValid() || !ComponentPose.IsValidIndex(Chain.Foot)) { return FVector::ZeroVector; }
+	auto BendOffset = [&](const FVector& H, const FVector& K, const FVector& A)
+	{
+		const FVector Axis = (A - H).GetSafeNormal();
+		return (K - H) - Axis * FVector::DotProduct(K - H, Axis); // knee/elbow position relative to the hip-ankle line
+	};
+	const FVector K = ComponentPose[Chain.Calf].GetTranslation();
+	FVector Out = BendOffset(ComponentPose[Chain.Thigh].GetTranslation(), K, ComponentPose[Chain.Foot].GetTranslation());
+	if (Out.SizeSquared() < 4.0) // straight limb: use the way the reference pose bends
+	{
+		const TArray<FTransform>& RefLocal = Ref.GetRefBonePose();
+		Out = BendOffset(FAnimStitchFootLock::GetComponentSpace(Ref, RefLocal, Chain.Thigh).GetTranslation(), FAnimStitchFootLock::GetComponentSpace(Ref, RefLocal, Chain.Calf).GetTranslation(),
+			FAnimStitchFootLock::GetComponentSpace(Ref, RefLocal, Chain.Foot).GetTranslation());
+	}
+	if (Out.SizeSquared() < 1e-4) { Out = FVector::ForwardVector; }
+	return K + Out.GetSafeNormal() * 40.0;
+}
+
+void FAnimStitchManualEdits::Apply(const FReferenceSkeleton& Ref, const TArray<FAnimStitchTrack>& Tracks, double Time, TArray<FTransform>& Local, const FName* PlantFootBones)
 {
 	if (Tracks.Num() == 0) { return; }
 
@@ -196,6 +216,31 @@ void FAnimStitchManualEdits::Apply(const FReferenceSkeleton& Ref, const TArray<F
 		}
 	}
 	BoneTracks.StableSort([](const TPair<int32, const FAnimStitchTrack*>& A, const TPair<int32, const FAnimStitchTrack*>& B) { return A.Key < B.Key; });
+
+	// Feet to keep planted: legs whose hip chain is moved by a bone track (pelvis...) and that no active IK track owns.
+	struct FPlant { FAnimStitchFootChain Chain; FTransform Foot; };
+	TArray<FPlant> Plants;
+	if (PlantFootBones)
+	{
+		for (int32 f = 0; f < 2; ++f)
+		{
+			const FAnimStitchFootChain Chain = ChainFor(Ref, PlantFootBones[f]);
+			if (!Chain.IsValid()) { continue; }
+			bool bIKOwned = false;
+			for (const FAnimStitchTrack& T : Tracks)
+			{
+				if (T.Kind == EAnimStitchTrackKind::IKLimb && T.Bone == PlantFootBones[f] && T.Keys.Num() > 0 && Sample(T, Time).Weight > 1e-3f) { bIKOwned = true; }
+			}
+			bool bMoved = false;
+			for (const TPair<int32, const FAnimStitchTrack*>& Entry : BoneTracks)
+			{
+				if (!Entry.Value->bKeepFeetPlanted || IsIdentityKey(Sample(*Entry.Value, Time))) { continue; }
+				const int32 TrackBone = Ref.FindBoneIndex(Entry.Value->Bone);
+				for (int32 B = Chain.Thigh; B != INDEX_NONE; B = Ref.GetParentIndex(B)) { bMoved |= (B == TrackBone); }
+			}
+			if (!bIKOwned && bMoved) { Plants.Add({ Chain, FAnimStitchFootLock::GetComponentSpace(Ref, Local, Chain.Foot) }); }
+		}
+	}
 
 	for (const TPair<int32, const FAnimStitchTrack*>& Entry : BoneTracks)
 	{
@@ -219,6 +264,13 @@ void FAnimStitchManualEdits::Apply(const FReferenceSkeleton& Ref, const TArray<F
 		}
 	}
 
+	for (const FPlant& Plant : Plants)
+	{
+		const FVector Knee = FAnimStitchFootLock::GetComponentSpace(Ref, Local, Plant.Chain.Calf).GetTranslation();
+		const FQuat Rotation = Plant.Foot.GetRotation();
+		FAnimStitchFootLock::SolveLimb(Ref, Local, Plant.Chain, Plant.Foot.GetTranslation(), &Knee, 1.0, &Rotation);
+	}
+
 	for (const FAnimStitchTrack& Track : Tracks)
 	{
 		if (Track.Kind != EAnimStitchTrackKind::IKLimb || Track.Keys.Num() == 0) { continue; }
@@ -230,7 +282,8 @@ void FAnimStitchManualEdits::Apply(const FReferenceSkeleton& Ref, const TArray<F
 		const FTransform Effector = FAnimStitchFootLock::GetComponentSpace(Ref, Local, Chain.Foot);
 		const FVector Desired = FMath::Lerp(Effector.GetTranslation(), Key.Translation, Weight);
 		const FQuat Rotation = FQuat::Slerp(Effector.GetRotation(), Key.Rotation, Weight).GetNormalized();
-		FAnimStitchFootLock::SolveLimb(Ref, Local, Chain, Desired, &Key.Pole, Weight, &Rotation);
+		const FVector* Pole = Key.Pole.IsNearlyZero(1e-3) ? nullptr : &Key.Pole; // no pole stored: let the solver keep the animated bend
+		FAnimStitchFootLock::SolveLimb(Ref, Local, Chain, Desired, Pole, Pole ? Weight : 0.0, &Rotation);
 	}
 }
 
