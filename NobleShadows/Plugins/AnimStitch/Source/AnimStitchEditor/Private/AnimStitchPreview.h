@@ -32,8 +32,10 @@ struct FAnimStitchControl
 	bool bRotate = true;
 	bool bScale = true;
 	FLinearColor Color = FLinearColor::White;
-	/** Cube material style: 0 bone, 1 rotation-only bone, 2 IK effector, 3 IK pole, 4 lock pin. */
+	/** Colour style: 0 centre, 1 left, 2 right. */
 	int32 Style = 0;
+	/** Half-size of the cube in cm before the global multiplier (from the bone's size). */
+	float BaseSize = 4.f;
 	FString Label;
 };
 
@@ -146,6 +148,12 @@ public:
 	/** Size of the control shapes (the gizmo keeps its own screen size). */
 	void SetControlDrawSize(float Size) { ControlDrawSize = FMath::Clamp(Size, 0.2f, 8.f); RequestRedraw(); }
 	float GetControlDrawSize() const { return ControlDrawSize; }
+	void SetControlOpacity(float Opacity) { ControlOpacity = FMath::Clamp(Opacity, 0.02f, 1.f); RequestRedraw(); }
+	float GetControlOpacity() const { return ControlOpacity; }
+	/** Translucent cube faces drawn on the viewport canvas (a real blend over the mesh). */
+	void DrawControlsCanvas(const FSceneView& View, FCanvas& Canvas, float DPIScale) const;
+	/** Auto size of a bone's control cube (half-extent, cm): big for the pelvis, small for fingers. */
+	float GetBoneControlSize(int32 MeshBone) const;
 	void SetShowControls(bool bShow) { bShowControls = bShow; RequestRedraw(); }
 	bool GetShowControls() const { return bShowControls; }
 
@@ -199,9 +207,15 @@ private:
 	bool bShowGhosts = false;
 	bool bShowRootPath = false;
 	bool bShowGrid = true;
-	EAnimStitchCoordSpace CoordSpaces[3] = { EAnimStitchCoordSpace::World, EAnimStitchCoordSpace::World, EAnimStitchCoordSpace::World };
+	EAnimStitchCoordSpace CoordSpaces[3] = { EAnimStitchCoordSpace::World, EAnimStitchCoordSpace::Local, EAnimStitchCoordSpace::World }; // rotate defaults to local
 	float GizmoDrawSize = 2.f;
-	TObjectPtr<UMaterialInstanceDynamic> ControlMaterials[6];
+	/** Translucency of the control cubes (0 = invisible, 1 = solid). */
+	float ControlOpacity = 0.25f;
+	/** Skeleton-indexed pose before the manual corrections (kept for IK controls, so they do not follow body edits). */
+	TArray<FTransform> BaseLocalPose;
+	TArray<FTransform> BaseComponentPose;
+	bool bHaveBasePose = false;
+	mutable TArray<float> BoneExtentSize;
 	/** Left / right foot bones that bone corrections keep planted (resolved lazily from the foot-lock settings). */
 	mutable FName PlantFeet[2];
 	mutable bool bPlantFeetResolved = false;

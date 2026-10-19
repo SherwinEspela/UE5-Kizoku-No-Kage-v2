@@ -289,13 +289,18 @@ int32 SAnimStitchTimeline::OnPaint(const FPaintArgs& Args, const FGeometry& G, c
 SAnimStitchTimeline::FHit SAnimStitchTimeline::HitTest(const FVector2f& P) const
 {
 	FHit Result;
+	if (FMath::Abs(P.X - LabelWidth) <= 3.f)
+	{
+		Result.Type = EHit::Splitter;
+		return Result;
+	}
 	if (P.X < LabelWidth)
 	{
 		// Track column: only the manual-correction rows react.
 		for (int32 i = 0; i < Asset->Timeline.Tracks.Num(); ++i)
 		{
 			const float Top = GetTrackLaneTop(i);
-			if (P.Y >= Top && P.Y <= Top + TrackLaneHeight)
+			if (P.Y >= GetTracksTop() && P.Y >= Top && P.Y <= Top + TrackLaneHeight)
 			{
 				Result.Type = EHit::TrackLane;
 				Result.Index = i;
@@ -342,7 +347,7 @@ SAnimStitchTimeline::FHit SAnimStitchTimeline::HitTest(const FVector2f& P) const
 	for (int32 i = 0; i < Asset->Timeline.Tracks.Num(); ++i)
 	{
 		const float Top = GetTrackLaneTop(i);
-		if (P.Y >= Top && P.Y <= Top + TrackLaneHeight)
+		if (P.Y >= GetTracksTop() && P.Y >= Top && P.Y <= Top + TrackLaneHeight)
 		{
 			Result.Type = EHit::TrackLane;
 			Result.Index = i;
@@ -512,6 +517,12 @@ void SAnimStitchTimeline::DeleteSelectedKeys()
 void SAnimStitchTimeline::SelectClip(int32 Index, bool bOverlap)
 {
 	SelectedClip = Index;
+	if (Index != INDEX_NONE)
+	{
+		SelectedTrack = INDEX_NONE;
+		SelectedKey = INDEX_NONE;
+		SelectedKeys.Reset();
+	}
 	bOverlapSelected = bOverlap && Index > 0;
 	OnSelectionChangedDelegate.ExecuteIfBound();
 }
@@ -609,6 +620,8 @@ void SAnimStitchTimeline::ClampSelection()
 {
 	SelectedKeys.Reset(); // key indices may have shifted
 	if (!Asset->Timeline.Tracks.IsValidIndex(ExpandedTrack)) { ExpandedTrack = INDEX_NONE; }
+	if (!Asset->Timeline.Tracks.IsValidIndex(SelectedTrack)) { SelectedTrack = INDEX_NONE; SelectedKey = INDEX_NONE; }
+	VScroll = FMath::Clamp(VScroll, 0.f, GetTrackScrollMax());
 	if (!Asset->Timeline.Clips.IsValidIndex(SelectedClip))
 	{
 		SelectClip(INDEX_NONE, false);
@@ -646,6 +659,9 @@ FReply SAnimStitchTimeline::OnMouseButtonDown(const FGeometry& G, const FPointer
 	case EHit::MarkerStart:
 	case EHit::MarkerEnd:
 		DragMode = Hit.Type == EHit::MarkerStart ? EDrag::MarkerStart : EDrag::MarkerEnd;
+		break;
+	case EHit::Splitter:
+		DragMode = EDrag::Splitter;
 		break;
 	case EHit::TrackPrev:
 	case EHit::TrackNext:
@@ -824,6 +840,11 @@ void SAnimStitchTimeline::OnDragMove(float LocalX)
 {
 	FAnimStitchTimeline& TL = Asset->Timeline;
 
+	if (DragMode == EDrag::Splitter)
+	{
+		LabelWidth = FMath::Clamp(LocalX, 260.f, 620.f);
+		return;
+	}
 	if (DragMode == EDrag::Scrub)
 	{
 		Playhead = FMath::Clamp(XToTime(LocalX), 0.0, TL.GetTotalLength());
@@ -932,27 +953,34 @@ void SAnimStitchTimeline::OnDragMove(float LocalX)
 
 FReply SAnimStitchTimeline::OnMouseWheel(const FGeometry& G, const FPointerEvent& Event)
 {
-	const float Local = G.AbsoluteToLocal(Event.GetScreenSpacePosition()).X - LabelWidth;
+	const float WidgetX = G.AbsoluteToLocal(Event.GetScreenSpacePosition()).X;
+	if (WidgetX < LabelWidth)
+	{
+		// Over the track column the wheel scrolls the lanes.
+		SetTrackScroll(VScroll - Event.GetWheelDelta() * 40.f);
+		return FReply::Handled();
+	}
+	const float Local = FMath::Max(WidgetX - LabelWidth, 0.f);
 	if (Event.IsShiftDown())
 	{
 		ViewStart -= Event.GetWheelDelta() * 60.0 / PxPerSec;
 	}
 	else
 	{
-		const double AnchorTime = XToTime(Local);
+		// Wheel zooms around the cursor, like Sequencer.
+		const double AnchorTime = ViewStart + Local / PxPerSec;
 		PxPerSec = FMath::Clamp(PxPerSec * FMath::Pow(1.15, Event.GetWheelDelta()), 10.0, 4000.0);
 		ViewStart = AnchorTime - Local / PxPerSec;
 	}
 	return FReply::Handled();
 }
-
 FCursorReply SAnimStitchTimeline::OnCursorQuery(const FGeometry& G, const FPointerEvent& Event) const
 {
 	EHit Type = EHit::None;
 	if (HasMouseCapture())
 	{
 		Type = DragMode == EDrag::TrimLeft ? EHit::TrimLeft : DragMode == EDrag::TrimRight ? EHit::TrimRight
-			: (DragMode == EDrag::MarkerStart || DragMode == EDrag::MarkerEnd) ? EHit::MarkerStart
+			: (DragMode == EDrag::MarkerStart || DragMode == EDrag::MarkerEnd || DragMode == EDrag::Splitter) ? EHit::MarkerStart
 			: (DragMode == EDrag::Pan || DragMode == EDrag::Move) ? EHit::Body : EHit::None;
 	}
 	else
@@ -966,6 +994,7 @@ FCursorReply SAnimStitchTimeline::OnCursorQuery(const FGeometry& G, const FPoint
 	case EHit::Overlap:
 	case EHit::MarkerStart:
 	case EHit::MarkerEnd:
+	case EHit::Splitter:
 		return FCursorReply::Cursor(EMouseCursor::ResizeLeftRight);
 	case EHit::Body:
 		return FCursorReply::Cursor(EMouseCursor::GrabHand);
@@ -988,6 +1017,17 @@ FReply SAnimStitchTimeline::OnKeyDown(const FGeometry& G, const FKeyEvent& Event
 		const FScopedTransaction Tx(LOCTEXT("DeleteKeyTx", "Delete Key"));
 		Asset->RemoveTrackKey(SelectedTrack, SelectedKey);
 		SelectedKey = INDEX_NONE;
+		return FReply::Handled();
+	}
+	if ((Event.GetKey() == EKeys::Delete || Event.GetKey() == EKeys::BackSpace) && Asset->Timeline.Tracks.IsValidIndex(SelectedTrack) && !Asset->Timeline.Clips.IsValidIndex(SelectedClip))
+	{
+		// A whole track is selected: delete the track.
+		const FScopedTransaction Tx(LOCTEXT("DeleteTrackTx", "Delete Track"));
+		Asset->RemoveTrack(SelectedTrack);
+		ExpandedTrack = INDEX_NONE;
+		SelectedTrack = INDEX_NONE;
+		SelectedKey = INDEX_NONE;
+		SelectedKeys.Reset();
 		return FReply::Handled();
 	}
 	if (Event.GetKey() == EKeys::Delete || Event.GetKey() == EKeys::BackSpace)

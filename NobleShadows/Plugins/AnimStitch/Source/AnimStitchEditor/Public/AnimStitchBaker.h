@@ -26,6 +26,9 @@ public:
 	 */
 	static UAnimSequence* Bake(const FAnimStitchTimeline& Timeline, const FString& PackagePath, const FAnimStitchBakeOptions& Options, FString& OutError);
 
+	/** Broadcast after every successful bake (the Baked Assets tab listens). */
+	static FSimpleMulticastDelegate& OnAssetBaked();
+
 	/** True if an asset package already exists at the path. */
 	static bool AssetExists(const FString& PackagePath);
 };

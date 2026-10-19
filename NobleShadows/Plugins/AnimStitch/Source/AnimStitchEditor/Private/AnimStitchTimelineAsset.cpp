@@ -46,6 +46,7 @@ int32 UAnimStitchTimelineAsset::AddSequences(const TArray<UAnimSequence*>& Seque
 	USkeleton* Skeleton = GetSkeleton();
 	int32 Index = (InsertIndex == INDEX_NONE) ? Timeline.Clips.Num() : FMath::Clamp(InsertIndex, 0, Timeline.Clips.Num());
 	int32 Added = 0;
+	const int32 FirstIndex = Index;
 	for (UAnimSequence* Seq : Sequences)
 	{
 		if (!Seq || !Seq->GetSkeleton() || !Seq->GetDataModel())
@@ -72,6 +73,22 @@ int32 UAnimStitchTimelineAsset::AddSequences(const TArray<UAnimSequence*>& Seque
 		++Added;
 	}
 	Timeline.Relayout();
+	if (Added > 0 && Timeline.Tracks.Num() > 0)
+	{
+		// Auto-key: every correction lane gets a key at the end of each new clip (holding its value there).
+		TouchManual();
+		for (int32 c = FirstIndex; c < FirstIndex + Added && c < Timeline.Clips.Num(); ++c)
+		{
+			const double EndTime = Timeline.Clips[c].GetEndTime();
+			for (FAnimStitchTrack& Track : Timeline.Tracks)
+			{
+				if (Track.Keys.Num() == 0 || FAnimStitchManualEdits::FindKey(Track, EndTime) != INDEX_NONE) { continue; }
+				FAnimStitchTrackKey Key = FAnimStitchManualEdits::Sample(Track, EndTime);
+				Key.Time = EndTime;
+				FAnimStitchManualEdits::SetKey(Track, Key);
+			}
+		}
+	}
 	return Added;
 }
 

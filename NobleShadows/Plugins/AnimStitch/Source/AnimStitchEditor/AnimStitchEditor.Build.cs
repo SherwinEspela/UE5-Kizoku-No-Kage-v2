@@ -1,4 +1,4 @@
-using UnrealBuildTool;
+﻿using UnrealBuildTool;
 
 public class AnimStitchEditor : ModuleRules
 {
@@ -20,6 +20,7 @@ public class AnimStitchEditor : ModuleRules
 			"Slate",
 			"SlateCore",
 			"InputCore",
+				"RenderCore",
 			"EditorFramework",
 			"WorkspaceMenuStructure",
 			"AdvancedPreviewScene",

@@ -129,3 +129,10 @@ Right-click **below the clip lanes** > *Add Bone Track* to add a Sequencer-style
 - The bar under the timeline has go to start, previous key, play / pause, next key, go to end, stop, loop, a time or frame entry, a frames / seconds toggle and a pan / zoom range bar (drag the body to pan, the ends to zoom).
 - Drag a rectangle over the correction lanes to select keys (Ctrl / Shift adds). Ctrl+C copies the selected keys, Ctrl+V pastes them onto the same bone tracks at the playhead keeping their relative timing, Delete removes them. Dragging moves one key at a time.
 - Show > Controls: control cubes are translucent; the gizmo defaults to size 2 with thick lines.
+
+## Phase 11 additions
+- Undo / Redo buttons next to Duplicate / Remove (Ctrl+Z still works). Right-hand tabs: Content Browser, Details, **Baked Assets** (every sequence AnimStitch baked; double-click opens the Animation editor, right-click shows it in the Content Browser; stored in the AnimStitch editor settings).
+- **Attach Props** button beside the preview mesh picker (same as Show > Preview Attachments).
+- Control cubes are sized per bone (pelvis large, fingers small), coloured by side (left blue, right red, centre grey), rotate with the control and start aligned to the joint. Show > Controls: Control Size (global multiplier), Gizmo Size, Control Opacity. Their translucent fill is drawn on the viewport canvas so the mesh shows through.
+- Rotate defaults to local. IK pole / effector controls stay on the animated limb while IK is off, so pelvis edits do not drag them.
+- Timeline: wheel zooms (wheel over the track column scrolls the lanes), the lane column has a vertical scrollbar and a draggable width handle, Delete removes a selected track, adding a clip auto-keys every lane at the clip end, adding a duplicate bone shows a warning. Picking a bone in the viewport dropdown switches to the Details tab.

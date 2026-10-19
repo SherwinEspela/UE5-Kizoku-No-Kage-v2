@@ -35,12 +35,6 @@ FAnimStitchPreview::FAnimStitchPreview()
 			MID->SetScalarParameterValue(TEXT("Opacity"), 0.35f);
 			return MID;
 		};
-		const FLinearColor ControlColors[6] = { FLinearColor(0.35f, 0.95f, 0.45f), FLinearColor(0.95f, 0.6f, 0.2f), FLinearColor(1.f, 0.45f, 0.1f), FLinearColor(0.7f, 0.4f, 1.f), FLinearColor(0.3f, 1.f, 0.5f), FLinearColor(1.f, 0.9f, 0.2f) };
-		for (int32 i = 0; i < 6; ++i)
-		{
-			ControlMaterials[i] = MakeGhost(ControlColors[i]);
-			ControlMaterials[i]->SetScalarParameterValue(TEXT("Opacity"), i == 5 ? 0.3f : 0.2f);
-		}
 		OutgoingGhostMaterial = MakeGhost(FLinearColor(1.f, 0.55f, 0.1f));
 		IncomingGhostMaterial = MakeGhost(FLinearColor(0.15f, 0.8f, 1.f));
 	}
@@ -56,7 +50,6 @@ void FAnimStitchPreview::AddReferencedObjects(FReferenceCollector& Collector)
 	Collector.AddReferencedObject(MainComponent);
 	Collector.AddReferencedObjects(GhostComponents);
 	Collector.AddReferencedObjects(AttachmentComponents);
-	for (TObjectPtr<UMaterialInstanceDynamic>& Material : ControlMaterials) { Collector.AddReferencedObject(Material); }
 	Collector.AddReferencedObject(OutgoingGhostMaterial);
 	Collector.AddReferencedObject(IncomingGhostMaterial);
 }
@@ -254,6 +247,24 @@ void FAnimStitchPreview::SetPlayhead(double Time)
 			Evaluator.EvaluatePose(Time, Pose);
 		}
 		// Manual corrections come last: they win over foot prediction and foot lock.
+		// Keep the pose before the manual corrections: IK controls read it, so editing the pelvis does not drag them along.
+		bHaveBasePose = false;
+		for (const FAnimStitchTrack& T : ManualTracks)
+		{
+			if (T.Kind == EAnimStitchTrackKind::IKLimb)
+			{
+				const FReferenceSkeleton& SkelRef = Evaluator.GetSkeleton()->GetReferenceSkeleton();
+				BaseLocalPose = Pose;
+				BaseComponentPose.SetNumUninitialized(Pose.Num());
+				for (int32 i = 0; i < Pose.Num(); ++i)
+				{
+					const int32 Parent = SkelRef.GetParentIndex(i);
+					BaseComponentPose[i] = (Parent != INDEX_NONE && Parent < i) ? Pose[i] * BaseComponentPose[Parent] : Pose[i];
+				}
+				bHaveBasePose = true;
+				break;
+			}
+		}
 		if (!bPlantFeetResolved)
 		{
 			FAnimStitchFootLock::ResolveFootBones(Evaluator.GetSkeleton(), Evaluator.GetTimeline().FootLock, PlantFeet[0], PlantFeet[1]);
@@ -410,6 +421,7 @@ void FAnimStitchViewportClient::DrawCanvas(FViewport& InViewport, FSceneView& Vi
 	FEditorViewportClient::DrawCanvas(InViewport, View, Canvas);
 	if (const TSharedPtr<FAnimStitchPreview> Pinned = Preview.Pin())
 	{
+		Pinned->DrawControlsCanvas(View, Canvas, UpdateViewportClientWindowDPIScale());
 		Pinned->DrawBoneNames(View, Canvas, UpdateViewportClientWindowDPIScale());
 	}
 }

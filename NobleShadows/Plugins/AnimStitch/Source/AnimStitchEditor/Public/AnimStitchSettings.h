@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Engine/DeveloperSettings.h"
@@ -49,6 +49,10 @@ public:
 	/** Foot bones chosen in the Bake window, remembered per skeleton (key = skeleton asset path). */
 	UPROPERTY(config, EditAnywhere, Category = "Foot Lock")
 	TMap<FString, FAnimStitchFootBones> FootBonesBySkeleton;
+
+	/** Animation sequences baked by AnimStitch (shown in the Baked Assets tab). */
+	UPROPERTY(config)
+	TArray<FSoftObjectPath> BakedAssets;
 
 	virtual FName GetCategoryName() const override { return TEXT("Plugins"); }
 };

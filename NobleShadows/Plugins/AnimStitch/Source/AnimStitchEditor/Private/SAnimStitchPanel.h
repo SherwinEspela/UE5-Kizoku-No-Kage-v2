@@ -5,6 +5,7 @@
 #include "UObject/GCObject.h"
 #include "AnimStitchTimelineAsset.h"
 #include "ContentBrowserDelegates.h"
+#include "Widgets/Views/SListView.h"
 
 class SAnimStitchTimeline;
 class SAnimStitchViewport;
@@ -42,7 +43,12 @@ private:
 	void FillControlsMenu(class FMenuBuilder& Menu);
 	void FillAttachmentsMenu(class FMenuBuilder& Menu);
 	void FillBonesMenu(class FMenuBuilder& Menu);
-	int32 RightTab = 0; // 0 = Content Browser, 1 = Details
+	int32 RightTab = 0; // 0 = Content Browser, 1 = Details, 2 = Baked Assets
+	TSharedRef<SWidget> MakeBakedAssetsTab();
+	void RebuildBakedList();
+	TArray<TSharedPtr<FSoftObjectPath>> BakedItems;
+	TSharedPtr<SListView<TSharedPtr<FSoftObjectPath>>> BakedList;
+	TSharedPtr<class SScrollBar> TrackScrollBar;
 
 	// Bone dropdown (alternative to clicking a joint in the viewport)
 	void RebuildBoneItems();

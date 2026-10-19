@@ -225,7 +225,38 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 				const FAnimStitchControl* PinControl = Controls.FindByPredicate([](const FAnimStitchControl& C) { return C.Id.Kind == EAnimStitchControlKind::LockPin; });
 				const FAnimStitchControl* BoneControl = Controls.FindByPredicate([](const FAnimStitchControl& C) { return C.Id.Kind == EAnimStitchControlKind::Bone; });
 				UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest CONTROLS: %d controls; pin control present=%d at %.4f cm from the pin target; pelvis control present=%d"), Controls.Num(), PinControl != nullptr, PinControl ? (PinControl->Position - ExpectedPin).Size() : -1.0, BoneControl != nullptr);
-				if (BoneControl)
+				// ---- Phase 11 checks: auto size, side colour, IK controls independent of the pelvis, auto-key on clip add ----
+				{
+					FString Sizes;
+					for (const TCHAR* Name : { TEXT("pelvis"), TEXT("spine_01"), TEXT("foot_l"), TEXT("hand_l"), TEXT("index_01_l"), TEXT("thumb_03_l") })
+					{
+						const int32 MeshBoneIdx = Preview->FindMeshBone(Name);
+						Sizes += FString::Printf(TEXT("%s=%.1f "), Name, MeshBoneIdx != INDEX_NONE ? Preview->GetBoneControlSize(MeshBoneIdx) : -1.f);
+					}
+					UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest P11 SIZES (half-extent cm): %s| sides: foot_l=%d foot_r=%d pelvis=%d"), *Sizes,
+						FAnimStitchManualEdits::GetBoneSide(TEXT("foot_l")), FAnimStitchManualEdits::GetBoneSide(TEXT("foot_r")), FAnimStitchManualEdits::GetBoneSide(TEXT("pelvis")));
+
+					FAnimStitchTrack IKTrack; IKTrack.Kind = EAnimStitchTrackKind::IKLimb; IKTrack.Bone = TEXT("foot_l");
+					const int32 IKIndex = TLAsset->AddTrack(IKTrack);
+					Preview->SetManualTracks(TLAsset->Timeline.Tracks);
+					Preview->SetPlayhead(2.0);
+					auto PoleOf = [&]() { TArray<FAnimStitchControl> C; Preview->BuildControls(C); const FAnimStitchControl* P = C.FindByPredicate([IKIndex](const FAnimStitchControl& K) { return K.Id.Kind == EAnimStitchControlKind::IKPole && K.Id.A == IKIndex; }); return P ? P->Position : FVector(1e9); };
+					const FVector PoleBefore = PoleOf();
+					FAnimStitchTrackKey Lift; Lift.Time = 2.0; Lift.Translation = FVector(0.0, 0.0, 20.0);
+					TLAsset->SetTrackKey(PelvisTrack, Lift);
+					Preview->SetManualTracks(TLAsset->Timeline.Tracks);
+					Preview->SetPlayhead(2.0);
+					const FVector PoleAfter = PoleOf();
+					UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest P11 POLE: pole control with IK off moved %.4f cm when the pelvis was lifted 20 cm (expected 0)"), (PoleAfter - PoleBefore).Size());
+
+					const int32 KeysBefore = TLAsset->Timeline.Tracks[PelvisTrack].Keys.Num();
+					TArray<FText> Warn;
+					UAnimSequence* FirstSeq = TLAsset->Timeline.Clips.Num() > 0 ? TLAsset->Timeline.Clips[0].Sequence.Get() : nullptr;
+					TLAsset->AddSequences({ FirstSeq }, INDEX_NONE, Warn);
+					const double NewEnd = TLAsset->Timeline.Clips.Last().GetEndTime();
+					UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest P11 AUTOKEY: adding a clip took the pelvis lane from %d to %d keys; key at the new clip end (%.2f s) present=%d"), KeysBefore,
+						TLAsset->Timeline.Tracks[PelvisTrack].Keys.Num(), NewEnd, FAnimStitchManualEdits::FindKey(TLAsset->Timeline.Tracks[PelvisTrack], NewEnd) != INDEX_NONE);
+				}				if (BoneControl)
 				{
 					const FIntRect Rect(0, 0, 1280, 720);
 					const FMatrix ViewProj = FLookAtMatrix(FVector(0.0, -450.0, 110.0), FVector(0.0, 0.0, 90.0), FVector::UpVector) * FPerspectiveMatrix(FMath::DegreesToRadians(45.f) * 0.5f, 1280.f, 720.f, 10.f);

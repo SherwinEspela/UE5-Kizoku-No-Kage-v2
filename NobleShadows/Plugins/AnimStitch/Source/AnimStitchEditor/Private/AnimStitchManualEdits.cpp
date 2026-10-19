@@ -25,6 +25,14 @@ namespace
 	}
 }
 
+int32 FAnimStitchManualEdits::GetBoneSide(FName Bone)
+{
+	const FString Lower = Bone.ToString().ToLower();
+	if (SideMatch(Lower, true)) { return -1; }
+	if (SideMatch(Lower, false)) { return 1; }
+	return 0;
+}
+
 bool FAnimStitchManualEdits::IsIdentityKey(const FAnimStitchTrackKey& Key)
 {
 	return Key.Translation.IsNearlyZero(1e-4) && Key.Rotation.Equals(FQuat::Identity, 1e-5) && Key.Scale.Equals(FVector::OneVector, 1e-5);

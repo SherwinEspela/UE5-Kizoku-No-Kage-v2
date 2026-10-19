@@ -8,6 +8,7 @@
 #include "Misc/ScopedSlowTask.h"
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
+#include "AnimStitchSettings.h"
 #include "ReferenceSkeleton.h"
 
 #define LOCTEXT_NAMESPACE "AnimStitch"
@@ -15,6 +16,12 @@
 bool FAnimStitchBaker::AssetExists(const FString& PackagePath)
 {
 	return FPackageName::DoesPackageExist(PackagePath) || FindPackage(nullptr, *PackagePath) != nullptr;
+}
+
+FSimpleMulticastDelegate& FAnimStitchBaker::OnAssetBaked()
+{
+	static FSimpleMulticastDelegate Delegate;
+	return Delegate;
 }
 
 UAnimSequence* FAnimStitchBaker::Bake(const FAnimStitchTimeline& Timeline, const FString& PackagePath, const FAnimStitchBakeOptions& Options, FString& OutError)
@@ -305,6 +312,13 @@ UAnimSequence* FAnimStitchBaker::Bake(const FAnimStitchTimeline& Timeline, const
 			OutError = LOCTEXT("ErrSave", "Failed to save the baked sequence.").ToString();
 			return nullptr;
 		}
+	}
+	if (!IsRunningCommandlet())
+	{
+		UAnimStitchSettings* Settings = GetMutableDefault<UAnimStitchSettings>();
+		Settings->BakedAssets.AddUnique(FSoftObjectPath(Seq));
+		Settings->SaveConfig();
+		OnAssetBaked().Broadcast();
 	}
 	return Seq;
 }

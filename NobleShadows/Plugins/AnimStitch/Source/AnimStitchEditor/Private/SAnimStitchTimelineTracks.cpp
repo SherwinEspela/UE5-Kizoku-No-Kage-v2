@@ -33,6 +33,8 @@ void SAnimStitchTimeline::PaintTrackLanes(FSlateWindowElementList& Out, int32 La
 	CachedWidth = Size.X;
 	const FSlateBrush* White = FAppStyle::GetBrush("WhiteBrush");
 	const FSlateBrush* Circle = FAppStyle::GetBrush("Icons.FilledCircle");
+	const float AreaTop = GetTracksTop();
+	Out.PushClip(FSlateClippingZone(G.MakeChild(FVector2f(Size.X, FMath::Max(1.f, Size.Y - AreaTop)), FSlateLayoutTransform(FVector2f(0.f, AreaTop)))));
 
 	for (int32 i = 0; i < TL.Tracks.Num(); ++i)
 	{
@@ -79,6 +81,7 @@ void SAnimStitchTimeline::PaintTrackLanes(FSlateWindowElementList& Out, int32 La
 			FSlateDrawElement::MakeBox(Out, Layer + 3, G.ToPaintGeometry(FVector2f(D, D), FSlateLayoutTransform(FVector2f(X - D * 0.5f, Y - D * 0.5f))), Circle ? Circle : White, ESlateDrawEffect::None, Color);
 		}
 	}
+	Out.PopClip();
 }
 
 /** The Sequencer-like track column: titles with an expand arrow, key navigation buttons and the area behind the value rows. */
@@ -102,6 +105,8 @@ void SAnimStitchTimeline::PaintLeftColumn(FSlateWindowElementList& Out, int32 La
 		}
 	}
 
+	const float AreaTop = GetTracksTop();
+	Out.PushClip(FSlateClippingZone(G.MakeChild(FVector2f(Size.X, FMath::Max(1.f, Size.Y - AreaTop)), FSlateLayoutTransform(FVector2f(0.f, AreaTop)))));
 	for (int32 i = 0; i < TL.Tracks.Num(); ++i)
 	{
 		const FAnimStitchTrack& Track = TL.Tracks[i];
@@ -133,11 +138,31 @@ void SAnimStitchTimeline::PaintLeftColumn(FSlateWindowElementList& Out, int32 La
 			FSlateDrawElement::MakeBox(Out, Layer + 3, G.ToPaintGeometry(FVector2f(LabelWidth - 1.f, ExpanderHeight - 2.f), FSlateLayoutTransform(FVector2f(0.f, Top + TrackLaneHeight + 2.f))), White, ESlateDrawEffect::None, FLinearColor(0.085f, 0.085f, 0.1f));
 		}
 	}
+	Out.PopClip();
 }
 // ---------------------------------------------------------------------------------------------
 
+bool SAnimStitchTimeline::WarnIfTrackExists(FName Bone, EAnimStitchTrackKind Kind)
+{
+	for (int32 i = 0; i < Asset->Timeline.Tracks.Num(); ++i)
+	{
+		if (Asset->Timeline.Tracks[i].Bone == Bone && Asset->Timeline.Tracks[i].Kind == Kind)
+		{
+			FNotificationInfo Info(FText::Format(LOCTEXT("DuplicateTrack", "'{0}' is already on the track list."), FText::FromName(Bone)));
+			Info.ExpireDuration = 4.f;
+			Info.bUseLargeFont = false;
+			FSlateNotificationManager::Get().AddNotification(Info);
+			SelectedTrack = i;
+			SelectedKey = INDEX_NONE;
+			return true;
+		}
+	}
+	return false;
+}
+
 void SAnimStitchTimeline::AddBoneTrack(FName Bone, bool bRotationOnly, int32 GroupId)
 {
+	if (WarnIfTrackExists(Bone, EAnimStitchTrackKind::Bone)) { return; }
 	FAnimStitchTrack Track;
 	Track.Kind = EAnimStitchTrackKind::Bone;
 	Track.Bone = Bone;
@@ -161,6 +186,10 @@ void SAnimStitchTimeline::AddLimb(bool bLeft, bool bLeg, bool bIK)
 			bLeft ? LOCTEXT("LeftWord", "left") : LOCTEXT("RightWord", "right"), bLeg ? LOCTEXT("LegWord", "leg") : LOCTEXT("ArmWord", "arm")));
 		Info.ExpireDuration = 6.f;
 		FSlateNotificationManager::Get().AddNotification(Info);
+		return;
+	}
+	if (bIK ? WarnIfTrackExists(Effector, EAnimStitchTrackKind::IKLimb) : (WarnIfTrackExists(Ref.GetBoneName(Chain.Thigh), EAnimStitchTrackKind::Bone) || WarnIfTrackExists(Ref.GetBoneName(Chain.Calf), EAnimStitchTrackKind::Bone) || WarnIfTrackExists(Ref.GetBoneName(Chain.Foot), EAnimStitchTrackKind::Bone)))
+	{
 		return;
 	}
 	const FScopedTransaction Tx(LOCTEXT("AddLimbTx", "Add Limb Tracks"));

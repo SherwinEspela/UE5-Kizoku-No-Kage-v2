@@ -45,4 +45,7 @@ public:
 	static TArray<FName> GetCoreBoneSuggestions(const FReferenceSkeleton& RefSkeleton);
 
 	static bool IsIdentityKey(const FAnimStitchTrackKey& Key);
+
+	/** -1 = left, +1 = right, 0 = centre / unknown, guessed from the bone name. */
+	static int32 GetBoneSide(FName Bone);
 };

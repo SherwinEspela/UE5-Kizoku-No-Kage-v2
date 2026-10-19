@@ -2,6 +2,13 @@
 #include "SAnimStitchTimeline.h"
 #include "SAnimStitchKeyPanel.h"
 #include "SAnimStitchTransportBar.h"
+#include "AnimStitchBaker.h"
+#include "Editor/Transactor.h"
+#include "Subsystems/AssetEditorSubsystem.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "Widgets/Views/STableRow.h"
+#include "Widgets/Layout/SScrollBar.h"
+#include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "Widgets/SOverlay.h"
 #include "AnimStitchPreview.h"
 #include "AnimStitchSettings.h"
@@ -95,7 +102,7 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 		return SNew(SCheckBox)
 			.Style(FAppStyle::Get(), "ToggleButtonCheckbox")
 			.IsChecked_Lambda([this, TabIndex]() { return RightTab == TabIndex ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
-			.OnCheckStateChanged_Lambda([this, TabIndex](ECheckBoxState State) { if (State == ECheckBoxState::Checked) { RightTab = TabIndex; } })
+			.OnCheckStateChanged_Lambda([this, TabIndex](ECheckBoxState State) { if (State == ECheckBoxState::Checked) { RightTab = TabIndex; if (TabIndex == 2) { RebuildBakedList(); } } })
 			[
 				SNew(STextBlock).Text(Label).Margin(FMargin(10.f, 3.f))
 			];
@@ -247,6 +254,13 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 					.AllowClear(true)
 					.DisplayThumbnail(false)
 				]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 12, 0)
+				[
+					SNew(SComboButton).HasDownArrow(true)
+					.ToolTipText(LOCTEXT("AttachPropsTip", "Attach props (static or skeletal meshes) to a socket or bone of the preview character. Preview only, never baked."))
+					.ButtonContent()[SNew(STextBlock).Text(LOCTEXT("AttachProps", "Attach Props"))]
+					.OnGetMenuContent_Lambda([this]() -> TSharedRef<SWidget> { FMenuBuilder Menu(true, nullptr); FillAttachmentsMenu(Menu); return Menu.MakeWidget(); })
+				]
 				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
 				[
 					ToggleButton(LOCTEXT("Ghosts", "Ghost Joins"), LOCTEXT("GhostsTip", "Show the last pose of the outgoing clip (orange) and the first pose of the incoming clip (blue) at every join"),
@@ -272,6 +286,26 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 					SNew(SButton).Text(LOCTEXT("Remove", "Remove"))
 					.ToolTipText(LOCTEXT("RemoveTip", "Remove the selected clip (Delete)"))
 					.OnClicked_Lambda([this]() { Timeline->DeleteSelected(); return FReply::Handled(); })
+				]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 2, 0)
+				[
+					SNew(SButton).ButtonStyle(FAppStyle::Get(), "SimpleButton").ContentPadding(FMargin(4.f))
+					.ToolTipText(LOCTEXT("UndoTip", "Undo (Ctrl+Z)"))
+					.IsEnabled_Lambda([]() { return GEditor && GEditor->Trans && GEditor->Trans->CanUndo(); })
+					.OnClicked_Lambda([]() { if (GEditor) { GEditor->UndoTransaction(); } return FReply::Handled(); })
+					[
+						SNew(SImage).Image(FAppStyle::GetBrush("GenericCommands.Undo")).ColorAndOpacity(FSlateColor::UseForeground())
+					]
+				]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 14, 0)
+				[
+					SNew(SButton).ButtonStyle(FAppStyle::Get(), "SimpleButton").ContentPadding(FMargin(4.f))
+					.ToolTipText(LOCTEXT("RedoTip", "Redo (Ctrl+Y)"))
+					.IsEnabled_Lambda([]() { return GEditor && GEditor->Trans && GEditor->Trans->CanRedo(); })
+					.OnClicked_Lambda([]() { if (GEditor) { GEditor->RedoTransaction(); } return FReply::Handled(); })
+					[
+						SNew(SImage).Image(FAppStyle::GetBrush("GenericCommands.Redo")).ColorAndOpacity(FSlateColor::UseForeground())
+					]
 				]
 				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 18, 0)
 				[
@@ -307,7 +341,7 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 			[
 				SNew(SBorder).Padding(0)
 				[
-					SNew(SOverlay)
+					SNew(SOverlay).Clipping(EWidgetClipping::ClipToBounds)
 					+ SOverlay::Slot()
 					[
 						Timeline.ToSharedRef()
@@ -315,12 +349,24 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 					+ SOverlay::Slot().VAlign(VAlign_Top).HAlign(HAlign_Left)
 					.Padding(TAttribute<FMargin>::CreateLambda([this]() { return FMargin(0.f, Timeline.IsValid() ? Timeline->GetExpanderTop() : 0.f, 0.f, 0.f); }))
 					[
-						SNew(SBox).WidthOverride(SAnimStitchTimeline::LabelWidth - 2.f)
-						.Visibility_Lambda([this]() { return Timeline.IsValid() && Timeline->IsExpanderOpen() ? EVisibility::Visible : EVisibility::Collapsed; })
+						SNew(SBox).WidthOverride_Lambda([this]() -> FOptionalSize { return FOptionalSize(Timeline->GetLabelWidth() - 2.f); })
+						.Visibility_Lambda([this]()
+						{
+							if (!Timeline.IsValid() || !Timeline->IsExpanderOpen()) { return EVisibility::Collapsed; }
+							const float Top = Timeline->GetExpanderTop();
+							return (Top >= Timeline->GetTrackAreaTop() - 1.f && Top < Timeline->GetTrackAreaTop() + Timeline->GetTrackViewHeight() - 24.f) ? EVisibility::Visible : EVisibility::Collapsed;
+						})
 						[
 							SNew(SAnimStitchKeyPanel).Timeline(Timeline)
 							.LiveIK([this](int32 Track, FAnimStitchTrackKey& OutKey) { return Preview->GetIKLiveKey(Track, OutKey); })
 						]
+					]
+					+ SOverlay::Slot().HAlign(HAlign_Right).VAlign(VAlign_Fill)
+					.Padding(TAttribute<FMargin>::CreateLambda([this]() { return FMargin(0.f, Timeline.IsValid() ? Timeline->GetTrackAreaTop() : 0.f, 0.f, 0.f); }))
+					[
+						SAssignNew(TrackScrollBar, SScrollBar).Orientation(Orient_Vertical).Thickness(FVector2D(9.f, 9.f))
+						.Visibility_Lambda([this]() { return Timeline.IsValid() && Timeline->GetTrackScrollMax() > 0.f ? EVisibility::Visible : EVisibility::Collapsed; })
+						.OnUserScrolled(FOnUserScrolled::CreateLambda([this](float Offset) { if (Timeline.IsValid()) { Timeline->SetTrackScroll(Offset * Timeline->GetTrackContentHeight()); } }))
 					]
 				]
 			]
@@ -352,6 +398,7 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 				SNew(SHorizontalBox)
 				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 2, 0)[RightTabButton(LOCTEXT("ContentBrowserTab", "Content Browser"), 0)]
 				+ SHorizontalBox::Slot().AutoWidth()[RightTabButton(LOCTEXT("DetailsTab", "Details"), 1)]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(2, 0, 0, 0)[RightTabButton(LOCTEXT("BakedAssetsTab", "Baked Assets"), 2)]
 			]
 			+ SVerticalBox::Slot().FillHeight(1.f)
 			[
@@ -364,11 +411,17 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 				[
 					SNew(SAnimStitchBoneDetails).Preview(Preview)
 				]
+				+ SWidgetSwitcher::Slot()
+				[
+					MakeBakedAssetsTab()
+				]
 			]
 		]
 	];
 
 	RebuildSequenceBrowser();
+	RebuildBakedList();
+	FAnimStitchBaker::OnAssetBaked().AddSP(this, &SAnimStitchPanel::RebuildBakedList);
 
 	// Restore the last preview mesh.
 	const UAnimStitchSettings* Settings = GetDefault<UAnimStitchSettings>();
@@ -397,6 +450,12 @@ EActiveTimerReturnType SAnimStitchPanel::UpdatePreview(double CurrentTime, float
 		SyncPreviewToTimeline();
 	}
 	Timeline->ApplyPendingZoomFit();
+	if (TrackScrollBar.IsValid())
+	{
+		Timeline->SetTrackScroll(Timeline->GetTrackScroll()); // re-clamp when lanes were removed or the panel was resized
+		const float Content = Timeline->GetTrackContentHeight();
+		if (Content > 1.f) { TrackScrollBar->SetState(Timeline->GetTrackScroll() / Content, FMath::Min(1.f, Timeline->GetTrackViewHeight() / Content)); }
+	}
 	if (Asset->GetManualCounter() != LastManualCounter)
 	{
 		LastManualCounter = Asset->GetManualCounter();
@@ -694,6 +753,16 @@ void SAnimStitchPanel::FillControlsMenu(FMenuBuilder& Menu)
 			.OnValueCommitted_Lambda([this](float V, ETextCommit::Type) { Preview->SetGizmoDrawSize(V); })
 		],
 		LOCTEXT("GizmoSize", "Gizmo Size"));
+	Menu.AddWidget(
+		SNew(SBox).WidthOverride(120.f)
+		[
+			SNew(SSpinBox<float>).MinValue(0.02f).MaxValue(1.f).MinSliderValue(0.02f).MaxSliderValue(1.f).Delta(0.02f)
+			.ToolTipText(LOCTEXT("ControlOpacityTip", "Opacity of the control cubes (low = see the mesh through them)"))
+			.Value_Lambda([this]() { return Preview->GetControlOpacity(); })
+			.OnValueChanged_Lambda([this](float V) { Preview->SetControlOpacity(V); })
+			.OnValueCommitted_Lambda([this](float V, ETextCommit::Type) { Preview->SetControlOpacity(V); })
+		],
+		LOCTEXT("ControlOpacity", "Control Opacity"));
 	Menu.EndSection();
 }
 
@@ -783,6 +852,7 @@ void SAnimStitchPanel::OnBoneComboChanged(TSharedPtr<FString> Item, ESelectInfo:
 		return; // the change came from the viewport (or a refresh), not from the user picking in the list
 	}
 	Preview->SelectBone(Preview->FindMeshBone(FName(**Item)));
+	RightTab = 1; // picking a bone in the dropdown shows its Details
 }
 
 void SAnimStitchPanel::OnPreviewBoneSelected()
@@ -875,6 +945,68 @@ TSharedPtr<SWidget> SAnimStitchPanel::OnGetAssetContextMenu(const TArray<FAssetD
 			}
 		})));
 	return Menu.MakeWidget();
+}
+
+void SAnimStitchPanel::RebuildBakedList()
+{
+	BakedItems.Reset();
+	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+	const TArray<FSoftObjectPath>& Baked = GetDefault<UAnimStitchSettings>()->BakedAssets;
+	for (int32 i = Baked.Num() - 1; i >= 0; --i) // newest first
+	{
+		if (Registry.GetAssetByObjectPath(Baked[i]).IsValid()) { BakedItems.Add(MakeShared<FSoftObjectPath>(Baked[i])); }
+	}
+	if (BakedList.IsValid()) { BakedList->RequestListRefresh(); }
+}
+
+TSharedRef<SWidget> SAnimStitchPanel::MakeBakedAssetsTab()
+{
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(6.f)
+		[
+			SNew(STextBlock).Text(LOCTEXT("NoBakedAssets", "Nothing baked yet. Animations you bake with AnimStitch are listed here: double-click to open, right-click to show in the Content Browser."))
+			.AutoWrapText(true).ColorAndOpacity(FSlateColor::UseSubduedForeground())
+			.Visibility_Lambda([this]() { return BakedItems.Num() == 0 ? EVisibility::Visible : EVisibility::Collapsed; })
+		]
+		+ SVerticalBox::Slot().FillHeight(1.f)
+		[
+			SAssignNew(BakedList, SListView<TSharedPtr<FSoftObjectPath>>)
+			.ListItemsSource(&BakedItems)
+			.SelectionMode(ESelectionMode::Single)
+			.OnGenerateRow_Lambda([](TSharedPtr<FSoftObjectPath> Item, const TSharedRef<STableViewBase>& Owner) -> TSharedRef<ITableRow>
+			{
+				return SNew(STableRow<TSharedPtr<FSoftObjectPath>>, Owner)
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight().Padding(4.f, 2.f, 4.f, 0.f)[SNew(STextBlock).Text(FText::FromString(Item->GetAssetName())).Font(FAppStyle::GetFontStyle("BoldFont"))]
+					+ SVerticalBox::Slot().AutoHeight().Padding(4.f, 0.f, 4.f, 2.f)[SNew(STextBlock).Text(FText::FromString(Item->GetLongPackageName())).ColorAndOpacity(FSlateColor::UseSubduedForeground())]
+				];
+			})
+			.OnMouseButtonDoubleClick_Lambda([](TSharedPtr<FSoftObjectPath> Item)
+			{
+				// Opens in the Animation editor.
+				if (UObject* Object = Item.IsValid() ? Item->TryLoad() : nullptr)
+				{
+					if (GEditor) { GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(Object); }
+				}
+			})
+			.OnContextMenuOpening_Lambda([this]() -> TSharedPtr<SWidget>
+			{
+				const TArray<TSharedPtr<FSoftObjectPath>> Selected = BakedList->GetSelectedItems();
+				if (Selected.Num() == 0) { return nullptr; }
+				const FSoftObjectPath Path = *Selected[0];
+				FMenuBuilder Menu(true, nullptr);
+				Menu.AddMenuEntry(LOCTEXT("ShowInContentBrowser", "Show in Content Browser"), FText::GetEmpty(), FSlateIcon(),
+					FUIAction(FExecuteAction::CreateLambda([Path]()
+					{
+						if (UObject* Object = Path.TryLoad())
+						{
+							if (GEditor) { GEditor->SyncBrowserToObjects(TArray<UObject*>{ Object }); }
+						}
+					})));
+				return Menu.MakeWidget();
+			})
+		];
 }
 
 FText SAnimStitchPanel::GetTabTitle() const
