@@ -7,6 +7,23 @@
 #include "PropertyCustomizationHelpers.h"
 #include "Framework/Notifications/NotificationManager.h"
 #include "Widgets/Notifications/SNotificationList.h"
+#include "AnimStitchAssetTypes.h"
+#include "SAnimStitchHoverPreview.h"
+#include "AnimStitchFootLock.h"
+#include "Widgets/SToolTip.h"
+#include "SAnimStitchBatchDialog.h"
+#include "SAnimStitchBakeDialog.h"
+#include "SAnimStitchFootLockSettings.h"
+#include "ScopedTransaction.h"
+#include "Widgets/Input/SComboButton.h"
+#include "AssetToolsModule.h"
+#include "IAssetTools.h"
+#include "FileHelpers.h"
+#include "Editor.h"
+#include "Subsystems/AssetEditorSubsystem.h"
+#include "Framework/MultiBox/MultiBoxBuilder.h"
+#include "Misc/MessageDialog.h"
+#include "Misc/PackageName.h"
 #include "ContentBrowserModule.h"
 #include "IContentBrowserSingleton.h"
 #include "Widgets/Layout/SBox.h"
@@ -62,7 +79,15 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 			];
 	};
 
-	auto TimelineButton = [this](const FText& Label, const FText& Tip, TFunction<void()> OnClick)
+	auto AssetButton = [](const FText& Label, const FText& Tip, TFunction<void()> OnClick)
+	{
+		return SNew(SButton)
+			.Text(Label)
+			.ToolTipText(Tip)
+			.OnClicked_Lambda([OnClick]() { OnClick(); return FReply::Handled(); });
+	};
+
+	auto TimelineButton =[this](const FText& Label, const FText& Tip, TFunction<void()> OnClick)
 	{
 		return SNew(SButton)
 			.Text(Label)
@@ -84,6 +109,11 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 			[
 				SAssignNew(Viewport, SAnimStitchViewport).Preview(Preview)
 			]
+			+ SOverlay::Slot().HAlign(HAlign_Right).VAlign(VAlign_Top).Padding(10.f)
+			[
+				ToggleButton(LOCTEXT("Grid", "Grid"), LOCTEXT("GridTip", "Show or hide the ground grid"),
+					[this]() { return Preview->GetShowGrid(); }, [this](bool b) { Preview->SetShowGrid(b); })
+			]
 			+ SOverlay::Slot().HAlign(HAlign_Left).VAlign(VAlign_Top).Padding(10.f)
 			[
 				SNew(SBorder).BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder")).Padding(6.f)
@@ -97,6 +127,80 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 		[
 			SNew(SVerticalBox)
 			+ SVerticalBox::Slot().AutoHeight().Padding(6.f, 6.f, 6.f, 2.f)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+				[
+					AssetButton(LOCTEXT("NewTimeline", "New"), LOCTEXT("NewTimelineTip", "Start a new, empty timeline"), [this]() { NewTimeline(); })
+				]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+				[
+					AssetButton(LOCTEXT("OpenTimeline", "Open..."), LOCTEXT("OpenTimelineTip", "Open a saved AnimStitch timeline asset"), [this]() { OpenFromDisk(); })
+				]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+				[
+					AssetButton(LOCTEXT("SaveTimeline", "Save"), LOCTEXT("SaveTimelineTip", "Save the timeline as an asset (Ctrl+S)"), [this]() { Save(); })
+				]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+				[
+					AssetButton(LOCTEXT("SaveTimelineAs", "Save As..."), LOCTEXT("SaveTimelineAsTip", "Save a copy of the timeline as a new asset"), [this]() { SaveAs(); })
+				]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+				[
+					AssetButton(LOCTEXT("BakeSingle", "Bake..."), LOCTEXT("BakeSingleTip", "Bake the timeline to a single animation sequence"), [this]() { OpenBake(); })
+				]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 14, 0)
+				[
+					AssetButton(LOCTEXT("BatchBake", "Batch Bake..."), LOCTEXT("BatchBakeTip", "Use this timeline as a template and bake it over many source clips"), [this]() { OpenBatch(); })
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 14, 0)
+					[
+						SNew(STextBlock).Text(this, &SAnimStitchPanel::GetAssetLabel)
+					]
+					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+					[
+						ToggleButton(LOCTEXT("PredictFeet", "Predict Feet (experimental)"),
+							LOCTEXT("PredictFeetTip", "EXPERIMENTAL. Makes crossfades plant-aware: plants are detected on each source clip on its own, then inside every crossfade the outgoing clip's planted feet are held and the feet settle onto the incoming clip's stance. The pelvis is never moved. Works with Foot Lock (prediction first, Foot Lock cleans up). Uses the foot bones and thresholds from the Foot Lock settings."),
+							[this]() { return Asset->Timeline.bPredictFeet; },
+							[this](bool bOn)
+							{
+								const FScopedTransaction Tx(LOCTEXT("PredictFeetTx", "Toggle Predict Feet"));
+								Asset->SetPredictFeet(bOn);
+							})
+					]
+					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 2, 0)
+					[
+						ToggleButton(LOCTEXT("FootLock", "Foot Lock"),
+							LOCTEXT("FootLockToggleTip", "Pin planted feet (and manually locked feet) in the preview and in every bake. Settings are in the dropdown."),
+							[this]() { return Asset->Timeline.FootLock.bEnabled; },
+							[this](bool bOn)
+							{
+								FAnimStitchFootLockSettings Settings = Asset->Timeline.FootLock;
+								Settings.bEnabled = bOn;
+								const FScopedTransaction Tx(LOCTEXT("FootLockToggleTx", "Toggle Foot Lock"));
+								Asset->SetFootLockSettings(Settings);
+							})
+					]
+					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 2, 0)
+					[
+						SNew(SComboButton)
+						.HasDownArrow(true)
+						.ToolTipText(LOCTEXT("FootLockSettingsTip", "Foot lock settings: foot bones, ground height, plant detection"))
+						.ButtonContent()[SNew(STextBlock).Text(LOCTEXT("FootLockSettingsLabel", "Settings"))]
+						.OnGetMenuContent_Lambda([this]() -> TSharedRef<SWidget>
+						{
+							return SNew(SBox).MinDesiredWidth(600.f).Padding(10.f)
+							[
+								SNew(SAnimStitchFootLockSettings).Timeline(Asset)
+							];
+						})
+					]
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(6.f, 2.f, 6.f, 2.f)
 			[
 				SNew(SHorizontalBox)
 				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
@@ -195,7 +299,7 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 				[
 					SAssignNew(Timeline, SAnimStitchTimeline)
 					.TimelineAsset(Asset)
-					.OnPlayheadChanged(FSimpleDelegate::CreateSP(this, &SAnimStitchPanel::Pause)) // scrubbing stops playback
+					.OnPlayheadChanged(FSimpleDelegate::CreateSP(this, &SAnimStitchPanel::OnTimelineScrubbed))
 					.OnWarnings(FAnimStitchWarningsDelegate::CreateSP(this, &SAnimStitchPanel::HandleWarnings))
 				]
 			]
@@ -210,7 +314,7 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 			SNew(SVerticalBox)
 			+ SVerticalBox::Slot().AutoHeight().Padding(6.f, 6.f, 6.f, 2.f)
 			[
-				SNew(STextBlock).Text(LOCTEXT("BrowserTitle", "Animation Sequences")).Font(FAppStyle::GetFontStyle("BoldFont"))
+				SNew(STextBlock).Text(LOCTEXT("BrowserTitle", "Content Browser")).Font(FAppStyle::GetFontStyle("BoldFont"))
 			]
 			+ SVerticalBox::Slot().FillHeight(1.f)
 			[
@@ -247,6 +351,8 @@ EActiveTimerReturnType SAnimStitchPanel::UpdatePreview(double CurrentTime, float
 	{
 		SyncPreviewToTimeline();
 	}
+	Timeline->ApplyPendingZoomFit();
+	UpdatePlantLanes(CurrentTime);
 
 	const USkeleton* MeshSkeleton = Preview->GetMesh() ? Preview->GetMesh()->GetSkeleton() : nullptr;
 	if (BrowserSkeleton.Get() != MeshSkeleton)
@@ -292,6 +398,241 @@ void SAnimStitchPanel::SyncPreviewToTimeline()
 	Preview->SetPlayhead(LastPlayhead);
 }
 
+void SAnimStitchPanel::UpdatePlantLanes(double Now)
+{
+	if (!Asset->Timeline.FootLock.bEnabled && !Asset->Timeline.bPredictFeet)
+	{
+		Preview->ClearCorrectedPoses();
+		if (PlantData.IsValid())
+		{
+			PlantData.Reset();
+			Timeline->SetPlants(nullptr);
+		}
+		PlantCounter = MAX_uint32;
+		return;
+	}
+
+	// Re-detect shortly after the last edit, so dragging stays smooth.
+	if (Asset->GetEditCounter() != PlantCounter)
+	{
+		PlantCounter = Asset->GetEditCounter();
+		PlantDirtyAt = Now;
+		bPlantDirty = true;
+	}
+	if (!bPlantDirty || Now - PlantDirtyAt < 0.25)
+	{
+		return;
+	}
+	bPlantDirty = false;
+
+	constexpr double AnalysisFps = 30.0;
+	TSharedRef<FAnimStitchFootLockResult> Result = MakeShared<FAnimStitchFootLockResult>();
+	if (const FAnimStitchEvaluator* Evaluator = Preview->GetEvaluator())
+	{
+		const int32 NumFrames = FMath::RoundToInt(Evaluator->GetTimeline().GetTotalLength() * AnalysisFps) + 1;
+		TArray<TArray<FTransform>> Poses;
+		Poses.SetNum(NumFrames);
+		for (int32 f = 0; f < NumFrames; ++f)
+		{
+			Evaluator->EvaluatePose(f / AnalysisFps, Poses[f]);
+		}
+		// The same passes, in the same order, as the bake (what you see is what bakes).
+		bool bOk = true;
+		if (Evaluator->GetTimeline().bPredictFeet)
+		{
+			const FAnimStitchPredictReport Report = FAnimStitchFootLock::PredictFeet(*Evaluator, Poses, AnalysisFps);
+			if (!Report.bValid)
+			{
+				Result->Problem = Report.Problem;
+				bOk = false;
+			}
+		}
+		if (bOk && Evaluator->GetTimeline().FootLock.bEnabled)
+		{
+			*Result = FAnimStitchFootLock::Detect(*Evaluator, Poses, AnalysisFps);
+			if (Result->bValid)
+			{
+				FAnimStitchFootLock::Pin(*Evaluator, Poses, *Result);
+			}
+			else
+			{
+				bOk = false;
+			}
+		}
+		if (bOk)
+		{
+			Preview->SetCorrectedPoses(MoveTemp(Poses), AnalysisFps);
+		}
+		else
+		{
+			Preview->ClearCorrectedPoses();
+		}
+	}
+	else
+	{
+		Result->Problem = LOCTEXT("PlantNoTimeline", "Add clips to see foot plants.");
+	}
+	PlantData = Result;
+	Timeline->SetPlants(Asset->Timeline.FootLock.bEnabled ? TSharedPtr<const FAnimStitchFootLockResult>(Result) : nullptr);
+}
+
+void SAnimStitchPanel::SetAsset(UAnimStitchTimelineAsset* NewAsset)
+{
+	if (!NewAsset || NewAsset == Asset)
+	{
+		return;
+	}
+	bPlaying = false;
+	Asset = NewAsset;
+	Timeline->SetTimelineAsset(NewAsset);
+	LastEditCounter = MAX_uint32; // forces a re-sync next tick
+	LastSkeleton = nullptr;
+	LastWarning = FText::GetEmpty();
+	Timeline->RequestZoomToFit();
+}
+
+void SAnimStitchPanel::OnTimelineScrubbed()
+{
+	// Scrubbing stops playback and poses the character right away, instead of waiting for the next UI tick.
+	Pause();
+	LastPlayhead = Timeline->GetPlayhead();
+	Preview->SetPlayhead(LastPlayhead);
+}
+
+void SAnimStitchPanel::OpenFromDisk()
+{
+	FContentBrowserModule& ContentBrowser = FModuleManager::LoadModuleChecked<FContentBrowserModule>("ContentBrowser");
+	FOpenAssetDialogConfig Config;
+	Config.DialogTitleOverride = LOCTEXT("OpenTimelineTitle", "Open AnimStitch Timeline");
+	Config.DefaultPath = Asset->GetOutermost() == GetTransientPackage() ? FString(TEXT("/Game")) : FPackageName::GetLongPackagePath(Asset->GetOutermost()->GetName());
+	Config.AssetClassNames.Add(UAnimStitchTimelineAsset::StaticClass()->GetClassPathName());
+	Config.bAllowMultipleSelection = false;
+	const TWeakPtr<SAnimStitchPanel> WeakPanel = SharedThis(this);
+	ContentBrowser.Get().CreateOpenAssetDialog(Config,
+		FOnAssetsChosenForOpen::CreateLambda([WeakPanel](const TArray<FAssetData>& Chosen)
+		{
+			if (const TSharedPtr<SAnimStitchPanel> Panel = WeakPanel.Pin())
+			{
+				if (Chosen.Num() > 0)
+				{
+					Panel->SetAsset(Cast<UAnimStitchTimelineAsset>(Chosen[0].GetAsset()));
+				}
+			}
+		}),
+		FOnAssetDialogCancelled());
+}
+
+TSharedPtr<SWidget> SAnimStitchPanel::OnGetAssetContextMenu(const TArray<FAssetData>& Selected)
+{
+	const TArray<FAssetData> Assets = Selected;
+	FMenuBuilder Menu(true, nullptr);
+	Menu.AddMenuEntry(LOCTEXT("CbAddToTimeline", "Add to Timeline"), LOCTEXT("CbAddToTimelineTip", "Append the selected animation sequences to the timeline"),
+		FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, Assets]()
+		{
+			TArray<UAnimSequence*> Sequences;
+			for (const FAssetData& Data : Assets)
+			{
+				if (UAnimSequence* Seq = Cast<UAnimSequence>(Data.GetAsset())) { Sequences.Add(Seq); }
+			}
+			Timeline->AddSequencesToEnd(Sequences);
+		})));
+	Menu.AddMenuEntry(LOCTEXT("CbOpenEditor", "Open in Animation Editor"), LOCTEXT("CbOpenEditorTip", "Open the animation sequence in the animation editor"),
+		FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([Assets]()
+		{
+			if (GEditor)
+			{
+				if (UAssetEditorSubsystem* Subsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
+				{
+					for (const FAssetData& Data : Assets) { Subsystem->OpenEditorForAsset(Data.GetAsset()); }
+				}
+			}
+		})));
+	Menu.AddMenuEntry(LOCTEXT("CbBrowse", "Browse to Asset"), LOCTEXT("CbBrowseTip", "Show the asset in the main Content Browser"),
+		FSlateIcon(FAppStyle::GetAppStyleSetName(), "SystemWideCommands.FindInContentBrowser"),
+		FUIAction(FExecuteAction::CreateLambda([Assets]()
+		{
+			if (GEditor)
+			{
+				TArray<FAssetData> ToSync = Assets;
+				GEditor->SyncBrowserToObjects(ToSync);
+			}
+		})));
+	return Menu.MakeWidget();
+}
+
+FText SAnimStitchPanel::GetAssetLabel() const
+{
+	if (Asset->GetOutermost() == GetTransientPackage())
+	{
+		return LOCTEXT("Untitled", "Untitled timeline (not saved)");
+	}
+	return FText::Format(LOCTEXT("AssetLabel", "{0}{1}"), FText::FromString(Asset->GetName()), Asset->GetOutermost()->IsDirty() ? FText::FromString(TEXT("*")) : FText::GetEmpty());
+}
+
+void SAnimStitchPanel::NewTimeline()
+{
+	if (Asset->GetOutermost() == GetTransientPackage() && Asset->Timeline.Clips.Num() > 0
+		&& FMessageDialog::Open(EAppMsgType::YesNo, LOCTEXT("DiscardUntitled", "The current timeline has not been saved. Discard it and start a new one?")) != EAppReturnType::Yes)
+	{
+		return;
+	}
+	SetAsset(NewObject<UAnimStitchTimelineAsset>(GetTransientPackage(), NAME_None, RF_Transactional));
+}
+
+void SAnimStitchPanel::Save()
+{
+	if (Asset->GetOutermost() == GetTransientPackage())
+	{
+		SaveAs();
+		return;
+	}
+	FEditorFileUtils::PromptForCheckoutAndSave({ Asset->GetOutermost() }, false, false);
+}
+
+void SAnimStitchPanel::SaveAs()
+{
+	FAssetToolsModule& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
+	UAnimStitchTimelineFactory* Factory = NewObject<UAnimStitchTimelineFactory>();
+	const FString Folder = Asset->GetOutermost() == GetTransientPackage() ? FString(TEXT("/Game")) : FPackageName::GetLongPackagePath(Asset->GetOutermost()->GetName());
+	UAnimStitchTimelineAsset* Created = Cast<UAnimStitchTimelineAsset>(AssetTools.Get().CreateAssetWithDialog(TEXT("NewAnimStitchTimeline"), Folder, UAnimStitchTimelineAsset::StaticClass(), Factory));
+	if (!Created)
+	{
+		return; // cancelled
+	}
+	Created->Timeline = Asset->Timeline;
+	Created->PlaybackStart = Asset->PlaybackStart;
+	Created->PlaybackEnd = Asset->PlaybackEnd;
+	Created->MarkPackageDirty();
+	SetAsset(Created);
+	FEditorFileUtils::PromptForCheckoutAndSave({ Created->GetOutermost() }, false, false);
+}
+
+void SAnimStitchPanel::OpenBake()
+{
+	const UAnimStitchSettings* Settings = GetDefault<UAnimStitchSettings>();
+	const bool bUntitled = Asset->GetOutermost() == GetTransientPackage();
+	FString Folder = Settings->DefaultOutputPath.Path;
+	if (Folder.IsEmpty())
+	{
+		Folder = bUntitled ? FString(TEXT("/Game")) : FPackageName::GetLongPackagePath(Asset->GetOutermost()->GetName());
+	}
+	FString BaseName = bUntitled ? FString(TEXT("Merged")) : Asset->GetName();
+	BaseName.RemoveFromStart(TEXT("TL_"));
+	SAnimStitchBakeDialog::Show(Asset, Folder, TEXT("AS_") + BaseName, Settings->DefaultFrameRate);
+}
+
+void SAnimStitchPanel::OpenBatch()
+{
+	FString Folder = GetDefault<UAnimStitchSettings>()->DefaultOutputPath.Path;
+	if (Folder.IsEmpty())
+	{
+		Folder = Asset->GetOutermost() == GetTransientPackage() ? FString(TEXT("/Game")) : FPackageName::GetLongPackagePath(Asset->GetOutermost()->GetName());
+	}
+	SAnimStitchBatchDialog::Show(Asset,
+		[this]() { return BrowserSelectionDelegate.IsBound() ? BrowserSelectionDelegate.Execute() : TArray<FAssetData>(); },
+		Folder, GetDefault<UAnimStitchSettings>()->DefaultFrameRate);
+}
+
 void SAnimStitchPanel::RebuildSequenceBrowser()
 {
 	USkeleton* Skeleton = Preview->GetMesh() ? Preview->GetMesh()->GetSkeleton() : nullptr;
@@ -311,13 +652,40 @@ void SAnimStitchPanel::RebuildSequenceBrowser()
 	Config.Filter.ClassPaths.Add(UAnimSequence::StaticClass()->GetClassPathName());
 	Config.Filter.bRecursiveClasses = true;
 	Config.Filter.TagsAndValues.Add(FName("Skeleton"), FAssetData(Skeleton).GetExportTextName());
-	Config.InitialAssetViewType = EAssetViewType::List;
+	Config.InitialAssetViewType = EAssetViewType::Tile; // thumbnails; hovering shows the standard asset tooltip with a live preview
+	Config.bCanShowRealTimeThumbnails = true;
+	Config.OnIsAssetValidForCustomToolTip = FOnIsAssetValidForCustomToolTip::CreateLambda([](FAssetData& Data)
+	{
+		return Data.GetClass() && Data.GetClass()->IsChildOf(UAnimSequence::StaticClass());
+	});
+	Config.OnGetCustomAssetToolTip = FOnGetCustomAssetToolTip::CreateLambda([this](FAssetData& Data)
+	{
+		return SNew(SToolTip)
+		[
+			SNew(SAnimStitchHoverPreview)
+			.Sequence(Cast<UAnimSequence>(Data.GetAsset()))
+			.Mesh(Preview->GetMesh())
+			.PackageName(Data.PackageName.ToString())
+		];
+	});
+	Config.OnGetAssetContextMenu =FOnGetAssetContextMenu::CreateSP(this, &SAnimStitchPanel::OnGetAssetContextMenu);
+	Config.OnAssetDoubleClicked = FOnAssetDoubleClicked::CreateLambda([](const FAssetData& Data)
+	{
+		if (GEditor)
+		{
+			if (UAssetEditorSubsystem* Subsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
+			{
+				Subsystem->OpenEditorForAsset(Data.GetAsset());
+			}
+		}
+	});
 	Config.bAllowNullSelection = false;
 	Config.bFocusSearchBoxWhenOpened = false;
 	Config.bCanShowFolders = false;
 	Config.bAllowDragging = true; // drag a sequence onto the timeline
 	Config.SelectionMode = ESelectionMode::Multi;
-	Config.AssetShowWarningText = LOCTEXT("BrowserEmpty", "No animation sequences use this skeleton.");
+	Config.GetCurrentSelectionDelegates.Add(&BrowserSelectionDelegate);
+	Config.AssetShowWarningText =LOCTEXT("BrowserEmpty", "No animation sequences use this skeleton.");
 
 	FContentBrowserModule& ContentBrowser = FModuleManager::LoadModuleChecked<FContentBrowserModule>("ContentBrowser");
 	BrowserBox->SetContent(ContentBrowser.Get().CreateAssetPicker(Config));
@@ -363,6 +731,16 @@ void SAnimStitchPanel::TogglePlayback()
 
 FReply SAnimStitchPanel::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
 {
+	if (InKeyEvent.GetKey() == EKeys::Enter && !InKeyEvent.IsRepeat())
+	{
+		Timeline->ZoomToFit();
+		return FReply::Handled();
+	}
+	if (InKeyEvent.GetKey() == EKeys::S && InKeyEvent.IsControlDown() && !InKeyEvent.IsRepeat())
+	{
+		Save();
+		return FReply::Handled();
+	}
 	if (InKeyEvent.GetKey() == EKeys::SpaceBar && !InKeyEvent.IsRepeat())
 	{
 		TogglePlayback();
@@ -482,5 +860,9 @@ ECheckBoxState SAnimStitchPanel::GetCurveState(EAnimStitchBlendCurve Curve) cons
 }
 
 #undef LOCTEXT_NAMESPACE
+
+
+
+
 
 

@@ -6,6 +6,19 @@
 #include "AnimStitchTimeline.h"
 #include "AnimStitchSettings.generated.h"
 
+/** Foot bones remembered for one skeleton (used by the foot lock pass). */
+USTRUCT()
+struct ANIMSTITCHEDITOR_API FAnimStitchFootBones
+{
+	GENERATED_BODY()
+
+	UPROPERTY(config, EditAnywhere, Category = "Foot Lock")
+	FName Left;
+
+	UPROPERTY(config, EditAnywhere, Category = "Foot Lock")
+	FName Right;
+};
+
 /** Per-user AnimStitch settings (Editor Preferences > Plugins > AnimStitch). */
 UCLASS(config = EditorPerProjectUserSettings, meta = (DisplayName = "AnimStitch"))
 class ANIMSTITCHEDITOR_API UAnimStitchSettings : public UDeveloperSettings
@@ -32,6 +45,10 @@ public:
 	/** Blend curve applied to new crossfades. */
 	UPROPERTY(config, EditAnywhere, Category = "Timeline")
 	EAnimStitchBlendCurve DefaultCrossfadeCurve = EAnimStitchBlendCurve::Smoothstep;
+
+	/** Foot bones chosen in the Bake window, remembered per skeleton (key = skeleton asset path). */
+	UPROPERTY(config, EditAnywhere, Category = "Foot Lock")
+	TMap<FString, FAnimStitchFootBones> FootBonesBySkeleton;
 
 	virtual FName GetCategoryName() const override { return TEXT("Plugins"); }
 };

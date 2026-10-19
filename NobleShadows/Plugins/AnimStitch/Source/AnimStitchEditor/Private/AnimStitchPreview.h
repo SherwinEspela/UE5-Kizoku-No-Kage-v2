@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "UObject/GCObject.h"
@@ -35,6 +35,21 @@ public:
 
 	void SetShowGhosts(bool bShow);
 	void SetShowRootPath(bool bShow);
+	void SetShowGrid(bool bShow) { bShowGrid = bShow; }
+	bool GetShowGrid() const { return bShowGrid; }
+
+	/**
+	 * Foot-lock-corrected poses sampled at Fps for the whole timeline (same Detect + Pin pass the bake uses).
+	 * While set, the viewport plays these instead of the raw blend, so what you see is what bakes.
+	 */
+	void SetCorrectedPoses(TArray<TArray<FTransform>>&& Poses, double Fps);
+	void ClearCorrectedPoses();
+
+	/** Hover previews keep the character in place by removing the root's horizontal travel. */
+	void SetPinRootInPlace(bool bPin) { bPinRoot = bPin; }
+
+	/** The evaluator for the current timeline, or null when the timeline is empty or invalid. */
+	const FAnimStitchEvaluator* GetEvaluator() const { return bEvaluatorValid ? &Evaluator : nullptr; }
 
 	/** Empty when everything is fine; otherwise a user-facing reason nothing is shown. */
 	FText GetProblem() const { return Problem; }
@@ -64,6 +79,11 @@ private:
 	double Playhead = 0.0;
 	bool bShowGhosts = false;
 	bool bShowRootPath = false;
+	bool bShowGrid = true;
+	bool bPinRoot = false;
+
+	TArray<TArray<FTransform>> CorrectedPoses;
+	double CorrectedFps = 30.0;
 
 	TArray<FVector> TrajectoryPoints;
 	/** One pose per ghost component (outgoing, incoming, outgoing, ...). */
@@ -101,3 +121,4 @@ private:
 	TSharedPtr<FAnimStitchPreview> Preview;
 	TSharedPtr<FAnimStitchViewportClient> Client;
 };
+

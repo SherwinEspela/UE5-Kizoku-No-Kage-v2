@@ -1,3 +1,4 @@
+#include "AnimStitchEditorModule.h"
 #include "Modules/ModuleManager.h"
 #include "Framework/Docking/TabManager.h"
 #include "Widgets/Docking/SDockTab.h"
@@ -10,35 +11,44 @@
 
 static const FName AnimStitchTabName("AnimStitch");
 
-class FAnimStitchEditorModule : public IModuleInterface
+TWeakPtr<SAnimStitchPanel> FAnimStitchEditorModule::ActivePanel;
+
+void FAnimStitchEditorModule::StartupModule()
 {
-public:
-	virtual void StartupModule() override
-	{
-		FGlobalTabmanager::Get()->RegisterNomadTabSpawner(AnimStitchTabName, FOnSpawnTab::CreateStatic(&FAnimStitchEditorModule::SpawnTab))
-			.SetDisplayName(LOCTEXT("TabTitle", "AnimStitch"))
-			.SetTooltipText(LOCTEXT("TabTooltip", "Stitch animation clips together on a timeline and bake them to one sequence."))
-			.SetGroup(WorkspaceMenu::GetMenuStructure().GetToolsCategory())
-			.SetIcon(FSlateIcon(FAppStyle::GetAppStyleSetName(), "Persona.AssetActions.CreateAnimAsset"));
-	}
+	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(AnimStitchTabName, FOnSpawnTab::CreateStatic(&FAnimStitchEditorModule::SpawnTab))
+		.SetDisplayName(LOCTEXT("TabTitle", "AnimStitch"))
+		.SetTooltipText(LOCTEXT("TabTooltip", "Stitch animation clips together on a timeline and bake them to one sequence."))
+		.SetGroup(WorkspaceMenu::GetMenuStructure().GetToolsCategory())
+		.SetIcon(FSlateIcon(FAppStyle::GetAppStyleSetName(), "Persona.AssetActions.CreateAnimAsset"));
+}
 
-	virtual void ShutdownModule() override
+void FAnimStitchEditorModule::ShutdownModule()
+{
+	if (FSlateApplication::IsInitialized())
 	{
-		if (FSlateApplication::IsInitialized())
-		{
-			FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(AnimStitchTabName);
-		}
+		FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(AnimStitchTabName);
 	}
+}
 
-private:
-	static TSharedRef<SDockTab> SpawnTab(const FSpawnTabArgs& Args)
+TSharedRef<SDockTab> FAnimStitchEditorModule::SpawnTab(const FSpawnTabArgs& Args)
+{
+	TSharedPtr<SAnimStitchPanel> Panel;
+	TSharedRef<SDockTab> Tab = SNew(SDockTab).TabRole(ETabRole::NomadTab)
+	[
+		SAssignNew(Panel, SAnimStitchPanel)
+	];
+	ActivePanel = Panel;
+	return Tab;
+}
+
+void FAnimStitchEditorModule::OpenTimelineAsset(UAnimStitchTimelineAsset* Timeline)
+{
+	FGlobalTabmanager::Get()->TryInvokeTab(AnimStitchTabName);
+	if (const TSharedPtr<SAnimStitchPanel> Panel = ActivePanel.Pin())
 	{
-		return SNew(SDockTab).TabRole(ETabRole::NomadTab)
-		[
-			SNew(SAnimStitchPanel)
-		];
+		Panel->SetAsset(Timeline);
 	}
-};
+}
 
 IMPLEMENT_MODULE(FAnimStitchEditorModule, AnimStitchEditor)
 

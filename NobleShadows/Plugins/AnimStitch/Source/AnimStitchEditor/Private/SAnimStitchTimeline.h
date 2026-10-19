@@ -4,6 +4,7 @@
 #include "Widgets/SLeafWidget.h"
 #include "EditorUndoClient.h"
 #include "AnimStitchTimelineAsset.h"
+#include "AnimStitchFootLock.h"
 
 class FScopedTransaction;
 
@@ -32,6 +33,33 @@ public:
 	void SetSelectedBlendCurve(EAnimStitchBlendCurve Curve);
 	void ZoomToFit();
 
+	/** Latest foot-lock analysis shown in the plant lanes (null = none). */
+	void SetPlants(TSharedPtr<const FAnimStitchFootLockResult> InPlants) { Plants = InPlants; }
+
+	/** Appends sequences (skeleton-checked, undoable) and zooms to fit. Used by the Content Browser panel. */
+	void AddSequencesToEnd(const TArray<UAnimSequence*>& Sequences) { AddSequencesAt(Sequences, INDEX_NONE); }
+
+	/** Zoom to fit as soon as the widget has a real size (safe to call right after creating or loading). */
+	void RequestZoomToFit() { bPendingZoomFit = true; }
+	void ApplyPendingZoomFit()
+	{
+		if (bPendingZoomFit && GetTickSpaceGeometry().GetLocalSize().X > 100.f)
+		{
+			ZoomToFit();
+			bPendingZoomFit = false;
+		}
+	}
+
+	/** Points the widget at another timeline asset (New / Open). Resets selection and playhead. */
+	void SetTimelineAsset(UAnimStitchTimelineAsset* NewAsset)
+	{
+		Asset = NewAsset;
+		SelectedClip = INDEX_NONE;
+		bOverlapSelected = false;
+		Playhead = 0.0;
+		OnSelectionChangedDelegate.ExecuteIfBound();
+	}
+
 	// Cut commands act on the playhead: the selected clip if the playhead is inside it, else the topmost clip there.
 	bool CanEditAtPlayhead() const { return FindCutTarget() != INDEX_NONE; }
 	void SplitAtPlayhead();
@@ -43,7 +71,7 @@ public:
 
 	// SWidget
 	virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const override;
-	virtual FVector2D ComputeDesiredSize(float) const override { return FVector2D(400.0, 110.0); }
+	virtual FVector2D ComputeDesiredSize(float) const override { return FVector2D(400.0, 140.0); }
 	virtual bool SupportsKeyboardFocus() const override { return true; }
 	virtual FReply OnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override;
 	virtual FReply OnMouseButtonUp(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override;
@@ -61,14 +89,21 @@ public:
 	virtual void PostRedo(bool bSuccess) override { ClampSelection(); }
 
 private:
-	enum class EHit : uint8 { None, Ruler, Body, TrimLeft, TrimRight, Overlap, MarkerStart, MarkerEnd };
+	enum class EHit : uint8 { None, Ruler, Body, TrimLeft, TrimRight, Overlap, MarkerStart, MarkerEnd, FootLane };
 	struct FHit
 	{
 		EHit Type = EHit::None;
 		int32 Index = INDEX_NONE;
 	};
-	enum class EDrag : uint8 { None, Scrub, Move, TrimLeft, TrimRight, Overlap, Pan, MarkerStart, MarkerEnd };
+	enum class EDrag : uint8 { None, Scrub, Move, TrimLeft, TrimRight, Overlap, Pan, MarkerStart, MarkerEnd, FootLane };
 
+	void AddSequencesAt(const TArray<UAnimSequence*>& Sequences, int32 Index);
+	bool bPendingZoomFit = false;
+	bool IsFootLaneVisible() const { return Asset->Timeline.FootLock.bEnabled; }
+	float GetLaneTop(int32 Foot) const { return RulerHeight + 4.f + Foot * (LaneHeight + 2.f); }
+	float GetTrackTop() const { return RulerHeight + 8.f + (IsFootLaneVisible() ? 2.f * (LaneHeight + 2.f) + 2.f : 0.f); }
+	void ToggleFootPlantAt(int32 Foot, double Time);
+	void OpenFootLaneMenu(const FPointerEvent& Event, int32 Foot, double Time);
 	int32 FindCutTarget() const;
 	void BrowseToSelectedAsset();
 	void OpenContextMenu(const FPointerEvent& Event);
@@ -82,7 +117,7 @@ private:
 	int32 TimeToInsertIndex(double Time) const;
 
 	static constexpr float RulerHeight = 24.f;
-	static constexpr float TrackTop = 32.f;
+	static constexpr float LaneHeight = 10.f;
 	static constexpr float TrackHeight = 64.f;
 	static constexpr float HandleWidth = 7.f;
 
@@ -112,9 +147,17 @@ private:
 	double InitialViewStart = 0.0;
 	TUniquePtr<FScopedTransaction> DragTransaction;
 
+	// Foot lane drag
+	int32 DragFoot = 0;
+	double FootDragStartTime = 0.0;
+	double FootDragCurTime = 0.0;
+	TSharedPtr<const FAnimStitchFootLockResult> Plants;
+
 	// Drop feedback
 	bool bDropHover = false;
 	double DropTime = 0.0;
 };
+
+
 
 

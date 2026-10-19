@@ -4,6 +4,7 @@
 #include "Widgets/SCompoundWidget.h"
 #include "UObject/GCObject.h"
 #include "AnimStitchTimelineAsset.h"
+#include "ContentBrowserDelegates.h"
 
 class SAnimStitchTimeline;
 class SAnimStitchViewport;
@@ -23,9 +24,29 @@ public:
 	virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
 	virtual FString GetReferencerName() const override { return TEXT("SAnimStitchPanel"); }
 
+	/** Loads another timeline asset into the panel (Open). */
+	void SetAsset(UAnimStitchTimelineAsset* NewAsset);
+
 	virtual FReply OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent) override;
 
 private:
+	void UpdatePlantLanes(double Now);
+	TSharedPtr<struct FAnimStitchFootLockResult> PlantData;
+	uint32 PlantCounter = MAX_uint32;
+	double PlantDirtyAt = 0.0;
+	bool bPlantDirty = false;
+
+	void OnTimelineScrubbed();
+	void OpenFromDisk();
+	TSharedPtr<SWidget> OnGetAssetContextMenu(const TArray<FAssetData>& Selected);
+	void NewTimeline();
+	void Save();
+	void SaveAs();
+	void OpenBatch();
+	void OpenBake();
+	FText GetAssetLabel() const;
+	FGetCurrentSelectionDelegate BrowserSelectionDelegate;
+
 	/** Fills the right-hand browser with the animation sequences of the preview mesh's skeleton. */
 	void RebuildSequenceBrowser();
 	TSharedPtr<class SBox> BrowserBox;

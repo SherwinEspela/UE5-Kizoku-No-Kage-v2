@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
@@ -9,7 +9,7 @@
  * Transactional container for a timeline. Every mutator calls Modify(), so edits made inside an
  * FScopedTransaction are undoable. (Phase 4 turns this into a saveable project asset.)
  */
-UCLASS()
+UCLASS(BlueprintType)
 class ANIMSTITCHEDITOR_API UAnimStitchTimelineAsset : public UObject
 {
 	GENERATED_BODY()
@@ -50,6 +50,19 @@ public:
 	void SetOverlap(int32 Index, double NewOverlap);
 	void SetTrim(int32 Index, double NewTrimIn, double NewTrimOut);
 	void SetBlendCurve(int32 Index, EAnimStitchBlendCurve Curve);
+	void SetBatchSlot(int32 Index, bool bBatchSlot);
+
+	void SetFootLockSettings(const FAnimStitchFootLockSettings& Settings);
+	void SetPredictFeet(bool bPredict);
+	/** Adds a manual foot event at a timeline time (replacing an event at the same moment). It applies from there forward. */
+	void AddFootEvent(int32 Foot, double TimelineTime, EAnimStitchFootAction Action);
+	/** Drag-paint: Lock at TimelineStart and an explicit Unlock at TimelineEnd; events in between are replaced. */
+	void PaintFootLock(int32 Foot, double TimelineStart, double TimelineEnd);
+	/** Removes all manual events for one foot (0/1) or both (INDEX_NONE): back to automatic detection. */
+	void ClearFootEvents(int32 Foot);
+	/** Gives clip Index a crossfade of the plugin-settings default length (clamped to what fits). */
+	void AddDefaultCrossfade(int32 Index);
+	void SetRootAuthority(int32 Index);
 
 	/** True if TimelineTime lies inside clip Index with at least the minimum clip length left on both sides. */
 	bool CanCutClipAt(int32 Index, double TimelineTime) const;
@@ -69,3 +82,5 @@ private:
 
 	uint32 EditCounter = 0;
 };
+
+

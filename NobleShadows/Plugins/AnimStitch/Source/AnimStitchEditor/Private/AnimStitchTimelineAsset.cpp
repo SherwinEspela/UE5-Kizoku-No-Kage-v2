@@ -1,4 +1,5 @@
 ﻿#include "AnimStitchTimelineAsset.h"
+#include "AnimStitchSettings.h"
 #include "Animation/AnimData/IAnimationDataModel.h"
 #include "Animation/Skeleton.h"
 
@@ -64,6 +65,7 @@ int32 UAnimStitchTimelineAsset::AddSequences(const TArray<UAnimSequence*>& Seque
 		Clip.Sequence = Seq;
 		Clip.TrimIn = 0.0;
 		Clip.TrimOut = Seq->GetPlayLength();
+		Clip.BlendIn = GetDefault<UAnimStitchSettings>()->DefaultCrossfadeCurve;
 		Timeline.Clips.Insert(Clip, Index++);
 		++Added;
 	}
@@ -171,6 +173,116 @@ void UAnimStitchTimelineAsset::SetTrim(int32 Index, double NewTrimIn, double New
 	Timeline.Relayout();
 }
 
+void UAnimStitchTimelineAsset::SetPredictFeet(bool bPredict)
+{
+	Touch();
+	Timeline.bPredictFeet = bPredict;
+}
+
+void UAnimStitchTimelineAsset::SetFootLockSettings(const FAnimStitchFootLockSettings& Settings)
+{
+	Touch();
+	Timeline.FootLock = Settings;
+}
+
+namespace
+{
+	double FootEventTime(const FAnimStitchClip& Clip, const FAnimStitchFootEvent& Event)
+	{
+		return Clip.StartTime + (Event.SrcTime - Clip.TrimIn);
+	}
+
+	void RemoveFootEventsIn(FAnimStitchTimeline& Timeline, int32 Foot, double T0, double T1)
+	{
+		for (FAnimStitchClip& Clip : Timeline.Clips)
+		{
+			Clip.FootEvents.RemoveAll([&](const FAnimStitchFootEvent& E)
+			{
+				const double T = FootEventTime(Clip, E);
+				return E.Foot == Foot && T >= T0 && T <= T1;
+			});
+		}
+	}
+
+	void StoreFootEvent(FAnimStitchTimeline& Timeline, int32 Foot, double Time, EAnimStitchFootAction Action)
+	{
+		if (Timeline.Clips.Num() == 0)
+		{
+			return;
+		}
+		// The topmost clip containing the time owns the event; outside every clip, the nearest end clip does.
+		int32 Owner = Time < Timeline.Clips[0].StartTime ? 0 : Timeline.Clips.Num() - 1;
+		for (int32 i = Timeline.Clips.Num() - 1; i >= 0; --i)
+		{
+			if (Time >= Timeline.Clips[i].StartTime && Time <= Timeline.Clips[i].GetEndTime())
+			{
+				Owner = i;
+				break;
+			}
+		}
+		FAnimStitchFootEvent Event;
+		Event.Foot = Foot;
+		Event.SrcTime = Timeline.Clips[Owner].TrimIn + (Time - Timeline.Clips[Owner].StartTime);
+		Event.Action = Action;
+		Timeline.Clips[Owner].FootEvents.Add(Event);
+	}
+}
+
+void UAnimStitchTimelineAsset::AddFootEvent(int32 Foot, double TimelineTime, EAnimStitchFootAction Action)
+{
+	Touch();
+	constexpr double SameMoment = 1.0 / 120.0;
+	RemoveFootEventsIn(Timeline, Foot, TimelineTime - SameMoment, TimelineTime + SameMoment);
+	StoreFootEvent(Timeline, Foot, TimelineTime, Action);
+}
+
+void UAnimStitchTimelineAsset::PaintFootLock(int32 Foot, double TimelineStart, double TimelineEnd)
+{
+	if (TimelineEnd < TimelineStart)
+	{
+		Swap(TimelineStart, TimelineEnd);
+	}
+	Touch();
+	RemoveFootEventsIn(Timeline, Foot, TimelineStart, TimelineEnd);
+	StoreFootEvent(Timeline, Foot, TimelineStart, EAnimStitchFootAction::Lock);
+	StoreFootEvent(Timeline, Foot, TimelineEnd, EAnimStitchFootAction::Unlock);
+}
+
+void UAnimStitchTimelineAsset::ClearFootEvents(int32 Foot)
+{
+	Touch();
+	for (FAnimStitchClip& Clip : Timeline.Clips)
+	{
+		Clip.FootEvents.RemoveAll([Foot](const FAnimStitchFootEvent& E) { return Foot == INDEX_NONE || E.Foot == Foot; });
+	}
+}
+void UAnimStitchTimelineAsset::AddDefaultCrossfade(int32 Index)
+{
+	if (Index > 0 && Timeline.Clips.IsValidIndex(Index))
+	{
+		SetOverlap(Index, GetDefault<UAnimStitchSettings>()->DefaultCrossfadeLength);
+		Timeline.Clips[Index].BlendIn = GetDefault<UAnimStitchSettings>()->DefaultCrossfadeCurve;
+	}
+}
+
+void UAnimStitchTimelineAsset::SetBatchSlot(int32 Index, bool bBatchSlot)
+{
+	if (Timeline.Clips.IsValidIndex(Index))
+	{
+		Touch();
+		Timeline.Clips[Index].bBatchSlot = bBatchSlot;
+	}
+}
+
+void UAnimStitchTimelineAsset::SetRootAuthority(int32 Index)
+{
+	if (Timeline.Clips.IsValidIndex(Index))
+	{
+		Touch();
+		Timeline.RootAuthorityIndex = Index;
+	}
+}
+
 bool UAnimStitchTimelineAsset::CanCutClipAt(int32 Index, double TimelineTime) const
 {
 	if (!Timeline.Clips.IsValidIndex(Index))
@@ -236,4 +348,6 @@ void UAnimStitchTimelineAsset::SetBlendCurve(int32 Index, EAnimStitchBlendCurve 
 }
 
 #undef LOCTEXT_NAMESPACE
+
+
 

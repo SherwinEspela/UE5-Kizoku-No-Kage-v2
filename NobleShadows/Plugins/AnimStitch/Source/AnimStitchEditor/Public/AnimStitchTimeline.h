@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Misc/FrameRate.h"
@@ -11,6 +11,87 @@ enum class EAnimStitchBlendCurve : uint8
 {
 	Linear,
 	Smoothstep,
+};
+
+/** What a manual foot-lock event does from its time FORWARD (until the next event for that foot). */
+UENUM()
+enum class EAnimStitchFootAction : uint8
+{
+	/** Glue the foot to its world position at this moment. Persists until an Unlock (or Auto) event. */
+	Lock,
+	/** Release the foot; stays released (no automatic plant detection) until the next Lock or Auto event. */
+	Unlock,
+	/** Hand the foot back to automatic plant detection from here on. */
+	Auto,
+};
+
+/**
+ * Manual foot-lock event. Stored on the clip in SOURCE time so it follows the clip when it is moved or trimmed.
+ * Before a foot's first manual event, automatic detection applies; from the first event on, events decide.
+ */
+USTRUCT()
+struct ANIMSTITCHEDITOR_API FAnimStitchFootEvent
+{
+	GENERATED_BODY()
+
+	/** 0 = left foot, 1 = right foot. */
+	UPROPERTY()
+	int32 Foot = 0;
+
+	/** Seconds into the clip's source sequence. */
+	UPROPERTY()
+	double SrcTime = 0.0;
+
+	UPROPERTY()
+	EAnimStitchFootAction Action = EAnimStitchFootAction::Lock;
+};
+/** Foot lock (post-blend plant pinning + two-bone IK) settings. OFF by default; flat ground plane assumed. */
+USTRUCT()
+struct ANIMSTITCHEDITOR_API FAnimStitchFootLockSettings
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	bool bEnabled = false;
+
+	/** Foot bones; None = use the remembered pair for the skeleton (or guess from bone names). */
+	UPROPERTY()
+	FName LeftFootBone;
+
+	UPROPERTY()
+	FName RightFootBone;
+
+	/** Ground height = the feet's rest-pose height (the foot bone's height in the reference pose). */
+	UPROPERTY()
+	bool bAutoGroundHeight = true;
+
+	/** Ground-plane height (cm, component/world Z of the foot bone when planted) when not automatic. */
+	UPROPERTY()
+	float GroundHeight = 0.f;
+
+	/** A foot can be planted while its bone is at most this far (cm) above the ground height. */
+	UPROPERTY()
+	float HeightThreshold = 5.f;
+
+	/** ...and moving no faster than this (cm/s) in world space (root motion included). */
+	UPROPERTY()
+	float VelocityThreshold = 40.f;
+
+	/** Plants shorter than this (seconds) are ignored. */
+	UPROPERTY()
+	float MinPlantDuration = 0.1f;
+
+	/** Correction fades in and out over this long (seconds) at the ends of a plant. */
+	UPROPERTY()
+	float BlendTime = 0.1f;
+
+	/** Let the pelvis (and everything above it) follow so pinned legs are not stretched straight when the body moves away. */
+	UPROPERTY()
+	bool bPelvisFollows = true;
+
+	/** Largest distance (cm) the pelvis may be moved from the animated position. */
+	UPROPERTY()
+	float MaxPelvisOffset = 20.f;
 };
 
 /** One clip on the (single) track. Times are in seconds. Trimming is non-destructive. */
@@ -41,6 +122,14 @@ struct ANIMSTITCHEDITOR_API FAnimStitchClip
 	UPROPERTY()
 	EAnimStitchBlendCurve BlendIn = EAnimStitchBlendCurve::Smoothstep;
 
+	/** Batch mode: this slot is replaced by each of the user's source clips (everything else stays as in the template). */
+	UPROPERTY()
+	bool bBatchSlot = false;
+
+	/** Manual foot lock / unlock events that live on this clip (source time). */
+	UPROPERTY()
+	TArray<FAnimStitchFootEvent> FootEvents;
+
 	double GetDuration() const { return TrimOut - TrimIn; }
 	double GetEndTime() const { return StartTime + GetDuration(); }
 };
@@ -61,6 +150,13 @@ struct ANIMSTITCHEDITOR_API FAnimStitchTimeline
 	/** Index of the clip whose root motion drives the merge. */
 	UPROPERTY()
 	int32 RootAuthorityIndex = 0;
+
+	UPROPERTY()
+	FAnimStitchFootLockSettings FootLock;
+
+	/** EXPERIMENTAL: make crossfades plant-aware (pre-blend foot prediction). Uses the foot bones/thresholds of FootLock. */
+	UPROPERTY()
+	bool bPredictFeet = false;
 
 	/** Smallest allowed clip length after trimming. */
 	static constexpr double MinClipDuration = 0.05;
@@ -93,10 +189,23 @@ public:
 	/** Cheap root-bone-only version of EvaluatePose (blended across overlaps). */
 	FTransform EvaluateRoot(double TimelineTime) const;
 
+	/** Crossfade weight (curve applied, 0..1) of the incoming clip IncomingIndex at timeline time T; 0 outside its overlap. */
+	float EvaluateBlendAlpha(int32 IncomingIndex, double TimelineTime) const;
+
 	/** Pose of a single clip alone (no crossfade) with the authority-corrected root. */
 	void EvaluateClipPose(int32 ClipIndex, double TimelineTime, TArray<FTransform>& OutLocalPose) const;
 
 	int32 GetNumClips() const { return Timeline.Clips.Num(); }
+
+	/** True if at least one clip animates this skeleton bone (otherwise it stays at the reference pose). */
+	bool IsBoneAnimated(int32 BoneIndex) const
+	{
+		for (const TArray<bool>& Clip : HasTrack)
+		{
+			if (Clip.IsValidIndex(BoneIndex) && Clip[BoneIndex]) { return true; }
+		}
+		return false;
+	}
 	const FAnimStitchTimeline& GetTimeline() const { return Timeline; }
 
 	/** Effective (root-motion-authority-corrected) root transform of clip ClipIndex at timeline time T. */
@@ -115,3 +224,6 @@ private:
 	/** Root transform that clip i starts from (i > authority) / ends at (i < authority). */
 	TArray<FTransform> RootAnchor;
 };
+
+
+

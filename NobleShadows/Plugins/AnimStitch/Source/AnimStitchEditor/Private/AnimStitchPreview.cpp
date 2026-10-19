@@ -1,4 +1,4 @@
-#include "AnimStitchPreview.h"
+﻿#include "AnimStitchPreview.h"
 #include "AnimStitchPoseComponent.h"
 #include "Engine/SkeletalMesh.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -57,8 +57,25 @@ void FAnimStitchPreview::SetMesh(USkeletalMesh* InMesh)
 	SetPlayhead(Playhead);
 }
 
+void FAnimStitchPreview::SetCorrectedPoses(TArray<TArray<FTransform>>&& Poses, double Fps)
+{
+	CorrectedPoses = MoveTemp(Poses);
+	CorrectedFps = Fps;
+	SetPlayhead(Playhead);
+}
+
+void FAnimStitchPreview::ClearCorrectedPoses()
+{
+	if (CorrectedPoses.Num() > 0)
+	{
+		CorrectedPoses.Reset();
+		SetPlayhead(Playhead);
+	}
+}
+
 void FAnimStitchPreview::SetTimeline(const FAnimStitchTimeline& Timeline)
 {
+	CorrectedPoses.Reset(); // stale until the foot lock pass has been re-run for the new timeline
 	FString Error;
 	bEvaluatorValid = Timeline.Clips.Num() > 0 && Evaluator.Initialize(Timeline, Error);
 	if (Timeline.Clips.Num() == 0)
@@ -173,10 +190,45 @@ void FAnimStitchPreview::ApplyGhostPoses()
 void FAnimStitchPreview::SetPlayhead(double Time)
 {
 	Playhead = Time;
+	if (!bEvaluatorValid && MainComponent && Mesh && Mesh->GetSkeleton())
+	{
+		// Nothing to play (new / empty timeline): show the skeleton's default pose instead of a stale frame.
+		MainComponent->ApplySkeletonPose(Mesh->GetSkeleton(), Mesh->GetSkeleton()->GetReferenceSkeleton().GetRefBonePose());
+		return;
+	}
 	if (IsReady() && MainComponent)
 	{
 		TArray<FTransform> Pose;
-		Evaluator.EvaluatePose(Time, Pose);
+		if (CorrectedPoses.Num() > 1 && (Evaluator.GetTimeline().FootLock.bEnabled || Evaluator.GetTimeline().bPredictFeet))
+		{
+			// Foot lock is on: play the corrected frames, interpolated between the two nearest.
+			const double Position = FMath::Clamp(Time * CorrectedFps, 0.0, double(CorrectedPoses.Num() - 1));
+			const int32 F0 = FMath::FloorToInt32(Position);
+			const int32 F1 = FMath::Min(F0 + 1, CorrectedPoses.Num() - 1);
+			const double Alpha = Position - F0;
+			Pose = CorrectedPoses[F0];
+			if (Alpha > 1e-6 && F1 != F0)
+			{
+				for (int32 b = 0; b < Pose.Num(); ++b)
+				{
+					const FTransform& A = CorrectedPoses[F0][b];
+					const FTransform& B = CorrectedPoses[F1][b];
+					Pose[b] = FTransform(FQuat::Slerp(A.GetRotation(), B.GetRotation(), Alpha).GetNormalized(),
+						FMath::Lerp(A.GetTranslation(), B.GetTranslation(), Alpha), FMath::Lerp(A.GetScale3D(), B.GetScale3D(), Alpha));
+				}
+			}
+		}
+		else
+		{
+			Evaluator.EvaluatePose(Time, Pose);
+		}
+		if (bPinRoot && Pose.Num() > 0)
+		{
+			FVector Loc = Pose[0].GetTranslation();
+			Loc.X = 0.0;
+			Loc.Y = 0.0;
+			Pose[0].SetTranslation(Loc);
+		}
 		MainComponent->ApplySkeletonPose(Evaluator.GetSkeleton(), Pose);
 	}
 }
@@ -197,6 +249,23 @@ void FAnimStitchPreview::SetShowRootPath(bool bShow)
 
 void FAnimStitchPreview::Draw(FPrimitiveDrawInterface* PDI) const
 {
+	if (bShowGrid)
+	{
+		// Ground grid: 1 m cells, a stronger line every 5 m, coloured world axes. Lifted slightly to avoid z-fighting with the floor.
+		constexpr int32 HalfCells = 20;
+		constexpr double Cell = 100.0;
+		constexpr double Z = 0.5;
+		const double Extent = HalfCells * Cell;
+		for (int32 i = -HalfCells; i <= HalfCells; ++i)
+		{
+			const bool bAxis = i == 0;
+			const bool bMajor = (i % 5) == 0;
+			const FLinearColor LineX = bAxis ? FLinearColor(0.9f, 0.2f, 0.2f) : FLinearColor(1.f, 1.f, 1.f, bMajor ? 0.55f : 0.22f);
+			const FLinearColor LineY = bAxis ? FLinearColor(0.2f, 0.9f, 0.2f) : FLinearColor(1.f, 1.f, 1.f, bMajor ? 0.55f : 0.22f);
+			PDI->DrawLine(FVector(-Extent, i * Cell, Z), FVector(Extent, i * Cell, Z), LineX, SDPG_World, bMajor ? 1.f : 0.f);
+			PDI->DrawLine(FVector(i * Cell, -Extent, Z), FVector(i * Cell, Extent, Z), LineY, SDPG_World, bMajor ? 1.f : 0.f);
+		}
+	}
 	if (!bShowRootPath || TrajectoryPoints.Num() < 2)
 	{
 		return;
@@ -268,3 +337,5 @@ void SAnimStitchViewport::FocusOnMesh()
 }
 
 #undef LOCTEXT_NAMESPACE
+
+

@@ -26,6 +26,8 @@ public class AnimStitchEditor : ModuleRules
 			"DeveloperSettings",
 			"PropertyEditor",
 			"ContentBrowser",
+			"AssetTools",
+			"AssetDefinition",
 		});
 	}
 }

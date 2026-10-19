@@ -16,6 +16,7 @@ namespace AnimStitchTimelineUI
 	const FLinearColor Background(0.04f, 0.04f, 0.045f);
 	const FLinearColor RulerBg(0.08f, 0.08f, 0.09f);
 	const FLinearColor ClipColors[2] = { FLinearColor(0.16f, 0.34f, 0.55f), FLinearColor(0.20f, 0.46f, 0.34f) };
+	const FLinearColor AuthorityColor(0.50f, 0.24f, 0.60f);
 	const FLinearColor OverlapColor(0.95f, 0.65f, 0.15f, 0.55f);
 	const FLinearColor Handle(1.f, 1.f, 1.f, 0.35f);
 	const FLinearColor Selected(1.f, 1.f, 1.f, 1.f);
@@ -91,24 +92,90 @@ int32 SAnimStitchTimeline::OnPaint(const FPaintArgs& Args, const FGeometry& G, c
 		if (T > 1e6) { break; }
 	}
 
+	// Foot plant lanes (foot lock): amber = detected plant, green = manually pinned, red line = detected but unpinned by hand.
+	if (IsFootLaneVisible())
+	{
+		const bool bHavePlants = Plants.IsValid() && Plants->bValid;
+		for (int32 Foot = 0; Foot < 2; ++Foot)
+		{
+			const float LaneY = GetLaneTop(Foot);
+			DrawRect(Out, Layer + 2, G, FVector2f(0.f, LaneY), FVector2f(Size.X, LaneHeight), FLinearColor(0.f, 0.f, 0.f, 0.35f));
+			PaintLabel(Out, Layer + 3, G, FVector2f(3.f, LaneY - 2.f), Foot == 0 ? TEXT("L") : TEXT("R"), FLinearColor(1, 1, 1, 0.6f));
+			if (!bHavePlants)
+			{
+				if (Foot == 0 && Plants.IsValid())
+				{
+					PaintLabel(Out, Layer + 3, G, FVector2f(18.f, LaneY - 2.f), Plants->Problem.ToString(), FLinearColor(1.f, 0.5f, 0.4f));
+				}
+				continue;
+			}
+			const TArray<uint8>& Mask = Plants->Mask[Foot];
+			for (int32 f = 0; f < Mask.Num();)
+			{
+				if (Mask[f] == AnimStitchPlant::None) { ++f; continue; }
+				int32 End = f;
+				while (End + 1 < Mask.Num() && Mask[End + 1] == Mask[f]) { ++End; }
+				const float X0 = TimeToX((f - 0.5) / Plants->Fps);
+				const float X1 = TimeToX((End + 0.5) / Plants->Fps);
+				if (Mask[f] == AnimStitchPlant::Suppressed)
+				{
+					DrawRect(Out, Layer + 3, G, FVector2f(X0, LaneY + LaneHeight - 2.f), FVector2f(FMath::Max(1.f, X1 - X0), 2.f), FLinearColor(0.9f, 0.2f, 0.2f));
+				}
+				else
+				{
+					DrawRect(Out, Layer + 3, G, FVector2f(X0, LaneY + 1.f), FVector2f(FMath::Max(1.f, X1 - X0), LaneHeight - 2.f),
+						Mask[f] == AnimStitchPlant::ManualPin ? FLinearColor(0.3f, 0.85f, 0.4f) : FLinearColor(0.95f, 0.65f, 0.15f));
+				}
+				f = End + 1;
+			}
+		}
+		if (bHavePlants)
+		{
+			for (int32 Foot = 0; Foot < 2; ++Foot)
+			{
+				for (const FAnimStitchFootLockResult::FEventMark& Mark : Plants->Events[Foot])
+				{
+					const float X = TimeToX(Mark.Time);
+					const FLinearColor Tick = Mark.Action == EAnimStitchFootAction::Lock ? FLinearColor(0.4f, 1.f, 0.5f) : Mark.Action == EAnimStitchFootAction::Unlock ? FLinearColor(1.f, 0.35f, 0.35f) : FLinearColor(0.8f, 0.8f, 0.8f);
+					DrawRect(Out, Layer + 5, G, FVector2f(X - 1.f, GetLaneTop(Foot) - 1.f), FVector2f(2.f, LaneHeight + 2.f), Tick);
+				}
+			}
+		}
+		if (DragMode == EDrag::FootLane && bDragStarted)
+		{
+			const float X0 = TimeToX(FMath::Min(FootDragStartTime, FootDragCurTime));
+			const float X1 = TimeToX(FMath::Max(FootDragStartTime, FootDragCurTime));
+			DrawRect(Out, Layer + 4, G, FVector2f(X0, GetLaneTop(DragFoot)), FVector2f(FMath::Max(1.f, X1 - X0), LaneHeight), FLinearColor(0.3f, 0.85f, 0.4f, 0.6f));
+		}
+	}
+
 	// Clips
 	for (int32 i = 0; i < TL.Clips.Num(); ++i)
 	{
 		const FAnimStitchClip& Clip = TL.Clips[i];
 		const float X0 = TimeToX(Clip.StartTime);
 		const float X1 = TimeToX(Clip.GetEndTime());
-		const FVector2f Pos(X0, TrackTop);
+		const FVector2f Pos(X0, GetTrackTop());
 		const FVector2f BoxSize(FMath::Max(1.f, X1 - X0), TrackHeight);
 
-		FLinearColor Color = ClipColors[i & 1];
+		const bool bAuthority = i == TL.RootAuthorityIndex;
+		FLinearColor Color = bAuthority ? AuthorityColor : ClipColors[i & 1];
 		DrawRect(Out, Layer + 3, G, Pos, BoxSize, Color);
 		DrawRect(Out, Layer + 4, G, Pos, FVector2f(FMath::Min(HandleWidth, BoxSize.X * 0.5f), TrackHeight), Handle);
-		DrawRect(Out, Layer + 4, G, FVector2f(X1 - FMath::Min(HandleWidth, BoxSize.X * 0.5f), TrackTop), FVector2f(FMath::Min(HandleWidth, BoxSize.X * 0.5f), TrackHeight), Handle);
+		DrawRect(Out, Layer + 4, G, FVector2f(X1 - FMath::Min(HandleWidth, BoxSize.X * 0.5f), GetTrackTop()), FVector2f(FMath::Min(HandleWidth, BoxSize.X * 0.5f), TrackHeight), Handle);
 
 		const FGeometry Child = G.MakeChild(BoxSize, FSlateLayoutTransform(Pos));
 		Out.PushClip(FSlateClippingZone(Child));
-		PaintLabel(Out, Layer + 6, G, Pos + FVector2f(HandleWidth + 3.f, 6.f), Clip.Sequence ? Clip.Sequence->GetName() : FString(TEXT("<missing>")), FLinearColor::White);
-		PaintLabel(Out, Layer + 6, G, Pos + FVector2f(HandleWidth + 3.f, 24.f), FString::Printf(TEXT("%.2fs"), Clip.GetDuration()), FLinearColor(1, 1, 1, 0.75f));
+		PaintLabel(Out, Layer + 6, G, Pos + FVector2f(HandleWidth + 3.f, 3.f), Clip.Sequence ? Clip.Sequence->GetName() : FString(TEXT("<missing>")), FLinearColor::White);
+		PaintLabel(Out, Layer + 6, G, Pos + FVector2f(HandleWidth + 3.f, 17.f), FString::Printf(TEXT("%.2fs"), Clip.GetDuration()), FLinearColor(1, 1, 1, 0.75f));
+		if (bAuthority)
+		{
+			PaintLabel(Out, Layer + 6, G, Pos + FVector2f(HandleWidth + 3.f, 31.f), LOCTEXT("AuthorityLabel", "Root Motion Authority").ToString(), FLinearColor(1.f, 0.9f, 0.4f));
+		}
+		if (Clip.bBatchSlot)
+		{
+			PaintLabel(Out, Layer + 6, G, Pos + FVector2f(HandleWidth + 3.f, 45.f), LOCTEXT("BatchLabel", "Batch Slot").ToString(), FLinearColor(0.6f, 0.9f, 1.f));
+		}
 		Out.PopClip();
 
 		if (i == SelectedClip && !bOverlapSelected)
@@ -128,7 +195,7 @@ int32 SAnimStitchTimeline::OnPaint(const FPaintArgs& Args, const FGeometry& G, c
 		const float X0 = TimeToX(Clip.StartTime);
 		const float X1 = TimeToX(Clip.StartTime + Clip.OverlapIn);
 		const float W = FMath::Max(1.f, X1 - X0);
-		DrawRect(Out, Layer + 9, G, FVector2f(X0, TrackTop), FVector2f(W, TrackHeight), OverlapColor);
+		DrawRect(Out, Layer + 9, G, FVector2f(X0, GetTrackTop()), FVector2f(W, TrackHeight), OverlapColor);
 
 		// Weight curves: outgoing falls, incoming rises.
 		TArray<FVector2f> Fall, Rise;
@@ -137,18 +204,18 @@ int32 SAnimStitchTimeline::OnPaint(const FPaintArgs& Args, const FGeometry& G, c
 		{
 			const float A = float(k) / N;
 			const float Wt = Clip.BlendIn == EAnimStitchBlendCurve::Smoothstep ? A * A * (3.f - 2.f * A) : A;
-			Rise.Add(FVector2f(X0 + W * A, TrackTop + TrackHeight - 4.f - (TrackHeight - 8.f) * Wt));
-			Fall.Add(FVector2f(X0 + W * A, TrackTop + 4.f + (TrackHeight - 8.f) * Wt));
+			Rise.Add(FVector2f(X0 + W * A, GetTrackTop() + TrackHeight - 4.f - (TrackHeight - 8.f) * Wt));
+			Fall.Add(FVector2f(X0 + W * A, GetTrackTop() + 4.f + (TrackHeight - 8.f) * Wt));
 		}
 		DrawLine(Out, Layer + 10, G, Rise, FLinearColor::White, 1.5f);
 		DrawLine(Out, Layer + 10, G, Fall, FLinearColor(1, 1, 1, 0.6f), 1.5f);
 		if (W > 36.f)
 		{
-			PaintLabel(Out, Layer + 11, G, FVector2f(X0 + 3.f, TrackTop + TrackHeight - 16.f), FString::Printf(TEXT("%.2fs"), Clip.OverlapIn), FLinearColor::White);
+			PaintLabel(Out, Layer + 11, G, FVector2f(X0 + 3.f, GetTrackTop() + TrackHeight - 16.f), FString::Printf(TEXT("%.2fs"), Clip.OverlapIn), FLinearColor::White);
 		}
 		if (i == SelectedClip && bOverlapSelected)
 		{
-			const FVector2f P(X0, TrackTop), S(W, TrackHeight);
+			const FVector2f P(X0, GetTrackTop()), S(W, TrackHeight);
 			DrawLine(Out, Layer + 12, G, { P, P + FVector2f(S.X, 0), P + S, P + FVector2f(0, S.Y), P }, Selected, 2.f);
 		}
 	}
@@ -173,8 +240,8 @@ int32 SAnimStitchTimeline::OnPaint(const FPaintArgs& Args, const FGeometry& G, c
 		DrawLine(Out, Layer + 14, G, { FVector2f(SX, 0.f), FVector2f(SX, Size.Y) }, StartColor, 1.f);
 		DrawLine(Out, Layer + 14, G, { FVector2f(EX, 0.f), FVector2f(EX, Size.Y) }, EndColor, 1.f);
 		// Flags: start points right, end points left.
-		DrawRect(Out, Layer + 14, G, FVector2f(SX, 0.f), FVector2f(10.f, 12.f), StartColor);
-		DrawRect(Out, Layer + 14, G, FVector2f(EX - 10.f, 0.f), FVector2f(10.f, 12.f), EndColor);
+		DrawRect(Out, Layer + 14, G, FVector2f(SX, 0.f), FVector2f(8.f, 10.f), StartColor);
+		DrawRect(Out, Layer + 14, G, FVector2f(EX - 8.f, 0.f), FVector2f(8.f, 10.f), EndColor);
 	}
 
 	// Drop insertion marker
@@ -185,15 +252,18 @@ int32 SAnimStitchTimeline::OnPaint(const FPaintArgs& Args, const FGeometry& G, c
 	}
 	if (TL.Clips.Num() == 0)
 	{
-		PaintLabel(Out, Layer + 13, G, FVector2f(14.f, TrackTop + 22.f), LOCTEXT("EmptyHint", "Drag animation sequences from the Content Browser here").ToString(), FLinearColor(1, 1, 1, 0.5f));
+		PaintLabel(Out, Layer + 13, G, FVector2f(14.f, GetTrackTop() + 22.f), LOCTEXT("EmptyHint", "Drag animation sequences from the Content Browser here").ToString(), FLinearColor(1, 1, 1, 0.5f));
 	}
 
 	// Playhead
 	const float PX = TimeToX(Playhead);
 	DrawLine(Out, Layer + 14, G, { FVector2f(PX, 0.f), FVector2f(PX, Size.Y) }, FLinearColor(1.f, 0.25f, 0.25f), 1.5f);
 
+	// Grab handle on the lower ruler (the flags above own the top strip).
+	DrawRect(Out, Layer + 15, G, FVector2f(PX - 5.f, RulerHeight - 12.f), FVector2f(10.f, 12.f), FLinearColor(1.f, 0.25f, 0.25f));
+
 	Out.PopClip();
-	return Layer + 15;
+	return Layer + 16;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -210,11 +280,11 @@ SAnimStitchTimeline::FHit SAnimStitchTimeline::HitTest(const FVector2f& P) const
 		const float SX = TimeToX(RangeStart);
 		const float EX = TimeToX(RangeEnd);
 		// Flags hang inward from the range edges; the end flag wins when the two overlap.
-		if (P.X >= EX - 10.f && P.X <= EX + 3.f && P.Y < 14.f)
+		if (P.X >= EX - 8.f && P.X <= EX + 2.f && P.Y < 10.f)
 		{
 			Result.Type = EHit::MarkerEnd;
 		}
-		else if (P.X >= SX - 3.f && P.X <= SX + 10.f && P.Y < 14.f)
+		else if (P.X >= SX - 2.f && P.X <= SX + 8.f && P.Y < 10.f)
 		{
 			Result.Type = EHit::MarkerStart;
 		}
@@ -224,7 +294,19 @@ SAnimStitchTimeline::FHit SAnimStitchTimeline::HitTest(const FVector2f& P) const
 		}
 		return Result;
 	}
-	if (P.Y < TrackTop || P.Y > TrackTop + TrackHeight)
+	if (IsFootLaneVisible())
+	{
+		for (int32 Foot = 0; Foot < 2; ++Foot)
+		{
+			if (P.Y >= GetLaneTop(Foot) && P.Y <= GetLaneTop(Foot) + LaneHeight)
+			{
+				Result.Type = EHit::FootLane;
+				Result.Index = Foot;
+				return Result;
+			}
+		}
+	}
+	if (P.Y < GetTrackTop() || P.Y > GetTrackTop() + TrackHeight)
 	{
 		return Result;
 	}
@@ -292,7 +374,7 @@ FReply SAnimStitchTimeline::OnMouseButtonDown(const FGeometry& G, const FPointer
 		DragStartX = Local.X;
 		InitialViewStart = ViewStart;
 		bDragStarted = false;
-		return FReply::Handled().CaptureMouse(SharedThis(this)).SetUserFocus(SharedThis(this), EFocusCause::Mouse);
+		return FReply::Handled().PreventThrottling().CaptureMouse(SharedThis(this)).SetUserFocus(SharedThis(this), EFocusCause::Mouse);
 	}
 	if (Event.GetEffectingButton() != EKeys::LeftMouseButton)
 	{
@@ -310,6 +392,11 @@ FReply SAnimStitchTimeline::OnMouseButtonDown(const FGeometry& G, const FPointer
 	case EHit::MarkerStart:
 	case EHit::MarkerEnd:
 		DragMode = Hit.Type == EHit::MarkerStart ? EDrag::MarkerStart : EDrag::MarkerEnd;
+		break;
+	case EHit::FootLane:
+		DragMode = EDrag::FootLane;
+		DragFoot = Hit.Index;
+		FootDragStartTime = FootDragCurTime = XToTime(Local.X);
 		break;
 	case EHit::Ruler:
 		DragMode = EDrag::Scrub;
@@ -338,7 +425,7 @@ FReply SAnimStitchTimeline::OnMouseButtonDown(const FGeometry& G, const FPointer
 		OnPlayheadChangedDelegate.ExecuteIfBound();
 		break;
 	}
-	return FReply::Handled().CaptureMouse(SharedThis(this)).SetUserFocus(SharedThis(this), EFocusCause::Mouse);
+	return FReply::Handled().PreventThrottling().CaptureMouse(SharedThis(this)).SetUserFocus(SharedThis(this), EFocusCause::Mouse);
 }
 
 FReply SAnimStitchTimeline::OnMouseButtonUp(const FGeometry& G, const FPointerEvent& Event)
@@ -346,6 +433,11 @@ FReply SAnimStitchTimeline::OnMouseButtonUp(const FGeometry& G, const FPointerEv
 	if (Event.GetEffectingButton() == EKeys::RightMouseButton)
 	{
 		const FHit Hit = HitTest(G.AbsoluteToLocal(Event.GetScreenSpacePosition()));
+		if (Hit.Type == EHit::FootLane)
+		{
+			OpenFootLaneMenu(Event, Hit.Index, XToTime(G.AbsoluteToLocal(Event.GetScreenSpacePosition()).X));
+			return FReply::Handled();
+		}
 		if (Hit.Index != INDEX_NONE && Hit.Type != EHit::Ruler)
 		{
 			SelectClip(Hit.Index, Hit.Type == EHit::Overlap);
@@ -357,6 +449,18 @@ FReply SAnimStitchTimeline::OnMouseButtonUp(const FGeometry& G, const FPointerEv
 	if ((Event.GetEffectingButton() != EKeys::LeftMouseButton && !bEndingPan) || !HasMouseCapture())
 	{
 		return FReply::Unhandled();
+	}
+	if (DragMode == EDrag::FootLane)
+	{
+		if (bDragStarted)
+		{
+			const FScopedTransaction Tx(LOCTEXT("PinPlantTx", "Pin Foot Plant"));
+			Asset->PaintFootLock(DragFoot, FMath::Min(FootDragStartTime, FootDragCurTime), FMath::Max(FootDragStartTime, FootDragCurTime));
+		}
+		else
+		{
+			ToggleFootPlantAt(DragFoot, FootDragStartTime);
+		}
 	}
 	DragTransaction.Reset(); // ends the undo transaction
 	DragMode = EDrag::None;
@@ -387,6 +491,12 @@ void SAnimStitchTimeline::OnDragMove(float LocalX)
 	if (DragMode == EDrag::Pan)
 	{
 		ViewStart = InitialViewStart - (LocalX - DragStartX) / PxPerSec;
+		return;
+	}
+	if (DragMode == EDrag::FootLane)
+	{
+		FootDragCurTime = XToTime(LocalX);
+		bDragStarted = FMath::Abs(LocalX - DragStartX) >= 3.f;
 		return;
 	}
 	if (!bDragStarted)
@@ -598,6 +708,50 @@ void SAnimStitchTimeline::TrimEndAtPlayhead()
 	}
 }
 
+void SAnimStitchTimeline::ToggleFootPlantAt(int32 Foot, double Time)
+{
+	if (!Plants.IsValid() || !Plants->bValid || !Plants->Mask[Foot].Num())
+	{
+		return;
+	}
+	// Click toggles the foot at this moment: locked -> unlock, otherwise lock. The state persists forward until the next click.
+	const TArray<uint8>& Mask = Plants->Mask[Foot];
+	const int32 Frame = FMath::Clamp(FMath::RoundToInt(Time * Plants->Fps), 0, Mask.Num() - 1);
+	const bool bLocked = AnimStitchPlant::IsPlanted(Mask[Frame]);
+	const FScopedTransaction Tx(bLocked ? LOCTEXT("UnlockFootTx", "Unlock Foot") : LOCTEXT("LockFootTx", "Lock Foot"));
+	Asset->AddFootEvent(Foot, Time, bLocked ? EAnimStitchFootAction::Unlock : EAnimStitchFootAction::Lock);
+}
+
+void SAnimStitchTimeline::OpenFootLaneMenu(const FPointerEvent& Event, int32 Foot, double Time)
+{
+	FMenuBuilder Menu(true, nullptr);
+	auto AddAction = [this, &Menu, Foot, Time](const FText& Label, const FText& Tip, EAnimStitchFootAction Action)
+	{
+		Menu.AddMenuEntry(Label, Tip, FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, Foot, Time, Action]()
+		{
+			const FScopedTransaction Tx(LOCTEXT("FootEventTx", "Foot Lock Event"));
+			Asset->AddFootEvent(Foot, Time, Action);
+		})));
+	};
+	AddAction(LOCTEXT("LockHere", "Lock Foot Here"), LOCTEXT("LockHereTip", "Glue this foot to its world position here until you unlock it"), EAnimStitchFootAction::Lock);
+	AddAction(LOCTEXT("UnlockHere", "Unlock Foot Here"), LOCTEXT("UnlockHereTip", "Release this foot here; it stays free until you lock it again"), EAnimStitchFootAction::Unlock);
+	AddAction(LOCTEXT("AutoHere", "Resume Auto-Detection Here"), LOCTEXT("AutoHereTip", "From here on, plants are detected automatically again"), EAnimStitchFootAction::Auto);
+	Menu.AddSeparator();
+	Menu.AddMenuEntry(LOCTEXT("ClearFootEvents", "Clear Manual Locks (This Foot)"), LOCTEXT("ClearFootEventsTip", "Remove all manual lock/unlock marks for this foot: back to automatic detection"),
+		FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, Foot]()
+		{
+			const FScopedTransaction Tx(LOCTEXT("ClearFootTx", "Clear Foot Locks"));
+			Asset->ClearFootEvents(Foot);
+		})));
+	Menu.AddMenuEntry(LOCTEXT("ClearAllFootEvents", "Clear Manual Locks (Both Feet)"), LOCTEXT("ClearAllFootEventsTip", "Back to automatic detection for both feet"),
+		FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this]()
+		{
+			const FScopedTransaction Tx(LOCTEXT("ClearAllFootTx", "Clear Foot Locks"));
+			Asset->ClearFootEvents(INDEX_NONE);
+		})));
+	const FWidgetPath Path = Event.GetEventPath() != nullptr ? *Event.GetEventPath() : FWidgetPath();
+	FSlateApplication::Get().PushMenu(AsShared(), Path, Menu.MakeWidget(), Event.GetScreenSpacePosition(), FPopupTransitionEffect(FPopupTransitionEffect::ContextMenu));
+}
 void SAnimStitchTimeline::BrowseToSelectedAsset()
 {
 	if (GEditor && Asset->Timeline.Clips.IsValidIndex(SelectedClip) && Asset->Timeline.Clips[SelectedClip].Sequence)
@@ -617,6 +771,26 @@ void SAnimStitchTimeline::OpenContextMenu(const FPointerEvent& Event)
 		FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &SAnimStitchTimeline::TrimStartAtPlayhead), CanCut));
 	Menu.AddMenuEntry(LOCTEXT("CtxTrimEnd", "Trim End to Playhead"), LOCTEXT("CtxTrimEndTip", "Cut the part of the clip after the playhead"),
 		FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &SAnimStitchTimeline::TrimEndAtPlayhead), CanCut));
+	Menu.AddSeparator();
+	const FCanExecuteAction HasSel = FCanExecuteAction::CreateLambda([this]() { return Asset->Timeline.Clips.IsValidIndex(SelectedClip); });
+	Menu.AddMenuEntry(LOCTEXT("CtxRootAuthority", "Root Motion Authority"), LOCTEXT("CtxRootAuthorityTip", "The baked root track follows this clip; other clips continue from where it leaves off"),
+		FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this]()
+		{
+			const FScopedTransaction Tx(LOCTEXT("SetRootAuthTx", "Set Root Motion Authority"));
+			Asset->SetRootAuthority(SelectedClip);
+		}), HasSel, FIsActionChecked::CreateLambda([this]() { return SelectedClip == Asset->Timeline.RootAuthorityIndex; })), NAME_None, EUserInterfaceActionType::Check);
+	Menu.AddMenuEntry(LOCTEXT("CtxAddCrossfade", "Add Crossfade (default length)"), LOCTEXT("CtxAddCrossfadeTip", "Overlap this clip with the previous one using the default length and curve from the AnimStitch settings"),
+		FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this]()
+		{
+			const FScopedTransaction Tx(LOCTEXT("AddCrossfadeTx", "Add Crossfade"));
+			Asset->AddDefaultCrossfade(SelectedClip);
+		}), FCanExecuteAction::CreateLambda([this]() { return SelectedClip > 0 && Asset->Timeline.Clips.IsValidIndex(SelectedClip); })));
+	Menu.AddMenuEntry(LOCTEXT("CtxBatchSlot", "Batch Slot"), LOCTEXT("CtxBatchSlotTip", "In Batch Bake this slot is replaced by each of your source clips"),
+		FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this]()
+		{
+			const FScopedTransaction Tx(LOCTEXT("SetBatchSlotTx", "Toggle Batch Slot"));
+			Asset->SetBatchSlot(SelectedClip, !Asset->Timeline.Clips[SelectedClip].bBatchSlot);
+		}), HasSel, FIsActionChecked::CreateLambda([this]() { return Asset->Timeline.Clips.IsValidIndex(SelectedClip) && Asset->Timeline.Clips[SelectedClip].bBatchSlot; })), NAME_None, EUserInterfaceActionType::Check);
 	Menu.AddSeparator();
 	const FCanExecuteAction HasSelection = FCanExecuteAction::CreateLambda([this]() { return Asset->Timeline.Clips.IsValidIndex(SelectedClip); });
 	Menu.AddMenuEntry(LOCTEXT("CtxBrowse", "Browse to Asset"), LOCTEXT("CtxBrowseTip", "Show the clip's animation sequence in the Content Browser"),
@@ -716,6 +890,12 @@ FReply SAnimStitchTimeline::OnDrop(const FGeometry& G, const FDragDropEvent& Eve
 		return FReply::Unhandled();
 	}
 	const int32 Index = TimeToInsertIndex(XToTime(G.AbsoluteToLocal(Event.GetScreenSpacePosition()).X));
+	AddSequencesAt(Sequences, Index);
+	return FReply::Handled();
+}
+
+void SAnimStitchTimeline::AddSequencesAt(const TArray<UAnimSequence*>& Sequences, int32 Index)
+{
 	TArray<FText> Warnings;
 	{
 		FScopedTransaction Tx(LOCTEXT("AddClipsTx", "Add Clips"));
@@ -726,17 +906,21 @@ FReply SAnimStitchTimeline::OnDrop(const FGeometry& G, const FDragDropEvent& Eve
 		}
 		else
 		{
-			SelectClip(Index, false);
+			SelectClip(Index == INDEX_NONE ? Asset->Timeline.Clips.Num() - Added : Index, false);
+			RequestZoomToFit();
 		}
 	}
 	if (Warnings.Num() > 0)
 	{
 		OnWarningsDelegate.ExecuteIfBound(Warnings);
 	}
-	return FReply::Handled();
 }
 
 #undef LOCTEXT_NAMESPACE
+
+
+
+
 
 
 

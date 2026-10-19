@@ -1,4 +1,4 @@
-#include "AnimStitchTimeline.h"
+﻿#include "AnimStitchTimeline.h"
 #include "Animation/AnimData/IAnimationDataModel.h"
 #include "ReferenceSkeleton.h"
 
@@ -256,9 +256,25 @@ FTransform FAnimStitchEvaluator::EvaluateRoot(double T) const
 	return Root;
 }
 
+float FAnimStitchEvaluator::EvaluateBlendAlpha(int32 IncomingIndex, double TimelineTime) const
+{
+	if (IncomingIndex <= 0 || !Timeline.Clips.IsValidIndex(IncomingIndex))
+	{
+		return 0.f;
+	}
+	const FAnimStitchClip& In = Timeline.Clips[IncomingIndex];
+	const double OverlapLen = Timeline.Clips[IncomingIndex - 1].GetEndTime() - In.StartTime;
+	if (OverlapLen <= KINDA_SMALL_NUMBER || TimelineTime < In.StartTime)
+	{
+		return 0.f;
+	}
+	return ApplyCurve(In.BlendIn, float((TimelineTime - In.StartTime) / OverlapLen));
+}
+
 void FAnimStitchEvaluator::EvaluateClipPose(int32 ClipIndex, double TimelineTime, TArray<FTransform>& OutLocalPose) const
 {
 	SampleClipRaw(ClipIndex, TimelineTime, OutLocalPose);
 }
 
 #undef LOCTEXT_NAMESPACE
+
