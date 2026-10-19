@@ -170,18 +170,22 @@ FAnimStitchFootLockResult FAnimStitchFootLock::Detect(const FAnimStitchEvaluator
 
 		// Manual events (stored per clip in source time) mapped onto this timeline. Persistent model: before the foot's
 		// first event automatic detection applies; from then on each event decides until the next one.
-		struct FMappedEvent { int32 Frame; double Time; EAnimStitchFootAction Action; };
+		struct FMappedEvent { int32 Frame; double Time; EAnimStitchFootAction Action; FVector PinOffset; FIntPoint Owner; };
 		TArray<FMappedEvent> Events;
-		for (const FAnimStitchClip& Clip : Timeline.Clips)
+		for (int32 ClipIndex = 0; ClipIndex < Timeline.Clips.Num(); ++ClipIndex)
 		{
-			for (const FAnimStitchFootEvent& Event : Clip.FootEvents)
+			const FAnimStitchClip& Clip = Timeline.Clips[ClipIndex];
+			for (int32 EventIndex = 0; EventIndex < Clip.FootEvents.Num(); ++EventIndex)
 			{
+				const FAnimStitchFootEvent& Event = Clip.FootEvents[EventIndex];
 				if (Event.Foot != Foot) { continue; }
 				const double Time = Clip.StartTime + (Event.SrcTime - Clip.TrimIn);
 				FMappedEvent Mapped;
 				Mapped.Frame = FMath::Max<int32>(0, FMath::RoundToInt32(Time * Fps));
 				Mapped.Time = Time;
 				Mapped.Action = Event.Action;
+				Mapped.PinOffset = Event.PinOffset;
+				Mapped.Owner = FIntPoint(ClipIndex, EventIndex);
 				Events.Add(Mapped);
 			}
 		}
@@ -196,6 +200,10 @@ FAnimStitchFootLockResult FAnimStitchFootLock::Detect(const FAnimStitchEvaluator
 
 		TArray<uint8>& Mask = Result.Mask[Foot];
 		Mask.Init(0, NumFrames);
+		Result.PinOffset[Foot].Init(FVector::ZeroVector, NumFrames);
+		Result.PinEvent[Foot].Init(FIntPoint(-1, -1), NumFrames);
+		FVector CurrentPinOffset = FVector::ZeroVector;
+		FIntPoint CurrentPinOwner(-1, -1);
 		int32 NextEvent = 0;
 		bool bManual = false;                                    // any event seen yet?
 		EAnimStitchFootAction State = EAnimStitchFootAction::Auto;
@@ -204,6 +212,8 @@ FAnimStitchFootLockResult FAnimStitchFootLock::Detect(const FAnimStitchEvaluator
 			while (NextEvent < Events.Num() && Events[NextEvent].Frame <= f)
 			{
 				State = Events[NextEvent].Action;
+				CurrentPinOffset = Events[NextEvent].PinOffset;
+				CurrentPinOwner = Events[NextEvent].Owner;
 				bManual = true;
 				++NextEvent;
 			}
@@ -214,6 +224,8 @@ FAnimStitchFootLockResult FAnimStitchFootLock::Detect(const FAnimStitchEvaluator
 			else if (State == EAnimStitchFootAction::Lock)
 			{
 				Mask[f] = AnimStitchPlant::ManualPin;
+				Result.PinOffset[Foot][f] = CurrentPinOffset;
+				Result.PinEvent[Foot][f] = CurrentPinOwner;
 			}
 			else
 			{
@@ -232,7 +244,8 @@ namespace
 	 * and the foot's world orientation. Leg segment lengths are preserved; if Desired is out of reach the leg is fully
 	 * extended towards it (the hips are never moved).
 	 */
-	void SolveLeg(const FReferenceSkeleton& Ref, TArray<FTransform>& Local, const FAnimStitchFootChain& Chain, const FVector& Desired)
+	void SolveLeg(const FReferenceSkeleton& Ref, TArray<FTransform>& Local, const FAnimStitchFootChain& Chain, const FVector& Desired,
+		const FVector* PoleTarget = nullptr, double PoleWeight = 0.0, const FQuat* EffectorRotation = nullptr)
 	{
 		const FTransform ParentCS = Chain.ThighParent != INDEX_NONE ? ComponentSpace(Ref, Local, Chain.ThighParent) : FTransform::Identity;
 		const FTransform ThighCS = Local[Chain.Thigh] * ParentCS;
@@ -262,6 +275,16 @@ namespace
 			if (Pole.SizeSquared() < 1e-6) { Pole = FVector::CrossProduct(Axis, FVector::RightVector); }
 		}
 		Pole.Normalize();
+		if (PoleTarget && PoleWeight > 1e-4)
+		{
+			// A pole-vector control overrides which way the knee/elbow points.
+			FVector Wanted = (*PoleTarget - H) - Axis * FVector::DotProduct(*PoleTarget - H, Axis);
+			if (Wanted.SizeSquared() > 1e-6)
+			{
+				Wanted.Normalize();
+				Pole = FMath::Lerp(Pole, Wanted, FMath::Clamp(PoleWeight, 0.0, 1.0)).GetSafeNormal();
+			}
+		}
 
 		const double Along = (L1 * L1 - L2 * L2 + Reach * Reach) / (2.0 * Reach);
 		const double Height = FMath::Sqrt(FMath::Max(0.0, L1 * L1 - Along * Along));
@@ -278,7 +301,7 @@ namespace
 
 		const FTransform NewThighCS(ThighRot, H, ThighCS.GetScale3D());
 		const FTransform NewCalfCS(CalfRot, NewK, CalfCS.GetScale3D());
-		const FTransform NewFootCS(FootCS.GetRotation(), NewA, FootCS.GetScale3D()); // keep the foot's world orientation
+		const FTransform NewFootCS(EffectorRotation ? *EffectorRotation : FootCS.GetRotation(), NewA, FootCS.GetScale3D()); // keep the foot's world orientation unless an effector rotation is given
 
 		// Write back rotations only: translations and scales of the bones are unchanged.
 		Local[Chain.Thigh].SetRotation(NewThighCS.GetRelativeTransform(ParentCS).GetRotation().GetNormalized());
@@ -287,7 +310,21 @@ namespace
 	}
 }
 
-int32 FAnimStitchFootLock::Pin(const FAnimStitchEvaluator& Evaluator, TArray<TArray<FTransform>>& Poses, const FAnimStitchFootLockResult& Detection)
+void FAnimStitchFootLock::SolveLimb(const FReferenceSkeleton& RefSkeleton, TArray<FTransform>& LocalPose, const FAnimStitchFootChain& Chain, const FVector& DesiredEffector,
+	const FVector* PoleTarget, double PoleWeight, const FQuat* EffectorRotation)
+{
+	if (Chain.IsValid())
+	{
+		SolveLeg(RefSkeleton, LocalPose, Chain, DesiredEffector, PoleTarget, PoleWeight, EffectorRotation);
+	}
+}
+
+FTransform FAnimStitchFootLock::GetComponentSpace(const FReferenceSkeleton& RefSkeleton, const TArray<FTransform>& LocalPose, int32 Bone)
+{
+	return ComponentSpace(RefSkeleton, LocalPose, Bone);
+}
+
+int32 FAnimStitchFootLock::Pin(const FAnimStitchEvaluator& Evaluator, TArray<TArray<FTransform>>& Poses, const FAnimStitchFootLockResult& Detection, FAnimStitchPinOutput* Output)
 {
 	if (!Detection.bValid)
 	{
@@ -304,6 +341,10 @@ int32 FAnimStitchFootLock::Pin(const FAnimStitchEvaluator& Evaluator, TArray<TAr
 	for (int32 Foot = 0; Foot < 2; ++Foot)
 	{
 		Targets[Foot].SetNum(NumFrames);
+		if (Output)
+		{
+			Output->ManualTarget[Foot].Init(FVector::ZeroVector, NumFrames);
+		}
 		const FAnimStitchFootChain& Chain = Detection.Chains[Foot];
 		const TArray<uint8>& Mask = Detection.Mask[Foot];
 
@@ -317,10 +358,16 @@ int32 FAnimStitchFootLock::Pin(const FAnimStitchEvaluator& Evaluator, TArray<TAr
 			{
 				// Manual lock: glued to the foot's world position at the lock frame (root motion included) for as long as the
 				// lock lasts - no automatic release. Only after an explicit unlock does the foot fade back to the animation.
-				const FVector Target = ComponentSpace(Ref, Poses[Start], Chain.Foot).GetTranslation();
+				// (+ the offset the user dragged the pin by: a manual lock is a free IK target)
+				const FVector Target = ComponentSpace(Ref, Poses[Start], Chain.Foot).GetTranslation()
+					+ (Detection.PinOffset[Foot].IsValidIndex(Start) ? Detection.PinOffset[Foot][Start] : FVector::ZeroVector);
 				for (int32 f = Start; f <= End; ++f)
 				{
 					Targets[Foot][f] = { true, Target };
+					if (Output)
+					{
+						Output->ManualTarget[Foot][f] = Target;
+					}
 				}
 				const bool bFollowedByPlant = End + 1 < NumFrames && AnimStitchPlant::IsPlanted(Mask[End + 1]);
 				// After an explicit unlock the foot eases back to the animation. The further the body has moved away from the
@@ -701,6 +748,10 @@ FAnimStitchPredictReport FAnimStitchFootLock::PredictFeet(const FAnimStitchEvalu
 	return Report;
 }
 #undef LOCTEXT_NAMESPACE
+
+
+
+
 
 
 

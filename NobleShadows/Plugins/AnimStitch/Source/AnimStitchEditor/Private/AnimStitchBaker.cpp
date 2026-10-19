@@ -1,5 +1,6 @@
 ﻿#include "AnimStitchBaker.h"
 #include "AnimStitchFootLock.h"
+#include "AnimStitchManualEdits.h"
 #include "Animation/AnimData/IAnimationDataModel.h"
 #include "Animation/AnimData/IAnimationDataController.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -84,8 +85,30 @@ UAnimSequence* FAnimStitchBaker::Bake(const FAnimStitchTimeline& Timeline, const
 	// Foot lock rewrites the leg bones, so they need tracks even if no source animates them.
 	const bool bFootLock = Timeline.FootLock.bEnabled;
 	const bool bPredict = Timeline.bPredictFeet;
-	const bool bKeepPoses = bFootLock || bPredict;
-	if (bKeepPoses)
+	const bool bManual = Timeline.Tracks.Num() > 0;
+	const bool bKeepPoses = bFootLock || bPredict || bManual;
+	// Manual corrections change these bones even if no source animates them.
+	for (const FAnimStitchTrack& Track : Timeline.Tracks)
+	{
+		const int32 Bone = RefSkel.FindBoneIndex(Track.Bone);
+		if (Bone == INDEX_NONE) { continue; }
+		if (Track.Kind == EAnimStitchTrackKind::Bone)
+		{
+			TrackBones.AddUnique(Bone);
+		}
+		else
+		{
+			const FAnimStitchFootChain Chain = FAnimStitchManualEdits::ChainFor(RefSkel, Track.Bone);
+			if (Chain.IsValid())
+			{
+				TrackBones.AddUnique(Chain.Thigh);
+				TrackBones.AddUnique(Chain.Calf);
+				TrackBones.AddUnique(Chain.Foot);
+			}
+		}
+	}
+	TrackBones.Sort();
+	if (bFootLock || bPredict)
 	{
 		FName Left, Right;
 		FAnimStitchFootLock::ResolveFootBones(Evaluator.GetSkeleton(), Timeline.FootLock, Left, Right);
@@ -177,6 +200,14 @@ UAnimSequence* FAnimStitchBaker::Bake(const FAnimStitchTimeline& Timeline, const
 			const int32 Corrected = FAnimStitchFootLock::Pin(Evaluator, FramePoses, Detection);
 			UE_LOG(LogTemp, Display, TEXT("AnimStitch foot lock: %d foot-frames pinned (ground z %.2f)."), Corrected, Detection.GroundZ);
 		}
+		if (bManual)
+		{
+			// Manual edits come last: they win over foot prediction and foot lock. Same function the preview uses.
+			for (int32 f = 0; f < FramePoses.Num(); ++f)
+			{
+				FAnimStitchManualEdits::Apply(RefSkel, Timeline.Tracks, f / FrameRate.AsDecimal(), FramePoses[f]);
+			}
+		}
 		for (const TArray<FTransform>& Frame : FramePoses)
 		{
 			for (const int32 b : TrackBones)
@@ -264,5 +295,6 @@ UAnimSequence* FAnimStitchBaker::Bake(const FAnimStitchTimeline& Timeline, const
 }
 
 #undef LOCTEXT_NAMESPACE
+
 
 

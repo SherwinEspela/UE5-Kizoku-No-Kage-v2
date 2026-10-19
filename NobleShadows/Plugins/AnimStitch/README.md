@@ -55,6 +55,21 @@ A second, separate switch next to **Foot Lock** in the toolbar, **off by default
 - The pelvis is only read. When the pelvis moves farther than the leg can reach, a pin is released gracefully, and the pelvis is never moved by this pass.
 - Only crossfades (overlaps) are affected; butt joins and everything outside the overlaps are left exactly as they were. It composes with Foot Lock: prediction runs first, Foot Lock cleans up what is left.
 - The preview and the bake use the same code. Turn it off and the bake is identical to a plain blend.
+## Bones, the Show menu and the Details panel
+
+- **Show menu** (eye button, viewport top left), like the animation editor's: *Bones* submenu with **Sockets**, **Bone Names**, **Multi-Color Bones**, **Bone Draw Size** and the drawing modes **All Hierarchy / Selected Only / Selected and Parents / Selected and Children / Selected and Parents and Children / None**; and **Grid** (also Alt+Shift+G). The menu stays open while you toggle.
+- Click a drawn joint to select that bone (clicking empty space clears the selection), or pick a bone from the dropdown at the viewport's top right.
+- **Details** (a tab next to **Content Browser** in the right-hand panel): the selected bone's live transform at the current scrub time, in mesh space (includes root motion) and relative to its parent. Read-only. The values come from the pose the viewport shows, so foot lock, prediction and manual corrections are included.
+
+## Manual bone corrections
+
+Right-click **below the clip lanes** > *Add Bone Track* to add a Sequencer-style transform lane under the clips. Keyframes hold **additive** offsets, so they layer over the blended result instead of replacing it. Corrections are applied **after** foot prediction and foot lock (manual wins) and are baked into the output.
+
+- **Core bone** (pelvis, spine, head, or *Other Bone...*): one control shape per bone. Move / rotate / scale it (buttons at the viewport's top left, or **W / E / R**) with the gizmo: each drag writes a key at the playhead. The first key of a track also adds a zero key at 0 s so the offset starts where you key it.
+- **Limb FK**: three rotate-only tracks, a control on each joint.
+- **Limb IK** (legs and arms): a control at the end effector plus a **pole vector** control for the knee/elbow direction; a two-bone IK solves the chain. The effector is a **free world-space target**, unparented from the root: a foot you key on the ground stays there while root motion plays, and the leg reaches until it is fully extended. Each key has an *IK weight*: 1 = on the target, 0 = animation. *Release IK Here* (lane menu) holds the plant, then eases back to the animation.
+- **Foot-lock pins**: a manual lock in the foot lane shows its pin as a draggable control; dragging it moves the pinned spot (a free IK target shared with foot lock).
+- Lane keys: click to select, drag to move, **Delete** to remove; right-click a lane for *Add Key at Playhead*, *Remove Track*, key weight and release options. Ctrl+Z / Ctrl+Y undo every edit.
 ## Scripting
 
 `UAnimStitchBlueprintLibrary::BakeTimeline(Timeline, OutputAssetPath, FrameRate, bOverwriteExisting, OutError)` bakes a timeline asset from Blueprints, Editor Utility Widgets or Python.
@@ -92,3 +107,11 @@ A second, separate switch next to **Foot Lock** in the toolbar, **off by default
 
 
 
+
+
+
+## Viewport toolbar, controls and preview props
+- The viewport has a toolbar: Move/Rotate/Scale icon buttons, a World/Local toggle, a Show menu (Grid, Bones, Controls with a Control Size slider, Preview Attachments) and a bone picker. Show-menu toggles repaint the viewport immediately.
+- Adding a bone track adds keys at the timeline start and end (IK tracks start with weight 0).
+- Preview Attachments (Show menu): attach static/skeletal meshes to a socket or any bone with an offset. Saved in the timeline asset, shown in the preview only, never baked.
+- The transform manipulator is a modern-style thin, long gizmo drawn by the plugin (the engine gizmo cannot be hosted without an edit mode).

@@ -60,6 +60,23 @@ public:
 	void PaintFootLock(int32 Foot, double TimelineStart, double TimelineEnd);
 	/** Removes all manual events for one foot (0/1) or both (INDEX_NONE): back to automatic detection. */
 	void ClearFootEvents(int32 Foot);
+	// ---- Manual bone correction tracks (Phase 9) ----
+	/** Adds a track (a second track for the same bone and kind is refused). Returns its index. */
+	int32 AddTrack(const FAnimStitchTrack& Track);
+	void RemoveTrack(int32 Index);
+	/** Sets (or replaces) the key at the key's time. The first key of a track also adds the anchor that keeps the correction local. */
+	void SetTrackKey(int32 Track, const FAnimStitchTrackKey& Key);
+	void RemoveTrackKey(int32 Track, int32 KeyIndex);
+	/** Returns the key's index after re-sorting. */
+	int32 MoveTrackKey(int32 Track, int32 KeyIndex, double NewTime);
+	void SetTrackKeyWeight(int32 Track, int32 KeyIndex, float Weight);
+	/** Moves the pin of a manual foot lock (free IK target). */
+	void SetPinOffset(int32 ClipIndex, int32 EventIndex, const FVector& Offset);
+	void AddPreviewAttachment(const FAnimStitchPreviewAttachment& Attachment);
+	void RemovePreviewAttachment(int32 Index);
+	/** Bumped by every track/key edit (and undo/redo): the preview re-applies the manual corrections. */
+	uint32 GetManualCounter() const { return ManualCounter; }
+
 	/** Gives clip Index a crossfade of the plugin-settings default length (clamped to what fits). */
 	void AddDefaultCrossfade(int32 Index);
 	void SetRootAuthority(int32 Index);
@@ -79,8 +96,14 @@ public:
 
 private:
 	void Touch() { Modify(); ++EditCounter; }
+	/** Manual track edits don't change what the automatic passes see, so they only bump this counter. */
+	void TouchManual() { Modify(); ++ManualCounter; }
 
 	uint32 EditCounter = 0;
+	uint32 ManualCounter = 0;
 };
+
+
+
 
 

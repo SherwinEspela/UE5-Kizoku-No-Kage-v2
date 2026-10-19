@@ -14,6 +14,12 @@
 #include "SAnimStitchBatchDialog.h"
 #include "SAnimStitchBakeDialog.h"
 #include "SAnimStitchFootLockSettings.h"
+#include "SAnimStitchBoneDetails.h"
+#include "SAnimStitchAttachDialog.h"
+#include "Widgets/Input/SSearchableComboBox.h"
+#include "Widgets/Layout/SWidgetSwitcher.h"
+#include "Widgets/Input/SSpinBox.h"
+#include "Widgets/Images/SImage.h"
 #include "ScopedTransaction.h"
 #include "Widgets/Input/SComboButton.h"
 #include "AssetToolsModule.h"
@@ -42,6 +48,8 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 {
 	Asset = NewObject<UAnimStitchTimelineAsset>(GetTransientPackage(), NAME_None, RF_Transactional);
 	Preview = MakeShared<FAnimStitchPreview>();
+	Preview->OnBoneSelectionChanged.AddSP(this, &SAnimStitchPanel::OnPreviewBoneSelected);
+	Preview->SetAsset(Asset);
 
 	auto CurveButton = [this](EAnimStitchBlendCurve Curve, const FText& Label)
 	{
@@ -79,7 +87,18 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 			];
 	};
 
-	auto AssetButton = [](const FText& Label, const FText& Tip, TFunction<void()> OnClick)
+	auto RightTabButton = [this](const FText& Label, int32 TabIndex)
+	{
+		return SNew(SCheckBox)
+			.Style(FAppStyle::Get(), "ToggleButtonCheckbox")
+			.IsChecked_Lambda([this, TabIndex]() { return RightTab == TabIndex ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+			.OnCheckStateChanged_Lambda([this, TabIndex](ECheckBoxState State) { if (State == ECheckBoxState::Checked) { RightTab = TabIndex; } })
+			[
+				SNew(STextBlock).Text(Label).Margin(FMargin(10.f, 3.f))
+			];
+	};
+
+		auto AssetButton =[](const FText& Label, const FText& Tip, TFunction<void()> OnClick)
 	{
 		return SNew(SButton)
 			.Text(Label)
@@ -99,30 +118,33 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 	ChildSlot
 	[
 		SNew(SSplitter).Orientation(Orient_Horizontal)
-		+ SSplitter::Slot().Value(0.78f)
+		+ SSplitter::Slot().Value(0.74f)
 		[
 		SNew(SSplitter).Orientation(Orient_Vertical)
 		+ SSplitter::Slot().Value(0.55f)
-		[
-			SNew(SOverlay)
-			+ SOverlay::Slot()
 			[
-				SAssignNew(Viewport, SAnimStitchViewport).Preview(Preview)
-			]
-			+ SOverlay::Slot().HAlign(HAlign_Right).VAlign(VAlign_Top).Padding(10.f)
-			[
-				ToggleButton(LOCTEXT("Grid", "Grid"), LOCTEXT("GridTip", "Show or hide the ground grid"),
-					[this]() { return Preview->GetShowGrid(); }, [this](bool b) { Preview->SetShowGrid(b); })
-			]
-			+ SOverlay::Slot().HAlign(HAlign_Left).VAlign(VAlign_Top).Padding(10.f)
-			[
-				SNew(SBorder).BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder")).Padding(6.f)
-				.Visibility(this, &SAnimStitchPanel::GetProblemVisibility)
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight()
 				[
-					SNew(STextBlock).Text(this, &SAnimStitchPanel::GetProblemText).AutoWrapText(true)
+					MakeViewportToolbar()
+				]
+				+ SVerticalBox::Slot().FillHeight(1.f)
+				[
+					SNew(SOverlay)
+					+ SOverlay::Slot()
+					[
+						SAssignNew(Viewport, SAnimStitchViewport).Preview(Preview)
+					]
+					+ SOverlay::Slot().HAlign(HAlign_Left).VAlign(VAlign_Top).Padding(10.f)
+					[
+						SNew(SBorder).BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder")).Padding(6.f)
+						.Visibility(this, &SAnimStitchPanel::GetProblemVisibility)
+						[
+							SNew(STextBlock).Text(this, &SAnimStitchPanel::GetProblemText).AutoWrapText(true)
+						]
+					]
 				]
 			]
-		]
 		+ SSplitter::Slot().Value(0.45f)
 		[
 			SNew(SVerticalBox)
@@ -309,16 +331,26 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 			]
 		]
 		]
-		+ SSplitter::Slot().Value(0.22f)
+		+ SSplitter::Slot().Value(0.26f)
 		[
 			SNew(SVerticalBox)
 			+ SVerticalBox::Slot().AutoHeight().Padding(6.f, 6.f, 6.f, 2.f)
 			[
-				SNew(STextBlock).Text(LOCTEXT("BrowserTitle", "Content Browser")).Font(FAppStyle::GetFontStyle("BoldFont"))
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 2, 0)[RightTabButton(LOCTEXT("ContentBrowserTab", "Content Browser"), 0)]
+				+ SHorizontalBox::Slot().AutoWidth()[RightTabButton(LOCTEXT("DetailsTab", "Details"), 1)]
 			]
 			+ SVerticalBox::Slot().FillHeight(1.f)
 			[
-				SAssignNew(BrowserBox, SBox)
+				SNew(SWidgetSwitcher).WidgetIndex_Lambda([this]() { return RightTab; })
+				+ SWidgetSwitcher::Slot()
+				[
+					SAssignNew(BrowserBox, SBox)
+				]
+				+ SWidgetSwitcher::Slot()
+				[
+					SNew(SAnimStitchBoneDetails).Preview(Preview)
+				]
 			]
 		]
 	];
@@ -352,6 +384,16 @@ EActiveTimerReturnType SAnimStitchPanel::UpdatePreview(double CurrentTime, float
 		SyncPreviewToTimeline();
 	}
 	Timeline->ApplyPendingZoomFit();
+	if (Asset->GetManualCounter() != LastManualCounter)
+	{
+		LastManualCounter = Asset->GetManualCounter();
+		Preview->SetManualTracks(Asset->Timeline.Tracks);
+		Preview->SetPreviewAttachments(Asset->Timeline.PreviewAttachments);
+	}
+	if (BoneItemsMesh.Get() != Preview->GetMesh())
+	{
+		RebuildBoneItems();
+	}
 	UpdatePlantLanes(CurrentTime);
 
 	const USkeleton* MeshSkeleton = Preview->GetMesh() ? Preview->GetMesh()->GetSkeleton() : nullptr;
@@ -403,6 +445,7 @@ void SAnimStitchPanel::UpdatePlantLanes(double Now)
 	if (!Asset->Timeline.FootLock.bEnabled && !Asset->Timeline.bPredictFeet)
 	{
 		Preview->ClearCorrectedPoses();
+		Preview->ClearLockInfo();
 		if (PlantData.IsValid())
 		{
 			PlantData.Reset();
@@ -447,12 +490,19 @@ void SAnimStitchPanel::UpdatePlantLanes(double Now)
 				bOk = false;
 			}
 		}
+		if (!Evaluator->GetTimeline().FootLock.bEnabled)
+		{
+			Preview->ClearLockInfo();
+		}
 		if (bOk && Evaluator->GetTimeline().FootLock.bEnabled)
 		{
 			*Result = FAnimStitchFootLock::Detect(*Evaluator, Poses, AnalysisFps);
 			if (Result->bValid)
 			{
-				FAnimStitchFootLock::Pin(*Evaluator, Poses, *Result);
+				FAnimStitchPinOutput PinOutput;
+				FAnimStitchFootLock::Pin(*Evaluator, Poses, *Result, &PinOutput);
+				FAnimStitchFootLockResult LockCopy = *Result;
+				Preview->SetLockInfo(MoveTemp(LockCopy), MoveTemp(PinOutput), AnalysisFps);
 			}
 			else
 			{
@@ -484,11 +534,255 @@ void SAnimStitchPanel::SetAsset(UAnimStitchTimelineAsset* NewAsset)
 	}
 	bPlaying = false;
 	Asset = NewAsset;
+	Preview->SetAsset(NewAsset);
+	LastManualCounter = MAX_uint32;
 	Timeline->SetTimelineAsset(NewAsset);
 	LastEditCounter = MAX_uint32; // forces a re-sync next tick
 	LastSkeleton = nullptr;
 	LastWarning = FText::GetEmpty();
 	Timeline->RequestZoomToFit();
+}
+
+TSharedRef<SWidget> SAnimStitchPanel::MakeViewportToolbar()
+{
+	auto IconToggle = [this](const FName& Brush, const FText& Tip, TFunction<bool()> IsOn, TFunction<void()> OnClick)
+	{
+		return SNew(SCheckBox)
+			.Style(FAppStyle::Get(), "ToggleButtonCheckbox")
+			.ToolTipText(Tip)
+			.IsChecked_Lambda([IsOn]() { return IsOn() ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+			.OnCheckStateChanged_Lambda([OnClick](ECheckBoxState) { OnClick(); })
+			[
+				SNew(SBox).WidthOverride(24.f).HeightOverride(24.f).HAlign(HAlign_Center).VAlign(VAlign_Center)
+				[
+					SNew(SImage).Image(FAppStyle::GetBrush(Brush)).ColorAndOpacity(FSlateColor::UseForeground())
+				]
+			];
+	};
+
+	return SNew(SBorder).BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder")).Padding(FMargin(6.f, 3.f))
+	[
+		SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 2, 0)
+		[
+			IconToggle("EditorViewport.TranslateMode", LOCTEXT("GizmoMoveTip", "Move the selected control (W)"), [this]() { return Preview->GetGizmoMode() == EAnimStitchGizmoMode::Translate; }, [this]() { Preview->SetGizmoMode(EAnimStitchGizmoMode::Translate); })
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 2, 0)
+		[
+			IconToggle("EditorViewport.RotateMode", LOCTEXT("GizmoRotateTip", "Rotate the selected control (E)"), [this]() { return Preview->GetGizmoMode() == EAnimStitchGizmoMode::Rotate; }, [this]() { Preview->SetGizmoMode(EAnimStitchGizmoMode::Rotate); })
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+		[
+			IconToggle("EditorViewport.ScaleMode", LOCTEXT("GizmoScaleTip", "Scale the selected control (R)"), [this]() { return Preview->GetGizmoMode() == EAnimStitchGizmoMode::Scale; }, [this]() { Preview->SetGizmoMode(EAnimStitchGizmoMode::Scale); })
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+		[
+			SNew(SButton)
+			.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+			.ToolTipText_Lambda([this]()
+			{
+				return Preview->GetCoordSpace() == EAnimStitchCoordSpace::World
+					? LOCTEXT("CoordWorldTip", "World coordinates. Click to switch to local (the control's own axes).")
+					: LOCTEXT("CoordLocalTip", "Local coordinates. Click to switch to world.");
+			})
+			.ContentPadding(FMargin(2.f))
+			.OnClicked_Lambda([this]()
+			{
+				Preview->SetCoordSpace(Preview->GetCoordSpace() == EAnimStitchCoordSpace::World ? EAnimStitchCoordSpace::Local : EAnimStitchCoordSpace::World);
+				return FReply::Handled();
+			})
+			[
+				SNew(SBox).WidthOverride(24.f).HeightOverride(24.f).HAlign(HAlign_Center).VAlign(VAlign_Center)
+				[
+					SNew(SImage).ColorAndOpacity(FSlateColor::UseForeground())
+					.Image_Lambda([this]() { return FAppStyle::GetBrush(Preview->GetCoordSpace() == EAnimStitchCoordSpace::World ? "EditorViewport.RelativeCoordinateSystem_World" : "EditorViewport.RelativeCoordinateSystem_Local"); })
+				]
+			]
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+		[
+			SNew(SComboButton)
+			.HasDownArrow(true)
+			.ToolTipText(LOCTEXT("ShowMenuTip", "Show flags: bones, controls, sockets, grid, preview attachments"))
+			.ButtonContent()
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 4, 0)[SNew(SImage).Image(FAppStyle::GetBrush("Icons.Visible")).ColorAndOpacity(FSlateColor::UseForeground())]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(STextBlock).Text(LOCTEXT("ShowMenu", "Show"))]
+			]
+			.OnGetMenuContent(this, &SAnimStitchPanel::MakeShowMenu)
+		]
+		+ SHorizontalBox::Slot().FillWidth(1.f)
+		[
+			SNullWidget::NullWidget
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+		[
+			SNew(SBox).WidthOverride(260.f)
+			[
+				SAssignNew(BoneCombo, SSearchableComboBox)
+				.OptionsSource(&BoneItems)
+				.OnGenerateWidget_Lambda([](TSharedPtr<FString> Item) { return SNew(STextBlock).Text(FText::FromString(*Item)); })
+				.OnSelectionChanged(this, &SAnimStitchPanel::OnBoneComboChanged)
+				[
+					SNew(STextBlock).Text_Lambda([this]()
+					{
+						const int32 Bone = Preview->GetSelectedBone();
+						return Bone != INDEX_NONE ? FText::FromName(Preview->GetMeshBoneName(Bone)) : LOCTEXT("PickBoneCombo", "Select a bone...");
+					})
+				]
+			]
+		]
+	];
+}
+
+TSharedRef<SWidget> SAnimStitchPanel::MakeShowMenu()
+{
+	FMenuBuilder Menu(false, nullptr); // stays open while toggling, like the animation editor's Show menu
+	Menu.BeginSection("SceneElements", LOCTEXT("SceneElements", "Scene Elements"));
+	Menu.AddSubMenu(LOCTEXT("BonesMenu", "Bones"), LOCTEXT("BonesMenuTip", "How the skeleton of the preview character is drawn"), FNewMenuDelegate::CreateSP(this, &SAnimStitchPanel::FillBonesMenu));
+	Menu.AddSubMenu(LOCTEXT("ControlsMenu", "Controls"), LOCTEXT("ControlsMenuTip", "Manual-correction control shapes: visibility and size"), FNewMenuDelegate::CreateSP(this, &SAnimStitchPanel::FillControlsMenu));
+	Menu.AddSubMenu(LOCTEXT("AttachmentsMenu", "Preview Attachments"), LOCTEXT("AttachmentsMenuTip", "Props on the preview character (preview only, never baked)"), FNewMenuDelegate::CreateSP(this, &SAnimStitchPanel::FillAttachmentsMenu));
+	Menu.EndSection();
+
+	Menu.BeginSection("CommonShowFlags", LOCTEXT("CommonShowFlags", "Common Show Flags"));
+	Menu.AddMenuEntry(LOCTEXT("GridFlag", "Grid"), LOCTEXT("GridFlagTip", "Show or hide the ground grid (Alt+Shift+G)"), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateLambda([this]() { Preview->SetShowGrid(!Preview->GetShowGrid()); }), FCanExecuteAction(),
+			FIsActionChecked::CreateLambda([this]() { return Preview->GetShowGrid(); })),
+		NAME_None, EUserInterfaceActionType::ToggleButton);
+	Menu.EndSection();
+	return Menu.MakeWidget();
+}
+
+void SAnimStitchPanel::FillControlsMenu(FMenuBuilder& Menu)
+{
+	Menu.BeginSection("ControlsShow", LOCTEXT("ControlsSection", "Controls"));
+	Menu.AddMenuEntry(LOCTEXT("ShowControls", "Show Controls"), LOCTEXT("ShowControlsTip", "Show the control shapes and the manipulator for manual corrections"), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateLambda([this]() { Preview->SetShowControls(!Preview->GetShowControls()); }), FCanExecuteAction(),
+			FIsActionChecked::CreateLambda([this]() { return Preview->GetShowControls(); })),
+		NAME_None, EUserInterfaceActionType::ToggleButton);
+	Menu.AddWidget(
+		SNew(SBox).WidthOverride(120.f)
+		[
+			SNew(SSpinBox<float>).MinValue(0.2f).MaxValue(8.f).MinSliderValue(0.2f).MaxSliderValue(4.f).Delta(0.1f)
+			.ToolTipText(LOCTEXT("ControlSizeTip", "Size of the control shapes"))
+			.Value_Lambda([this]() { return Preview->GetControlDrawSize(); })
+			.OnValueChanged_Lambda([this](float V) { Preview->SetControlDrawSize(V); })
+			.OnValueCommitted_Lambda([this](float V, ETextCommit::Type) { Preview->SetControlDrawSize(V); })
+		],
+		LOCTEXT("ControlSize", "Control Size"));
+	Menu.EndSection();
+}
+
+void SAnimStitchPanel::FillAttachmentsMenu(FMenuBuilder& Menu)
+{
+	Menu.AddMenuEntry(LOCTEXT("AttachAsset", "Attach Asset..."), LOCTEXT("AttachAssetTip", "Attach a static or skeletal mesh to a socket or bone of the preview character"), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateLambda([this]() { SAnimStitchAttachDialog::Show(Asset, Preview->GetMesh()); }),
+			FCanExecuteAction::CreateLambda([this]() { return Preview->GetMesh() != nullptr; })));
+	if (Asset->Timeline.PreviewAttachments.Num() > 0)
+	{
+		Menu.BeginSection("CurrentAttachments", LOCTEXT("CurrentAttachments", "Attached"));
+		for (int32 i = 0; i < Asset->Timeline.PreviewAttachments.Num(); ++i)
+		{
+			const FAnimStitchPreviewAttachment& Attachment = Asset->Timeline.PreviewAttachments[i];
+			Menu.AddMenuEntry(FText::Format(LOCTEXT("RemoveAttachment", "Remove {0} @ {1}"), FText::FromString(Attachment.Asset.GetAssetName()), FText::FromName(Attachment.Socket)), FText::GetEmpty(), FSlateIcon(),
+				FUIAction(FExecuteAction::CreateLambda([this, i]()
+				{
+					const FScopedTransaction Tx(LOCTEXT("RemoveAttachTx", "Remove Preview Attachment"));
+					Asset->RemovePreviewAttachment(i);
+				})));
+		}
+		Menu.EndSection();
+	}
+}
+
+void SAnimStitchPanel::FillBonesMenu(FMenuBuilder& Menu)
+{
+	auto Toggle = [this, &Menu](const FText& Label, const FText& Tip, TFunction<bool()> Get, TFunction<void(bool)> Set)
+	{
+		Menu.AddMenuEntry(Label, Tip, FSlateIcon(),
+			FUIAction(FExecuteAction::CreateLambda([Get, Set]() { Set(!Get()); }), FCanExecuteAction(), FIsActionChecked::CreateLambda([Get]() { return Get(); })),
+			NAME_None, EUserInterfaceActionType::ToggleButton);
+	};
+
+	Menu.BeginSection("BonesShow", LOCTEXT("BonesShow", "Show"));
+	Toggle(LOCTEXT("ShowSockets", "Sockets"), LOCTEXT("ShowSocketsTip", "Draw the preview mesh's sockets"), [this]() { return Preview->GetShowSockets(); }, [this](bool b) { Preview->SetShowSockets(b); });
+	Toggle(LOCTEXT("ShowBoneNames", "Bone Names"), LOCTEXT("ShowBoneNamesTip", "Label the drawn bones with their names"), [this]() { return Preview->GetShowBoneNames(); }, [this](bool b) { Preview->SetShowBoneNames(b); });
+	Toggle(LOCTEXT("MultiColorBones", "Multi-Color Bones"), LOCTEXT("MultiColorBonesTip", "Colour bones by their depth in the hierarchy"), [this]() { return Preview->GetMultiColorBones(); }, [this](bool b) { Preview->SetMultiColorBones(b); });
+	Menu.EndSection();
+
+	Menu.BeginSection("BoneDrawing", LOCTEXT("BoneDrawing", "Bone Drawing"));
+	Menu.AddWidget(
+		SNew(SBox).WidthOverride(120.f)
+		[
+			SNew(SSpinBox<float>).MinValue(0.1f).MaxValue(10.f).MinSliderValue(0.1f).MaxSliderValue(5.f).Delta(0.1f)
+			.ToolTipText(LOCTEXT("BoneDrawSizeTip", "Size of the drawn joints, links and axes"))
+			.Value_Lambda([this]() { return Preview->GetBoneDrawSize(); })
+			.OnValueChanged_Lambda([this](float V) { Preview->SetBoneDrawSize(V); })
+			.OnValueCommitted_Lambda([this](float V, ETextCommit::Type) { Preview->SetBoneDrawSize(V); })
+		],
+		LOCTEXT("BoneDrawSize", "Bone Draw Size"));
+	auto Mode = [this, &Menu](const FText& Label, const FText& Tip, EAnimStitchBoneDrawMode Value)
+	{
+		Menu.AddMenuEntry(Label, Tip, FSlateIcon(),
+			FUIAction(FExecuteAction::CreateLambda([this, Value]() { Preview->SetBoneDrawMode(Value); }), FCanExecuteAction(),
+				FIsActionChecked::CreateLambda([this, Value]() { return Preview->GetBoneDrawMode() == Value; })),
+			NAME_None, EUserInterfaceActionType::RadioButton);
+	};
+	Mode(LOCTEXT("ModeAll", "All Hierarchy"), LOCTEXT("ModeAllTip", "Draw every bone. Click a joint to select it."), EAnimStitchBoneDrawMode::AllHierarchy);
+	Mode(LOCTEXT("ModeSelected", "Selected Only"), LOCTEXT("ModeSelectedTip", "Draw only the selected bone"), EAnimStitchBoneDrawMode::SelectedOnly);
+	Mode(LOCTEXT("ModeParents", "Selected and Parents"), LOCTEXT("ModeParentsTip", "The selected bone and everything above it"), EAnimStitchBoneDrawMode::SelectedAndParents);
+	Mode(LOCTEXT("ModeChildren", "Selected and Children"), LOCTEXT("ModeChildrenTip", "The selected bone and everything below it"), EAnimStitchBoneDrawMode::SelectedAndChildren);
+	Mode(LOCTEXT("ModeBoth", "Selected and Parents and Children"), LOCTEXT("ModeBothTip", "The selected bone, its ancestors and its descendants"), EAnimStitchBoneDrawMode::SelectedAndParentsAndChildren);
+	Mode(LOCTEXT("ModeNone", "None"), LOCTEXT("ModeNoneTip", "Don't draw the skeleton"), EAnimStitchBoneDrawMode::None);
+	Menu.EndSection();
+}
+
+void SAnimStitchPanel::RebuildBoneItems()
+{
+	BoneItemsMesh = Preview->GetMesh();
+	BoneItems.Reset();
+	for (int32 i = 0; i < Preview->GetNumMeshBones(); ++i)
+	{
+		BoneItems.Add(MakeShared<FString>(Preview->GetMeshBoneName(i).ToString()));
+	}
+	if (BoneCombo.IsValid())
+	{
+		BoneCombo->RefreshOptions();
+		OnPreviewBoneSelected();
+	}
+}
+
+void SAnimStitchPanel::OnBoneComboChanged(TSharedPtr<FString> Item, ESelectInfo::Type SelectInfo)
+{
+	if (SelectInfo == ESelectInfo::Direct || !Item.IsValid())
+	{
+		return; // the change came from the viewport (or a refresh), not from the user picking in the list
+	}
+	Preview->SelectBone(Preview->FindMeshBone(FName(**Item)));
+}
+
+void SAnimStitchPanel::OnPreviewBoneSelected()
+{
+	if (!BoneCombo.IsValid())
+	{
+		return;
+	}
+	const int32 Bone = Preview->GetSelectedBone();
+	if (Bone == INDEX_NONE)
+	{
+		BoneCombo->ClearSelection();
+		return;
+	}
+	const FString Name = Preview->GetMeshBoneName(Bone).ToString();
+	for (const TSharedPtr<FString>& Item : BoneItems)
+	{
+		if (*Item == Name)
+		{
+			BoneCombo->SetSelectedItem(Item);
+			break;
+		}
+	}
 }
 
 void SAnimStitchPanel::OnTimelineScrubbed()
@@ -731,6 +1025,11 @@ void SAnimStitchPanel::TogglePlayback()
 
 FReply SAnimStitchPanel::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
 {
+	if (InKeyEvent.GetKey() == EKeys::G && InKeyEvent.IsAltDown() && InKeyEvent.IsShiftDown() && !InKeyEvent.IsRepeat())
+	{
+		Preview->SetShowGrid(!Preview->GetShowGrid());
+		return FReply::Handled();
+	}
 	if (InKeyEvent.GetKey() == EKeys::Enter && !InKeyEvent.IsRepeat())
 	{
 		Timeline->ZoomToFit();
@@ -860,6 +1159,18 @@ ECheckBoxState SAnimStitchPanel::GetCurveState(EAnimStitchBlendCurve Curve) cons
 }
 
 #undef LOCTEXT_NAMESPACE
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

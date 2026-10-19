@@ -49,6 +49,17 @@ struct ANIMSTITCHEDITOR_API FAnimStitchFootLockResult
 		EAnimStitchFootAction Action = EAnimStitchFootAction::Lock;
 	};
 	TArray<FEventMark> Events[2];
+
+	/** Per frame: pin offset of the manual lock governing that frame (zero otherwise) and which event owns it (clip, event index; -1 = none). */
+	TArray<FVector> PinOffset[2];
+	TArray<FIntPoint> PinEvent[2];
+};
+
+/** Extra results of FAnimStitchFootLock::Pin. */
+struct ANIMSTITCHEDITOR_API FAnimStitchPinOutput
+{
+	/** Per frame: the world-space point a manually locked foot is pinned to (valid where the plant mask says ManualPin). */
+	TArray<FVector> ManualTarget[2];
 };
 
 /** What the pre-blend foot prediction did (for logs and tests). */
@@ -93,7 +104,20 @@ public:
 	static FAnimStitchPredictReport PredictFeet(const class FAnimStitchEvaluator& Evaluator, TArray<TArray<FTransform>>& Poses, double Fps);
 
 	/** Pins planted feet by solving the legs; modifies Poses in place. Returns the number of corrected foot-frames. */
-	static int32 Pin(const class FAnimStitchEvaluator& Evaluator, TArray<TArray<FTransform>>& Poses, const FAnimStitchFootLockResult& Detection);
+	static int32 Pin(const class FAnimStitchEvaluator& Evaluator, TArray<TArray<FTransform>>& Poses, const FAnimStitchFootLockResult& Detection, FAnimStitchPinOutput* Output = nullptr);
+
+	/**
+	 * Two-bone IK for one limb (thigh/calf/foot or upper arm/forearm/hand): moves the effector to DesiredEffector, keeping segment lengths
+	 * (the limb extends fully if out of reach, the pelvis/shoulder is never moved). PoleTarget (optional) steers the knee/elbow, EffectorRotation
+	 * (optional, component space) sets the end bone orientation. Only rotations of the three bones change.
+	 */
+	static void SolveLimb(const FReferenceSkeleton& RefSkeleton, TArray<FTransform>& LocalPose, const FAnimStitchFootChain& Chain, const FVector& DesiredEffector,
+		const FVector* PoleTarget = nullptr, double PoleWeight = 0.0, const FQuat* EffectorRotation = nullptr);
+
+	/** Component-space transform of a bone from a skeleton-local pose. */
+	static FTransform GetComponentSpace(const FReferenceSkeleton& RefSkeleton, const TArray<FTransform>& LocalPose, int32 Bone);
 };
+
+
 
 

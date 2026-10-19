@@ -244,6 +244,8 @@ int32 SAnimStitchTimeline::OnPaint(const FPaintArgs& Args, const FGeometry& G, c
 		DrawRect(Out, Layer + 14, G, FVector2f(EX - 8.f, 0.f), FVector2f(8.f, 10.f), EndColor);
 	}
 
+	PaintTrackLanes(Out, Layer + 7, G);
+
 	// Drop insertion marker
 	if (bDropHover)
 	{
@@ -304,6 +306,27 @@ SAnimStitchTimeline::FHit SAnimStitchTimeline::HitTest(const FVector2f& P) const
 				Result.Index = Foot;
 				return Result;
 			}
+		}
+	}
+	// Manual correction lanes below the clip track.
+	for (int32 i = 0; i < Asset->Timeline.Tracks.Num(); ++i)
+	{
+		const float Top = GetTrackLaneTop(i);
+		if (P.Y >= Top && P.Y <= Top + TrackLaneHeight)
+		{
+			Result.Type = EHit::TrackLane;
+			Result.Index = i;
+			const FAnimStitchTrack& Track = Asset->Timeline.Tracks[i];
+			for (int32 k = 0; k < Track.Keys.Num(); ++k)
+			{
+				if (FMath::Abs(P.X - TimeToX(Track.Keys[k].Time)) <= 9.f)
+				{
+					Result.Type = EHit::TrackKey;
+					Result.Sub = k;
+					break;
+				}
+			}
+			return Result;
 		}
 	}
 	if (P.Y < GetTrackTop() || P.Y > GetTrackTop() + TrackHeight)
@@ -393,6 +416,17 @@ FReply SAnimStitchTimeline::OnMouseButtonDown(const FGeometry& G, const FPointer
 	case EHit::MarkerEnd:
 		DragMode = Hit.Type == EHit::MarkerStart ? EDrag::MarkerStart : EDrag::MarkerEnd;
 		break;
+	case EHit::TrackLane:
+	case EHit::TrackKey:
+		SelectedTrack = Hit.Index;
+		SelectedKey = Hit.Type == EHit::TrackKey ? Hit.Sub : INDEX_NONE;
+		SelectClip(INDEX_NONE, false);
+		if (Hit.Type == EHit::TrackKey)
+		{
+			DragMode = EDrag::KeyMove;
+			InitialKeyTime = Asset->Timeline.Tracks[Hit.Index].Keys[Hit.Sub].Time;
+		}
+		break;
 	case EHit::FootLane:
 		DragMode = EDrag::FootLane;
 		DragFoot = Hit.Index;
@@ -432,7 +466,20 @@ FReply SAnimStitchTimeline::OnMouseButtonUp(const FGeometry& G, const FPointerEv
 {
 	if (Event.GetEffectingButton() == EKeys::RightMouseButton)
 	{
-		const FHit Hit = HitTest(G.AbsoluteToLocal(Event.GetScreenSpacePosition()));
+		const FVector2f LocalPos = G.AbsoluteToLocal(Event.GetScreenSpacePosition());
+		const FHit Hit = HitTest(LocalPos);
+		if (Hit.Type == EHit::TrackLane || Hit.Type == EHit::TrackKey)
+		{
+			SelectedTrack = Hit.Index;
+			SelectedKey = Hit.Type == EHit::TrackKey ? Hit.Sub : INDEX_NONE;
+			OpenTrackMenu(Event, Hit.Index, SelectedKey, XToTime(LocalPos.X));
+			return FReply::Handled();
+		}
+		if (Hit.Type == EHit::None && LocalPos.Y > GetTrackTop() + TrackHeight)
+		{
+			OpenAddTrackMenu(Event); // right-click below the clip lanes
+			return FReply::Handled();
+		}
 		if (Hit.Type == EHit::FootLane)
 		{
 			OpenFootLaneMenu(Event, Hit.Index, XToTime(G.AbsoluteToLocal(Event.GetScreenSpacePosition()).X));
@@ -491,6 +538,17 @@ void SAnimStitchTimeline::OnDragMove(float LocalX)
 	if (DragMode == EDrag::Pan)
 	{
 		ViewStart = InitialViewStart - (LocalX - DragStartX) / PxPerSec;
+		return;
+	}
+	if (DragMode == EDrag::KeyMove)
+	{
+		if (!bDragStarted)
+		{
+			if (FMath::Abs(LocalX - DragStartX) < 3.f) { return; }
+			bDragStarted = true;
+			DragTransaction = MakeUnique<FScopedTransaction>(LOCTEXT("MoveKeyTx", "Move Key"));
+		}
+		SelectedKey = Asset->MoveTrackKey(SelectedTrack, SelectedKey, InitialKeyTime + (LocalX - DragStartX) / PxPerSec);
 		return;
 	}
 	if (DragMode == EDrag::FootLane)
@@ -625,6 +683,13 @@ FCursorReply SAnimStitchTimeline::OnCursorQuery(const FGeometry& G, const FPoint
 
 FReply SAnimStitchTimeline::OnKeyDown(const FGeometry& G, const FKeyEvent& Event)
 {
+	if ((Event.GetKey() == EKeys::Delete || Event.GetKey() == EKeys::BackSpace) && Asset->Timeline.Tracks.IsValidIndex(SelectedTrack) && Asset->Timeline.Tracks[SelectedTrack].Keys.IsValidIndex(SelectedKey))
+	{
+		const FScopedTransaction Tx(LOCTEXT("DeleteKeyTx", "Delete Key"));
+		Asset->RemoveTrackKey(SelectedTrack, SelectedKey);
+		SelectedKey = INDEX_NONE;
+		return FReply::Handled();
+	}
 	if (Event.GetKey() == EKeys::Delete || Event.GetKey() == EKeys::BackSpace)
 	{
 		DeleteSelected();
@@ -917,6 +982,8 @@ void SAnimStitchTimeline::AddSequencesAt(const TArray<UAnimSequence*>& Sequences
 }
 
 #undef LOCTEXT_NAMESPACE
+
+
 
 
 

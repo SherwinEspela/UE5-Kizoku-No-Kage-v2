@@ -4,6 +4,9 @@
 #include "AnimStitchBatch.h"
 #include "AnimStitchBlueprintLibrary.h"
 #include "AnimStitchFootLock.h"
+#include "AnimStitchManualEdits.h"
+#include "AnimStitchPreview.h"
+#include "Engine/SkeletalMesh.h"
 #include "Algo/MaxElement.h"
 #include "Misc/PackageName.h"
 #include "UObject/Package.h"
@@ -30,6 +33,307 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 	{
 		UE_LOG(LogAnimStitchSpike, Error, TEXT("Could not load A/B"));
 		return 1;
+	}
+
+	// Phase 9 test: -ManualTest with -A=<landing> -B=<run>. Additive pelvis offset bakes; free foot IK stays planted under root motion;
+	// manual wins over foot lock; lock pin offset; control picking.
+	if (FParse::Param(*Params, TEXT("ManualTest")))
+	{
+		const FString Folder = TEXT("/Game/_AnimStitchSpike");
+		UAnimStitchTimelineAsset* TLAsset = NewObject<UAnimStitchTimelineAsset>(GetTransientPackage());
+		TArray<FText> W;
+		TLAsset->AddSequences({ const_cast<UAnimSequence*>(A), const_cast<UAnimSequence*>(B) }, INDEX_NONE, W);
+		TLAsset->SetTrim(1, 0.0, FMath::Min(3.0, (double)B->GetPlayLength()));
+		TLAsset->SetOverlap(1, 0.2);
+		TLAsset->SetRootAuthority(0);
+		FAnimStitchEvaluator Eval;
+		FString EvalErr;
+		Eval.Initialize(TLAsset->Timeline, EvalErr);
+		const FReferenceSkeleton& Ref = Eval.GetSkeleton()->GetReferenceSkeleton();
+		auto ReadPose = [&Ref](const UAnimSequence* Seq, int32 Frame, TArray<FTransform>& OutPose)
+		{
+			const IAnimationDataModel* Model = Seq->GetDataModel();
+			OutPose = Ref.GetRefBonePose();
+			TArray<FName> Names;
+			Model->GetBoneTrackNames(Names);
+			for (const FName& N : Names)
+			{
+				const int32 b = Ref.FindBoneIndex(N);
+				if (b != INDEX_NONE) { OutPose[b] = Model->GetBoneTrackTransform(N, FFrameNumber(Frame)); }
+			}
+		};
+		auto CS = [&Ref](const TArray<FTransform>& Local, int32 Bone) { return FAnimStitchFootLock::GetComponentSpace(Ref, Local, Bone); };
+		auto BakeAll = [&](const TCHAR* Name, TArray<TArray<FTransform>>& Out) -> bool
+		{
+			FString Err;
+			UAnimSequence* Seq = UAnimStitchBlueprintLibrary::BakeTimeline(TLAsset, Folder / Name, 30, false, Err);
+			if (!Seq) { UE_LOG(LogAnimStitchSpike, Error, TEXT("ManualTest bake %s failed: %s"), Name, *Err); return false; }
+			const int32 N = Seq->GetDataModel()->GetNumberOfFrames();
+			Out.SetNum(N + 1);
+			for (int32 f = 0; f <= N; ++f) { ReadPose(Seq, f, Out[f]); }
+			return true;
+		};
+
+		TArray<TArray<FTransform>> Base;
+		if (!BakeAll(TEXT("AS_ManBase"), Base)) { return 40; }
+		const int32 NumFrames = Base.Num() - 1;
+		const int32 Pelvis = Ref.FindBoneIndex(TEXT("pelvis"));
+		const int32 FootBone = Ref.FindBoneIndex(TEXT("foot_l"));
+		if (Pelvis == INDEX_NONE || FootBone == INDEX_NONE) { UE_LOG(LogAnimStitchSpike, Error, TEXT("ManualTest: pelvis/foot_l not found")); return 41; }
+
+		// ---- 1) Pelvis track with one additive key mid-timeline ----
+		{
+			FAnimStitchTrack Track;
+			Track.Kind = EAnimStitchTrackKind::Bone;
+			Track.Bone = TEXT("pelvis");
+			const int32 TrackIndex = TLAsset->AddTrack(Track);
+			const double KeyTime = 2.0;
+			FAnimStitchTrackKey Key;
+			Key.Time = KeyTime;
+			Key.Translation = FVector(0.0, 0.0, 25.0);
+			Key.Rotation = FQuat(FVector::UpVector, FMath::DegreesToRadians(12.0));
+			TLAsset->SetTrackKey(TrackIndex, Key);
+			TArray<TArray<FTransform>> Edited;
+			if (!BakeAll(TEXT("AS_ManPelvis"), Edited)) { return 42; }
+			const int32 FMid = FMath::RoundToInt(KeyTime * 30.0);
+			const FVector MidDelta = CS(Edited[FMid], Pelvis).GetTranslation() - CS(Base[FMid], Pelvis).GetTranslation();
+			const FQuat MidRot = CS(Edited[FMid], Pelvis).GetRotation() * CS(Base[FMid], Pelvis).GetRotation().Inverse();
+			const double StartDiff = (CS(Edited[0], Pelvis).GetTranslation() - CS(Base[0], Pelvis).GetTranslation()).Size();
+			const double HeadDelta = (CS(Edited[FMid], FootBone).GetTranslation() - CS(Base[FMid], FootBone).GetTranslation()).Size();
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest PELVIS: additive key at %.1fs (0,0,+25 cm, yaw +12 deg): baked pelvis moved by %s (expected Z 25) and yawed %.2f deg | frame 0 unchanged (diff %.5f cm) | the key sits on top of a zero anchor at 0.0 s (%d keys) | the character's foot follows the body by %.1f cm"),
+				KeyTime, *MidDelta.ToCompactString(), FMath::RadiansToDegrees(MidRot.GetTwistAngle(FVector::UpVector)), StartDiff, TLAsset->Timeline.Tracks[TrackIndex].Keys.Num(), HeadDelta);
+			TLAsset->RemoveTrack(TrackIndex);
+		}
+
+		// ---- 2) Free foot IK: key the left foot where it is at 1.0 s; the root keeps moving ----
+		{
+			double IKT = 1.0;
+			FParse::Value(*Params, TEXT("IKT="), IKT);
+			const int32 FKey = FMath::RoundToInt(IKT * 30.0);
+			const FVector Target = CS(Base[FKey], FootBone).GetTranslation();
+			const FQuat TargetRot = CS(Base[FKey], FootBone).GetRotation();
+			FAnimStitchTrack Track;
+			Track.Kind = EAnimStitchTrackKind::IKLimb;
+			Track.Bone = TEXT("foot_l");
+			const int32 TrackIndex = TLAsset->AddTrack(Track);
+			const FAnimStitchFootChain Chain = FAnimStitchManualEdits::ChainFor(Ref, Track.Bone);
+			FAnimStitchTrackKey Key;
+			Key.Time = IKT; Key.Translation = Target; Key.Rotation = TargetRot; Key.Weight = 1.f;
+			Key.Pole = FAnimStitchManualEdits::DefaultPole(Ref, Chain, Base[FKey]);
+			TLAsset->SetTrackKey(TrackIndex, Key);
+			FAnimStitchTrackKey HoldKey = Key; HoldKey.Time = IKT + 0.5;
+			TLAsset->SetTrackKey(TrackIndex, HoldKey);
+			FAnimStitchTrackKey Release = Key; Release.Time = IKT + 0.6; Release.Weight = 0.f;
+			TLAsset->SetTrackKey(TrackIndex, Release);
+			TArray<TArray<FTransform>> Edited;
+			if (!BakeAll(TEXT("AS_ManIK"), Edited)) { return 43; }
+			int32 Reachable = 0, Unreachable = 0;
+			double MaxDev = 0.0, MaxRoot = 0.0, MaxLegErr = 0.0;
+			const int32 FRelease = FMath::RoundToInt((IKT + 0.5) * 30.0);
+			for (int32 f = FKey; f <= FRelease; ++f)
+			{
+				const FVector Hip = CS(Edited[f], Chain.Thigh).GetTranslation();
+				const double Length = (CS(Edited[f], Chain.Calf).GetTranslation() - Hip).Size() + (CS(Edited[f], Chain.Foot).GetTranslation() - CS(Edited[f], Chain.Calf).GetTranslation()).Size();
+				MaxRoot = FMath::Max(MaxRoot, (CS(Base[f], 0).GetTranslation() - CS(Base[FKey], 0).GetTranslation()).Size());
+				if ((Target - Hip).Size() < Length - 0.05)
+				{
+					++Reachable;
+					MaxDev = FMath::Max(MaxDev, (CS(Edited[f], FootBone).GetTranslation() - Target).Size());
+				}
+				else { ++Unreachable; }
+				MaxLegErr = FMath::Max(MaxLegErr, FMath::Abs(Length - ((CS(Base[f], Chain.Calf).GetTranslation() - CS(Base[f], Chain.Thigh).GetTranslation()).Size() + (CS(Base[f], Chain.Foot).GetTranslation() - CS(Base[f], Chain.Calf).GetTranslation()).Size())));
+			}
+			const int32 FAfter = FMath::RoundToInt((IKT + 0.9) * 30.0);
+			double MaxAfter = 0.0;
+			for (int32 f = FAfter; f <= NumFrames; ++f) { MaxAfter = FMath::Max(MaxAfter, (CS(Edited[f], FootBone).GetTranslation() - CS(Base[f], FootBone).GetTranslation()).Size()); }
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest FOOT IK: foot keyed in world space at %.1f s, held 0.5 s, released after 0.6 s while the root moves %.0f cm: glued within reach on %d frames (max deviation %.4f cm), %d frames out of reach (leg fully extended) | segment lengths unchanged (%.5f cm) | after the release the foot is back on the animation (max diff %.4f cm)"),
+				IKT, MaxRoot, Reachable, MaxDev, Unreachable, MaxLegErr, MaxAfter);
+
+			// ---- 3) Manual wins over automatic passes: foot lock ON, the IK key above still decides where the foot is ----
+			TLAsset->Timeline.FootLock.bEnabled = true;
+			TArray<TArray<FTransform>> WithLock, LockOnly;
+			if (!BakeAll(TEXT("AS_ManIKLock"), WithLock)) { return 44; }
+			double MaxManualWins = 0.0;
+			for (int32 f = FKey; f <= FRelease; ++f)
+			{
+				const FVector Hip = CS(WithLock[f], Chain.Thigh).GetTranslation();
+				const double Length = (CS(WithLock[f], Chain.Calf).GetTranslation() - Hip).Size() + (CS(WithLock[f], Chain.Foot).GetTranslation() - CS(WithLock[f], Chain.Calf).GetTranslation()).Size();
+				if ((Target - Hip).Size() < Length - 0.05) { MaxManualWins = FMath::Max(MaxManualWins, (CS(WithLock[f], FootBone).GetTranslation() - Target).Size()); }
+			}
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest ORDER: with Foot Lock ON the manual IK key still wins (foot within %.4f cm of its key on the frames in reach)"), MaxManualWins);
+			TLAsset->RemoveTrack(TrackIndex);
+
+			// ---- 4) Lock pin as a free IK target: drag the pin by (+12, 0, 0) ----
+			const int32 LockFrame = FMath::RoundToInt(1.2 * 30.0);
+			TLAsset->AddFootEvent(0, LockFrame / 30.0, EAnimStitchFootAction::Lock);
+			TArray<TArray<FTransform>> PinBase;
+			if (!BakeAll(TEXT("AS_ManPinBase"), PinBase)) { return 45; }
+			const FVector Original = CS(Base[LockFrame], FootBone).GetTranslation();
+			// the event lives on the clip that contains the time
+			int32 OwnerClip = -1, OwnerEvent = -1;
+			for (int32 c = 0; c < TLAsset->Timeline.Clips.Num(); ++c) { for (int32 e = 0; e < TLAsset->Timeline.Clips[c].FootEvents.Num(); ++e) { OwnerClip = c; OwnerEvent = e; } }
+			TLAsset->SetPinOffset(OwnerClip, OwnerEvent, FVector(12.0, 0.0, 0.0));
+			TArray<TArray<FTransform>> PinMoved;
+			if (!BakeAll(TEXT("AS_ManPinMoved"), PinMoved)) { return 46; }
+			double MaxPinDev = 0.0;
+			int32 PinFrames = 0;
+			for (int32 f = LockFrame; f < LockFrame + 12 && f <= NumFrames; ++f)
+			{
+				const FVector Hip = CS(PinMoved[f], FAnimStitchManualEdits::ChainFor(Ref, TEXT("foot_l")).Thigh).GetTranslation();
+				const FAnimStitchFootChain C2 = FAnimStitchManualEdits::ChainFor(Ref, TEXT("foot_l"));
+				const double Length = (CS(PinMoved[f], C2.Calf).GetTranslation() - Hip).Size() + (CS(PinMoved[f], C2.Foot).GetTranslation() - CS(PinMoved[f], C2.Calf).GetTranslation()).Size();
+				if ((Original + FVector(12.0, 0.0, 0.0) - Hip).Size() < Length - 0.05)
+				{
+					++PinFrames;
+					MaxPinDev = FMath::Max(MaxPinDev, (CS(PinMoved[f], FootBone).GetTranslation() - (Original + FVector(12.0, 0.0, 0.0))).Size());
+				}
+			}
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest LOCK PIN: manual lock at 1.2 s with the pin dragged +12 cm in X: foot glued %.4f cm from (original + offset) over %d frames in reach"), MaxPinDev, PinFrames);
+
+			// ---- 5) Viewport controls: the pin is exposed as a control and control shapes can be picked ----
+			USkeletalMesh* PreviewMesh = Eval.GetSkeleton()->GetPreviewMesh(true);
+			if (PreviewMesh)
+			{
+				TSharedRef<FAnimStitchPreview> Preview = MakeShared<FAnimStitchPreview>();
+				Preview->SetMesh(PreviewMesh);
+				Preview->SetAsset(TLAsset);
+				TLAsset->Timeline.FootLock.bEnabled = true;
+				Preview->SetTimeline(TLAsset->Timeline);
+				FAnimStitchTrack Pelvis2; Pelvis2.Kind = EAnimStitchTrackKind::Bone; Pelvis2.Bone = TEXT("pelvis");
+				const int32 PelvisTrack = TLAsset->AddTrack(Pelvis2);
+				Preview->SetManualTracks(TLAsset->Timeline.Tracks);
+				const int32 NumPoses = NumFrames + 1;
+				TArray<TArray<FTransform>> Poses; Poses.SetNum(NumPoses);
+				for (int32 f = 0; f < NumPoses; ++f) { Eval.EvaluatePose(f / 30.0, Poses[f]); }
+				FAnimStitchEvaluator EvalLock; FString E3;
+				EvalLock.Initialize(TLAsset->Timeline, E3);
+				FAnimStitchFootLockResult Det = FAnimStitchFootLock::Detect(EvalLock, Poses, 30.0);
+				FAnimStitchPinOutput PinOut;
+				FAnimStitchFootLock::Pin(EvalLock, Poses, Det, &PinOut);
+				const FVector ExpectedPin = PinOut.ManualTarget[0].IsValidIndex(LockFrame + 2) ? PinOut.ManualTarget[0][LockFrame + 2] : FVector::ZeroVector;
+				Preview->SetLockInfo(MoveTemp(Det), MoveTemp(PinOut), 30.0);
+				Preview->SetPlayhead((LockFrame + 2) / 30.0);
+				TArray<FAnimStitchControl> Controls;
+				Preview->BuildControls(Controls);
+				const FAnimStitchControl* PinControl = Controls.FindByPredicate([](const FAnimStitchControl& C) { return C.Id.Kind == EAnimStitchControlKind::LockPin; });
+				const FAnimStitchControl* BoneControl = Controls.FindByPredicate([](const FAnimStitchControl& C) { return C.Id.Kind == EAnimStitchControlKind::Bone; });
+				UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest CONTROLS: %d controls; pin control present=%d at %.4f cm from the pin target; pelvis control present=%d"), Controls.Num(), PinControl != nullptr, PinControl ? (PinControl->Position - ExpectedPin).Size() : -1.0, BoneControl != nullptr);
+				if (BoneControl)
+				{
+					const FIntRect Rect(0, 0, 1280, 720);
+					const FMatrix ViewProj = FLookAtMatrix(FVector(0.0, -450.0, 110.0), FVector(0.0, 0.0, 90.0), FVector::UpVector) * FPerspectiveMatrix(FMath::DegreesToRadians(45.f) * 0.5f, 1280.f, 720.f, 10.f);
+					FVector2D Pixel;
+					const bool bProj = FSceneView::ProjectWorldToScreen(BoneControl->Position, Rect, ViewProj, Pixel);
+					const FAnimStitchControlId Picked = bProj ? Preview->PickControl(ViewProj, Rect, Pixel + FVector2D(3.0, 2.0), 14.f) : FAnimStitchControlId();
+					const FAnimStitchControlId Nothing = Preview->PickControl(ViewProj, Rect, FVector2D(5000.0, 5000.0), 14.f);
+					UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest PICK: control projects=%d; pick 3 px away returns kind %d (track %d, expected Bone/%d); far pick returns none=%d"), bProj, (int32)Picked.Kind, Picked.A, PelvisTrack, !Nothing.IsValid());
+				}
+			}
+		}
+		return 0;
+	}
+
+	// Phase 8 test: -BoneTest with -A=<clip> -B=<clip>. Selected bone transforms follow the scrub time; picking; visibility states.
+	if (FParse::Param(*Params, TEXT("BoneTest")))
+	{
+		UAnimStitchTimelineAsset* TLAsset = NewObject<UAnimStitchTimelineAsset>(GetTransientPackage());
+		TArray<FText> W;
+		TLAsset->AddSequences({ const_cast<UAnimSequence*>(A), const_cast<UAnimSequence*>(B) }, INDEX_NONE, W);
+		TLAsset->SetOverlap(1, 0.2);
+		FAnimStitchEvaluator Eval;
+		FString EvalErr;
+		if (!Eval.Initialize(TLAsset->Timeline, EvalErr)) { UE_LOG(LogAnimStitchSpike, Error, TEXT("BoneTest: %s"), *EvalErr); return 30; }
+		USkeletalMesh* PreviewMesh = Eval.GetSkeleton()->GetPreviewMesh(true);
+		if (!PreviewMesh) { UE_LOG(LogAnimStitchSpike, Error, TEXT("BoneTest: no preview mesh for the skeleton")); return 31; }
+
+		TSharedRef<FAnimStitchPreview> Preview = MakeShared<FAnimStitchPreview>();
+		int32 SelectionEvents = 0;
+		Preview->OnBoneSelectionChanged.AddLambda([&SelectionEvents]() { ++SelectionEvents; });
+		Preview->SetMesh(PreviewMesh);
+		Preview->SetTimeline(TLAsset->Timeline);
+
+		const int32 FootMesh = Preview->FindMeshBone(TEXT("foot_l"));
+		const int32 FootSkel = Eval.GetSkeleton()->GetReferenceSkeleton().FindBoneIndex(TEXT("foot_l"));
+		if (FootMesh == INDEX_NONE || FootSkel == INDEX_NONE) { UE_LOG(LogAnimStitchSpike, Error, TEXT("BoneTest: foot_l not found")); return 32; }
+		Preview->SelectBone(FootMesh);
+
+		// 1) The selected bone's live transform follows the scrub time and matches the evaluator.
+		const FReferenceSkeleton& SkelRef = Eval.GetSkeleton()->GetReferenceSkeleton();
+		auto SkelCS = [&SkelRef](const TArray<FTransform>& Local, int32 Bone)
+		{
+			FTransform T = Local[Bone];
+			for (int32 P = SkelRef.GetParentIndex(Bone); P != INDEX_NONE; P = SkelRef.GetParentIndex(P)) { T = T * Local[P]; }
+			return T;
+		};
+		double MaxMismatch = 0.0;
+		FVector MinPos(DBL_MAX), MaxPos(-DBL_MAX);
+		const double Times[] = { 0.1, 0.5, 1.0, 1.6, 2.2, 3.0 };
+		for (const double T : Times)
+		{
+			Preview->SetPlayhead(T);
+			FTransform Local, Component;
+			if (!Preview->GetSelectedBoneTransforms(Local, Component)) { UE_LOG(LogAnimStitchSpike, Error, TEXT("BoneTest: no transforms at %.2f"), T); return 33; }
+			TArray<FTransform> Pose;
+			Eval.EvaluatePose(T, Pose);
+			const FTransform Expected = SkelCS(Pose, FootSkel);
+			MaxMismatch = FMath::Max(MaxMismatch, (Component.GetTranslation() - Expected.GetTranslation()).Size());
+			MaxMismatch = FMath::Max(MaxMismatch, (Local.GetTranslation() - Pose[FootSkel].GetTranslation()).Size());
+			MinPos = MinPos.ComponentMin(Component.GetTranslation()); MaxPos = MaxPos.ComponentMax(Component.GetTranslation());
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("BoneTest t=%.2f foot_l component translation %s | local %s"), T, *Component.GetTranslation().ToCompactString(), *Local.GetTranslation().ToCompactString());
+		}
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("BoneTest: Details values vs evaluator, max mismatch %.5f cm; the foot moved %.1f cm across the sampled times"), MaxMismatch, (MaxPos - MinPos).Size());
+
+		// 2) Draw modes and which bones they show (Hierarchy: Selected -> its parents/children).
+		{
+			const int32 NumBones = Preview->GetNumMeshBones();
+			auto Count = [&](EAnimStitchBoneDrawMode Mode)
+			{
+				Preview->SetBoneDrawMode(Mode);
+				TArray<bool> Drawn;
+				Preview->GetDrawnBones(Drawn);
+				int32 N = 0;
+				for (const bool b : Drawn) { N += b ? 1 : 0; }
+				return N;
+			};
+			int32 Depth = 0;
+			for (int32 P = Preview->GetMeshBoneParent(FootMesh); P != INDEX_NONE; P = Preview->GetMeshBoneParent(P)) { ++Depth; }
+			int32 Descendants = 0;
+			for (int32 i = 0; i < NumBones; ++i)
+			{
+				for (int32 P = Preview->GetMeshBoneParent(i); P != INDEX_NONE; P = Preview->GetMeshBoneParent(P)) { if (P == FootMesh) { ++Descendants; break; } }
+			}
+			const int32 None = Count(EAnimStitchBoneDrawMode::None), Only = Count(EAnimStitchBoneDrawMode::SelectedOnly), Parents = Count(EAnimStitchBoneDrawMode::SelectedAndParents);
+			const int32 Children = Count(EAnimStitchBoneDrawMode::SelectedAndChildren), Both = Count(EAnimStitchBoneDrawMode::SelectedAndParentsAndChildren), All = Count(EAnimStitchBoneDrawMode::AllHierarchy);
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("BoneTest: draw modes show None %d | Selected Only %d | +Parents %d (expect %d) | +Children %d (expect %d) | +Both %d (expect %d) | All %d (of %d bones); selection kept=%d"),
+				None, Only, Parents, 1 + Depth, Children, 1 + Descendants, Both, 1 + Depth + Descendants, All, NumBones, Preview->GetSelectedBone() == FootMesh);
+			Preview->SetBoneDrawMode(EAnimStitchBoneDrawMode::AllHierarchy); // picking needs drawn joints
+			Preview->SetBoneDrawSize(2.5f);
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("BoneTest: bone draw size set to %.1f (clamped range 0.1..10)"), Preview->GetBoneDrawSize());
+		}
+		// 3) Picking: project the foot joint with a camera, then pick at that pixel; far-away pixels pick nothing.
+		const FIntRect Rect(0, 0, 1280, 720);
+		const FVector Eye(0.0, -450.0, 110.0), Target(0.0, 0.0, 90.0);
+		const FMatrix ViewProj = FLookAtMatrix(Eye, Target, FVector::UpVector) * FPerspectiveMatrix(FMath::DegreesToRadians(45.f) * 0.5f, 1280.f, 720.f, 10.f);
+		Preview->SetPlayhead(0.5);
+		FTransform LocalNow, ComponentNow;
+		Preview->GetSelectedBoneTransforms(LocalNow, ComponentNow);
+		FVector2D Pixel;
+		const bool bProjected = FSceneView::ProjectWorldToScreen(ComponentNow.GetTranslation(), Rect, ViewProj, Pixel);
+		const int32 Picked = bProjected ? Preview->PickBone(ViewProj, Rect, Pixel + FVector2D(2.0, 1.0), 14.f) : INDEX_NONE;
+		FTransform PL, PC;
+		const int32 Saved = Preview->GetSelectedBone();
+		Preview->SelectBone(Picked);
+		const bool bGot = Preview->GetSelectedBoneTransforms(PL, PC);
+		const double PickError = bGot ? (PC.GetTranslation() - ComponentNow.GetTranslation()).Size() : -1.0;
+		Preview->SelectBone(Saved);
+		const int32 Nothing = Preview->PickBone(ViewProj, Rect, FVector2D(5000.0, 5000.0), 14.f);
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("BoneTest: foot joint projects=%d at (%.0f, %.0f); pick 2 px away returns a joint %.3f cm from the foot; pick far away returns %s"), bProjected, Pixel.X, Pixel.Y, PickError, Nothing == INDEX_NONE ? TEXT("nothing") : TEXT("a bone (unexpected)"));
+
+		// 4) Changing the mesh clears the selection and tells the UI.
+		const int32 EventsBefore = SelectionEvents;
+		Preview->SetMesh(PreviewMesh);
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("BoneTest: mesh reset cleared selection=%d, notified=%d"), Preview->GetSelectedBone() == INDEX_NONE, SelectionEvents > EventsBefore);
+		return 0;
 	}
 
 	// Phase 7 test: -PredictTest=/Game/Folder with -A=<run stop> -B=<idle>. Bakes both-off baseline vs Predict Feet ON (foot lock OFF).
@@ -583,6 +887,10 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 	UE_LOG(LogAnimStitchSpike, Display, TEXT("Max root step %.3f at frame %d"), MaxStep, MaxStepFrame);
 	return 0;
 }
+
+
+
+
 
 
 

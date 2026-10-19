@@ -44,6 +44,10 @@ struct ANIMSTITCHEDITOR_API FAnimStitchFootEvent
 
 	UPROPERTY()
 	EAnimStitchFootAction Action = EAnimStitchFootAction::Lock;
+
+	/** Lock events only: world-space offset the user dragged the pin by (free IK target). Zero = pinned where the foot was. */
+	UPROPERTY()
+	FVector PinOffset = FVector::ZeroVector;
 };
 /** Foot lock (post-blend plant pinning + two-bone IK) settings. OFF by default; flat ground plane assumed. */
 USTRUCT()
@@ -94,6 +98,93 @@ struct ANIMSTITCHEDITOR_API FAnimStitchFootLockSettings
 	float MaxPelvisOffset = 20.f;
 };
 
+/** A prop shown on the preview character (preview only, never baked): a static or skeletal mesh on a socket or bone. */
+USTRUCT()
+struct ANIMSTITCHEDITOR_API FAnimStitchPreviewAttachment
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	TSoftObjectPtr<UObject> Asset;
+
+	/** Socket of the preview mesh, or any bone name. */
+	UPROPERTY()
+	FName Socket;
+
+	UPROPERTY()
+	FVector Location = FVector::ZeroVector;
+
+	UPROPERTY()
+	FRotator Rotation = FRotator::ZeroRotator;
+
+	UPROPERTY()
+	FVector Scale = FVector::OneVector;
+};
+/** Manual bone correction track kinds. */
+UENUM()
+enum class EAnimStitchTrackKind : uint8
+{
+	/** Additive transform offsets on one bone (core bones, FK joints). */
+	Bone,
+	/** Free-IK limb: world-space effector (foot/hand) target, pole-vector target and IK weight. */
+	IKLimb,
+};
+
+/**
+ * One keyframe of a manual correction track (timeline time).
+ * Bone tracks: Translation / Rotation / Scale are ADDITIVE offsets (component space; scale is a factor, 1 = unchanged).
+ * IK limb tracks: Translation / Rotation are the effector's world-space target, Pole is the world-space pole target,
+ * Weight blends from the animation (0) to the target (1).
+ */
+USTRUCT()
+struct ANIMSTITCHEDITOR_API FAnimStitchTrackKey
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	double Time = 0.0;
+
+	UPROPERTY()
+	FVector Translation = FVector::ZeroVector;
+
+	UPROPERTY()
+	FQuat Rotation = FQuat::Identity;
+
+	UPROPERTY()
+	FVector Scale = FVector::OneVector;
+
+	UPROPERTY()
+	FVector Pole = FVector::ZeroVector;
+
+	UPROPERTY()
+	float Weight = 1.f;
+};
+
+/** A transform lane under the clip lanes (Sequencer style). Corrections are applied after foot prediction and foot lock: manual wins. */
+USTRUCT()
+struct ANIMSTITCHEDITOR_API FAnimStitchTrack
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	EAnimStitchTrackKind Kind = EAnimStitchTrackKind::Bone;
+
+	/** Bone tracks: the corrected bone. IK limb tracks: the end effector bone (foot / hand); thigh and calf are its two parents. */
+	UPROPERTY()
+	FName Bone;
+
+	/** FK joints rotate only. */
+	UPROPERTY()
+	bool bRotationOnly = false;
+
+	/** Tracks created together as the FK joints of one limb share a group (0 = none). */
+	UPROPERTY()
+	int32 GroupId = 0;
+
+	/** Sorted by time. */
+	UPROPERTY()
+	TArray<FAnimStitchTrackKey> Keys;
+};
 /** One clip on the (single) track. Times are in seconds. Trimming is non-destructive. */
 USTRUCT()
 struct ANIMSTITCHEDITOR_API FAnimStitchClip
@@ -153,6 +244,14 @@ struct ANIMSTITCHEDITOR_API FAnimStitchTimeline
 
 	UPROPERTY()
 	FAnimStitchFootLockSettings FootLock;
+
+	/** Manual bone correction lanes (additive bone offsets, FK joints, free-IK limbs). Applied last. */
+	UPROPERTY()
+	TArray<FAnimStitchTrack> Tracks;
+
+	/** Props attached to the preview character for reference (never baked). */
+	UPROPERTY()
+	TArray<FAnimStitchPreviewAttachment> PreviewAttachments;
 
 	/** EXPERIMENTAL: make crossfades plant-aware (pre-blend foot prediction). Uses the foot bones/thresholds of FootLock. */
 	UPROPERTY()
@@ -224,6 +323,8 @@ private:
 	/** Root transform that clip i starts from (i > authority) / ends at (i < authority). */
 	TArray<FTransform> RootAnchor;
 };
+
+
 
 
 

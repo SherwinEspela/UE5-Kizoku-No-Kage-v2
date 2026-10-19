@@ -1,8 +1,17 @@
 ﻿#include "AnimStitchPreview.h"
 #include "AnimStitchPoseComponent.h"
+#include "AnimStitchManualEdits.h"
+#include "Components/StaticMeshComponent.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Engine/StaticMesh.h"
 #include "Engine/SkeletalMesh.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "SceneManagement.h"
+#include "CanvasItem.h"
+#include "CanvasTypes.h"
+#include "Engine/Engine.h"
+#include "Engine/SkeletalMeshSocket.h"
+#include "ReferenceSkeleton.h"
 
 #define LOCTEXT_NAMESPACE "AnimStitch"
 
@@ -40,6 +49,7 @@ void FAnimStitchPreview::AddReferencedObjects(FReferenceCollector& Collector)
 	Collector.AddReferencedObject(Mesh);
 	Collector.AddReferencedObject(MainComponent);
 	Collector.AddReferencedObjects(GhostComponents);
+	Collector.AddReferencedObjects(AttachmentComponents);
 	Collector.AddReferencedObject(OutgoingGhostMaterial);
 	Collector.AddReferencedObject(IncomingGhostMaterial);
 }
@@ -52,6 +62,11 @@ bool FAnimStitchPreview::IsReady() const
 void FAnimStitchPreview::SetMesh(USkeletalMesh* InMesh)
 {
 	Mesh = InMesh;
+	if (SelectedBone != INDEX_NONE)
+	{
+		SelectedBone = INDEX_NONE; // bone indices belong to the old mesh
+		OnBoneSelectionChanged.Broadcast();
+	}
 	RebuildComponents();
 	RebuildDerivedData();
 	SetPlayhead(Playhead);
@@ -76,6 +91,7 @@ void FAnimStitchPreview::ClearCorrectedPoses()
 void FAnimStitchPreview::SetTimeline(const FAnimStitchTimeline& Timeline)
 {
 	CorrectedPoses.Reset(); // stale until the foot lock pass has been re-run for the new timeline
+	ManualTracks = Timeline.Tracks;
 	FString Error;
 	bEvaluatorValid = Timeline.Clips.Num() > 0 && Evaluator.Initialize(Timeline, Error);
 	if (Timeline.Clips.Num() == 0)
@@ -102,6 +118,11 @@ void FAnimStitchPreview::RebuildComponents()
 		Scene->RemoveComponent(Ghost);
 	}
 	GhostComponents.Reset();
+	for (UPrimitiveComponent* Prop : AttachmentComponents)
+	{
+		if (Prop) { Scene->RemoveComponent(Prop); } // they hang on the old character component
+	}
+	AttachmentComponents.Reset();
 
 	if (!Mesh)
 	{
@@ -110,6 +131,7 @@ void FAnimStitchPreview::RebuildComponents()
 	MainComponent = NewObject<UAnimStitchPoseComponent>(GetTransientPackage(), NAME_None, RF_Transient);
 	MainComponent->SetSkinnedAssetAndUpdate(Mesh);
 	Scene->AddComponent(MainComponent, FTransform::Identity);
+	RebuildAttachments(); // props are attached to this component
 }
 
 void FAnimStitchPreview::RebuildDerivedData()
@@ -189,6 +211,7 @@ void FAnimStitchPreview::ApplyGhostPoses()
 
 void FAnimStitchPreview::SetPlayhead(double Time)
 {
+	struct FRedrawOnExit { const FAnimStitchPreview* Self; ~FRedrawOnExit() { Self->RequestRedraw(); } } RedrawOnExit{ this };
 	Playhead = Time;
 	if (!bEvaluatorValid && MainComponent && Mesh && Mesh->GetSkeleton())
 	{
@@ -222,6 +245,8 @@ void FAnimStitchPreview::SetPlayhead(double Time)
 		{
 			Evaluator.EvaluatePose(Time, Pose);
 		}
+		// Manual corrections come last: they win over foot prediction and foot lock.
+		FAnimStitchManualEdits::Apply(Evaluator.GetSkeleton()->GetReferenceSkeleton(), ManualTracks, Time, Pose);
 		if (bPinRoot && Pose.Num() > 0)
 		{
 			FVector Loc = Pose[0].GetTranslation();
@@ -231,6 +256,198 @@ void FAnimStitchPreview::SetPlayhead(double Time)
 		}
 		MainComponent->ApplySkeletonPose(Evaluator.GetSkeleton(), Pose);
 	}
+}
+
+int32 FAnimStitchPreview::GetNumMeshBones() const
+{
+	return Mesh ? Mesh->GetRefSkeleton().GetNum() : 0;
+}
+
+FName FAnimStitchPreview::GetMeshBoneName(int32 MeshBone) const
+{
+	return Mesh && Mesh->GetRefSkeleton().IsValidIndex(MeshBone) ? Mesh->GetRefSkeleton().GetBoneName(MeshBone) : NAME_None;
+}
+
+int32 FAnimStitchPreview::GetMeshBoneParent(int32 MeshBone) const
+{
+	return Mesh && Mesh->GetRefSkeleton().IsValidIndex(MeshBone) ? Mesh->GetRefSkeleton().GetParentIndex(MeshBone) : INDEX_NONE;
+}
+
+int32 FAnimStitchPreview::FindMeshBone(FName BoneName) const
+{
+	return Mesh ? Mesh->GetRefSkeleton().FindBoneIndex(BoneName) : INDEX_NONE;
+}
+
+void FAnimStitchPreview::SelectBone(int32 MeshBone)
+{
+	if (MeshBone != INDEX_NONE && !(Mesh && Mesh->GetRefSkeleton().IsValidIndex(MeshBone)))
+	{
+		MeshBone = INDEX_NONE;
+	}
+	if (SelectedBone != MeshBone)
+	{
+		SelectedBone = MeshBone;
+		OnBoneSelectionChanged.Broadcast();
+		RequestRedraw();
+	}
+}
+
+bool FAnimStitchPreview::GetSelectedBoneTransforms(FTransform& OutLocal, FTransform& OutComponent) const
+{
+	if (!MainComponent || SelectedBone == INDEX_NONE)
+	{
+		return false;
+	}
+	const TArray<FTransform>& Local = MainComponent->GetBoneSpaceTransforms();
+	const TArray<FTransform>& Component = MainComponent->GetComponentSpaceTransforms();
+	if (!Local.IsValidIndex(SelectedBone) || !Component.IsValidIndex(SelectedBone))
+	{
+		return false;
+	}
+	OutLocal = Local[SelectedBone];
+	OutComponent = Component[SelectedBone];
+	return true;
+}
+
+int32 FAnimStitchPreview::PickBone(const FMatrix& ViewProjection, const FIntRect& ViewRect, const FVector2D& Pixel, float MaxDistancePixels) const
+{
+	if (!MainComponent || !Mesh)
+	{
+		return INDEX_NONE;
+	}
+	const TArray<FTransform>& Component = MainComponent->GetComponentSpaceTransforms();
+	int32 Best = INDEX_NONE;
+	double BestDistance = MaxDistancePixels;
+	for (int32 i = 0; i < Component.Num(); ++i)
+	{
+		FVector2D Screen;
+		if (FSceneView::ProjectWorldToScreen(MainComponent->GetComponentTransform().TransformPosition(Component[i].GetTranslation()), ViewRect, ViewProjection, Screen))
+		{
+			const double Distance = FVector2D::Distance(Screen, Pixel);
+			if (Distance < BestDistance)
+			{
+				BestDistance = Distance;
+				Best = i;
+			}
+		}
+	}
+	return Best;
+}
+
+void FAnimStitchPreview::GetDrawnBones(TArray<bool>& OutDrawn) const
+{
+	const int32 Num = GetNumMeshBones();
+	OutDrawn.Init(false, Num);
+	if (!Mesh || BoneDrawMode == EAnimStitchBoneDrawMode::None) { return; }
+	const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
+	if (BoneDrawMode == EAnimStitchBoneDrawMode::AllHierarchy)
+	{
+		OutDrawn.Init(true, Num);
+		return;
+	}
+	if (!Ref.IsValidIndex(SelectedBone)) { return; }
+	OutDrawn[SelectedBone] = true;
+	const bool bParents = BoneDrawMode == EAnimStitchBoneDrawMode::SelectedAndParents || BoneDrawMode == EAnimStitchBoneDrawMode::SelectedAndParentsAndChildren;
+	const bool bChildren = BoneDrawMode == EAnimStitchBoneDrawMode::SelectedAndChildren || BoneDrawMode == EAnimStitchBoneDrawMode::SelectedAndParentsAndChildren;
+	if (bParents)
+	{
+		for (int32 P = Ref.GetParentIndex(SelectedBone); P != INDEX_NONE; P = Ref.GetParentIndex(P)) { OutDrawn[P] = true; }
+	}
+	if (bChildren)
+	{
+		// Bones are ordered parent-before-child, so one forward pass finds every descendant of the selected bone
+		// (tracked separately so that siblings reached through the parent chain are not mistaken for descendants).
+		TArray<bool> Descendant;
+		Descendant.Init(false, Num);
+		Descendant[SelectedBone] = true;
+		for (int32 i = SelectedBone + 1; i < Num; ++i)
+		{
+			const int32 P = Ref.GetParentIndex(i);
+			if (P != INDEX_NONE && Descendant[P])
+			{
+				Descendant[i] = true;
+				OutDrawn[i] = true;
+			}
+		}
+	}
+}
+void FAnimStitchPreview::DrawBoneNames(const FSceneView& View, FCanvas& Canvas, float DPIScale) const
+{
+	if (!bShowBoneNames || BoneDrawMode == EAnimStitchBoneDrawMode::None || !MainComponent || !Mesh || !GEngine) { return; }
+	const TArray<FTransform>& Component = MainComponent->GetComponentSpaceTransforms();
+	TArray<bool> Drawn;
+	GetDrawnBones(Drawn);
+	const FMatrix WorldToClip = View.ViewMatrices.GetWorldToClip();
+	for (int32 i = 0; i < Component.Num() && i < Drawn.Num(); ++i)
+	{
+		FVector2D Pixel;
+		if (!Drawn[i] || !FSceneView::ProjectWorldToScreen(MainComponent->GetComponentTransform().TransformPosition(Component[i].GetTranslation()), View.UnconstrainedViewRect, WorldToClip, Pixel))
+		{
+			continue;
+		}
+		FCanvasTextItem Text(FVector2D(Pixel.X + 6.0, Pixel.Y - 6.0) / FMath::Max(DPIScale, 0.1f), FText::FromName(Mesh->GetRefSkeleton().GetBoneName(i)), GEngine->GetSmallFont(),
+			i == SelectedBone ? FLinearColor(1.f, 0.9f, 0.3f) : FLinearColor::White);
+		Text.EnableShadow(FLinearColor::Black);
+		Canvas.DrawItem(Text);
+	}
+}
+
+void FAnimStitchViewportClient::DrawCanvas(FViewport& InViewport, FSceneView& View, FCanvas& Canvas)
+{
+	FEditorViewportClient::DrawCanvas(InViewport, View, Canvas);
+	if (const TSharedPtr<FAnimStitchPreview> Pinned = Preview.Pin())
+	{
+		Pinned->DrawBoneNames(View, Canvas, UpdateViewportClientWindowDPIScale());
+	}
+}
+
+void FAnimStitchPreview::SetPreviewAttachments(const TArray<FAnimStitchPreviewAttachment>& NewAttachments)
+{
+	auto Same = [](const FAnimStitchPreviewAttachment& A, const FAnimStitchPreviewAttachment& B)
+	{
+		return A.Asset == B.Asset && A.Socket == B.Socket && A.Location.Equals(B.Location) && A.Rotation.Equals(B.Rotation) && A.Scale.Equals(B.Scale);
+	};
+	bool bChanged = NewAttachments.Num() != Attachments.Num();
+	for (int32 i = 0; !bChanged && i < NewAttachments.Num(); ++i) { bChanged = !Same(NewAttachments[i], Attachments[i]); }
+	if (bChanged)
+	{
+		Attachments = NewAttachments;
+		RebuildAttachments();
+	}
+}
+
+void FAnimStitchPreview::RebuildAttachments()
+{
+	for (UPrimitiveComponent* Component : AttachmentComponents)
+	{
+		if (Component) { Scene->RemoveComponent(Component); }
+	}
+	AttachmentComponents.Reset();
+	if (!MainComponent) { RequestRedraw(); return; }
+
+	for (const FAnimStitchPreviewAttachment& Attachment : Attachments)
+	{
+		UObject* Loaded = Attachment.Asset.LoadSynchronous();
+		UPrimitiveComponent* Component = nullptr;
+		if (UStaticMesh* StaticMesh = Cast<UStaticMesh>(Loaded))
+		{
+			UStaticMeshComponent* StaticComponent = NewObject<UStaticMeshComponent>(GetTransientPackage(), NAME_None, RF_Transient);
+			StaticComponent->SetStaticMesh(StaticMesh);
+			Component = StaticComponent;
+		}
+		else if (USkeletalMesh* SkeletalMesh = Cast<USkeletalMesh>(Loaded))
+		{
+			USkeletalMeshComponent* SkeletalComponent = NewObject<USkeletalMeshComponent>(GetTransientPackage(), NAME_None, RF_Transient);
+			SkeletalComponent->SetSkeletalMesh(SkeletalMesh);
+			Component = SkeletalComponent;
+		}
+		if (!Component) { continue; }
+		Scene->AddComponent(Component, FTransform::Identity);
+		Component->AttachToComponent(MainComponent, FAttachmentTransformRules::SnapToTargetNotIncludingScale, Attachment.Socket);
+		Component->SetRelativeTransform(FTransform(Attachment.Rotation, Attachment.Location, Attachment.Scale));
+		AttachmentComponents.Add(Component);
+	}
+	RequestRedraw();
 }
 
 void FAnimStitchPreview::SetShowGhosts(bool bShow)
@@ -247,8 +464,12 @@ void FAnimStitchPreview::SetShowRootPath(bool bShow)
 	bShowRootPath = bShow;
 }
 
-void FAnimStitchPreview::Draw(FPrimitiveDrawInterface* PDI) const
+void FAnimStitchPreview::Draw(const FSceneView* View, FPrimitiveDrawInterface* PDI) const
 {
+	if (View)
+	{
+		DrawControls(*View, PDI);
+	}
 	if (bShowGrid)
 	{
 		// Ground grid: 1 m cells, a stronger line every 5 m, coloured world axes. Lifted slightly to avoid z-fighting with the floor.
@@ -266,7 +487,62 @@ void FAnimStitchPreview::Draw(FPrimitiveDrawInterface* PDI) const
 			PDI->DrawLine(FVector(i * Cell, -Extent, Z), FVector(i * Cell, Extent, Z), LineY, SDPG_World, bMajor ? 1.f : 0.f);
 		}
 	}
-	if (!bShowRootPath || TrajectoryPoints.Num() < 2)
+	if (BoneDrawMode != EAnimStitchBoneDrawMode::None && MainComponent && Mesh)
+	{
+		const TArray<FTransform>& Component = MainComponent->GetComponentSpaceTransforms();
+		const FReferenceSkeleton& RefSkel = Mesh->GetRefSkeleton();
+		if (Component.Num() == RefSkel.GetNum())
+		{
+			TArray<bool> Drawn;
+			GetDrawnBones(Drawn);
+			const FTransform& ToWorld = MainComponent->GetComponentTransform();
+			auto World = [&](int32 Bone) { return ToWorld.TransformPosition(Component[Bone].GetTranslation()); };
+			// Depth in the hierarchy, used to colour chains differently ("multi-color bones").
+			auto BoneColor = [&](int32 Bone, float Brightness)
+			{
+				if (!bMultiColorBones) { return FLinearColor(0.3f, 0.75f, 1.f) * Brightness; }
+				int32 Depth = 0;
+				for (int32 P = RefSkel.GetParentIndex(Bone); P != INDEX_NONE; P = RefSkel.GetParentIndex(P)) { ++Depth; }
+				return FLinearColor::MakeFromHSV8(uint8((Depth * 37) & 0xFF), 200, uint8(255.f * Brightness));
+			};
+			const float Size = BoneDrawSize;
+			for (int32 i = 0; i < Component.Num(); ++i)
+			{
+				if (!Drawn[i]) { continue; }
+				const int32 Parent = RefSkel.GetParentIndex(i);
+				if (Parent != INDEX_NONE)
+				{
+					PDI->DrawLine(World(Parent), World(i), BoneColor(i, 1.f), SDPG_Foreground, i == SelectedBone ? 2.f * Size : 0.5f * Size);
+				}
+				PDI->DrawPoint(World(i), BoneColor(i, 1.f), 4.f * Size, SDPG_Foreground);
+			}
+			if (Component.IsValidIndex(SelectedBone) && Drawn[SelectedBone])
+			{
+				const FVector P = World(SelectedBone);
+				const int32 Parent = RefSkel.GetParentIndex(SelectedBone);
+				if (Parent != INDEX_NONE)
+				{
+					PDI->DrawLine(World(Parent), P, FLinearColor(1.f, 0.55f, 0.1f), SDPG_Foreground, 2.f * Size);
+				}
+				PDI->DrawPoint(P, FLinearColor(1.f, 0.9f, 0.1f), 10.f * Size, SDPG_Foreground);
+				const FQuat Rotation = ToWorld.GetRotation() * Component[SelectedBone].GetRotation();
+				const double AxisLength = 12.0 * Size;
+				PDI->DrawLine(P, P + Rotation.GetAxisX() * AxisLength, FLinearColor::Red, SDPG_Foreground, 1.5f);
+				PDI->DrawLine(P, P + Rotation.GetAxisY() * AxisLength, FLinearColor::Green, SDPG_Foreground, 1.5f);
+				PDI->DrawLine(P, P + Rotation.GetAxisZ() * AxisLength, FLinearColor(0.2f, 0.4f, 1.f), SDPG_Foreground, 1.5f);
+			}
+			if (bShowSockets)
+			{
+				for (const USkeletalMeshSocket* Socket : Mesh->GetActiveSocketList())
+				{
+					const int32 Bone = Socket ? RefSkel.FindBoneIndex(Socket->BoneName) : INDEX_NONE;
+					if (Bone == INDEX_NONE) { continue; }
+					const FTransform SocketWorld = Socket->GetSocketLocalTransform() * Component[Bone] * ToWorld;
+					DrawWireDiamond(PDI, SocketWorld.ToMatrixNoScale(), 4.f * Size, FColor(255, 0, 255), SDPG_Foreground);
+				}
+			}
+		}
+	}	if (!bShowRootPath || TrajectoryPoints.Num() < 2)
 	{
 		return;
 	}
@@ -311,7 +587,98 @@ void FAnimStitchViewportClient::Draw(const FSceneView* View, FPrimitiveDrawInter
 	FEditorViewportClient::Draw(View, PDI);
 	if (const TSharedPtr<FAnimStitchPreview> Pinned = Preview.Pin())
 	{
-		Pinned->Draw(PDI);
+		Pinned->Draw(View, PDI);
+	}
+}
+
+void FAnimStitchViewportClient::ProcessClick(FSceneView& View, HHitProxy* HitProxy, FKey Key, EInputEvent Event, uint32 HitX, uint32 HitY)
+{
+	FEditorViewportClient::ProcessClick(View, HitProxy, Key, Event, HitX, HitY);
+	if (Key != EKeys::LeftMouseButton || Event != IE_Released)
+	{
+		return;
+	}
+	if (const TSharedPtr<FAnimStitchPreview> Pinned = Preview.Pin())
+	{
+		// Control shapes first, then bones.
+		const FAnimStitchControlId Control = Pinned->PickControl(View.ViewMatrices.GetWorldToClip(), View.UnconstrainedViewRect, FVector2D(HitX, HitY), 14.f);
+		if (Control.IsValid())
+		{
+			Pinned->SelectControl(Control);
+			return;
+		}
+		Pinned->SelectControl(FAnimStitchControlId());
+		if (Pinned->GetBoneDrawMode() != EAnimStitchBoneDrawMode::None)
+		{
+			// Click a joint to select that bone; clicking empty space clears the selection.
+			Pinned->SelectBone(Pinned->PickBone(View.ViewMatrices.GetWorldToClip(), View.UnconstrainedViewRect, FVector2D(HitX, HitY), 14.f));
+		}
+	}
+}
+
+void FAnimStitchViewportClient::UpdateDrag(FViewport* InViewport, int32 X, int32 Y)
+{
+	if (const TSharedPtr<FAnimStitchPreview> Pinned = Preview.Pin())
+	{
+		FSceneViewFamilyContext Family(FSceneViewFamily::ConstructionValues(InViewport, GetScene(), EngineShowFlags).SetRealtimeUpdate(true));
+		if (FSceneView* View = CalcSceneView(&Family))
+		{
+			Pinned->UpdateGizmoDrag(*View, FVector2D(X, Y));
+		}
+	}
+}
+
+bool FAnimStitchViewportClient::InputKey(const FInputKeyEventArgs& EventArgs)
+{
+	const TSharedPtr<FAnimStitchPreview> Pinned = Preview.Pin();
+	if (Pinned && EventArgs.Key == EKeys::LeftMouseButton)
+	{
+		if (EventArgs.Event == IE_Pressed && !EventArgs.Viewport->KeyState(EKeys::LeftAlt) && !EventArgs.Viewport->KeyState(EKeys::RightAlt))
+		{
+			FSceneViewFamilyContext Family(FSceneViewFamily::ConstructionValues(EventArgs.Viewport, GetScene(), EngineShowFlags).SetRealtimeUpdate(true));
+			if (FSceneView* View = CalcSceneView(&Family))
+			{
+				if (Pinned->BeginGizmoDrag(*View, FVector2D(EventArgs.Viewport->GetMouseX(), EventArgs.Viewport->GetMouseY())))
+				{
+					bGizmoDrag = true;
+					return true; // the viewport must not orbit while a gizmo handle is dragged
+				}
+			}
+		}
+		else if (EventArgs.Event == IE_Released && bGizmoDrag)
+		{
+			bGizmoDrag = false;
+			Pinned->EndGizmoDrag();
+			return true;
+		}
+	}
+	if (Pinned && EventArgs.Event == IE_Pressed && !EventArgs.Viewport->KeyState(EKeys::LeftControl) && !EventArgs.Viewport->KeyState(EKeys::LeftAlt) && !EventArgs.Viewport->KeyState(EKeys::LeftShift))
+	{
+		// W / E / R: translate / rotate / scale gizmo, like the standard editor widget.
+		if (EventArgs.Key == EKeys::W) { Pinned->SetGizmoMode(EAnimStitchGizmoMode::Translate); return true; }
+		if (EventArgs.Key == EKeys::E) { Pinned->SetGizmoMode(EAnimStitchGizmoMode::Rotate); return true; }
+		if (EventArgs.Key == EKeys::R) { Pinned->SetGizmoMode(EAnimStitchGizmoMode::Scale); return true; }
+	}
+	return FEditorViewportClient::InputKey(EventArgs);
+}
+
+void FAnimStitchViewportClient::MouseMove(FViewport* InViewport, int32 X, int32 Y)
+{
+	if (bGizmoDrag) { UpdateDrag(InViewport, X, Y); return; }
+	FEditorViewportClient::MouseMove(InViewport, X, Y);
+}
+
+void FAnimStitchViewportClient::CapturedMouseMove(FViewport* InViewport, int32 InMouseX, int32 InMouseY)
+{
+	if (bGizmoDrag) { UpdateDrag(InViewport, InMouseX, InMouseY); return; }
+	FEditorViewportClient::CapturedMouseMove(InViewport, InMouseX, InMouseY);
+}
+
+void SAnimStitchViewport::HandleRedraw()
+{
+	if (Client.IsValid())
+	{
+		Client->Invalidate(); // make the viewport repaint now, even when Slate is throttling (menus open, mouse captured)
 	}
 }
 
@@ -319,6 +686,7 @@ void SAnimStitchViewport::Construct(const FArguments& InArgs)
 {
 	Preview = InArgs._Preview;
 	SEditorViewport::Construct(SEditorViewport::FArguments());
+	Preview->OnRedrawRequested.AddSP(this, &SAnimStitchViewport::HandleRedraw);
 }
 
 TSharedRef<FEditorViewportClient> SAnimStitchViewport::MakeEditorViewportClient()
@@ -337,5 +705,12 @@ void SAnimStitchViewport::FocusOnMesh()
 }
 
 #undef LOCTEXT_NAMESPACE
+
+
+
+
+
+
+
 
 

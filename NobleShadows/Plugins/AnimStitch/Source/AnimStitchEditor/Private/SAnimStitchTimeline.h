@@ -71,7 +71,7 @@ public:
 
 	// SWidget
 	virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const override;
-	virtual FVector2D ComputeDesiredSize(float) const override { return FVector2D(400.0, 140.0); }
+	virtual FVector2D ComputeDesiredSize(float) const override { return FVector2D(400.0, 140.0 + 32.0 * Asset->Timeline.Tracks.Num()); }
 	virtual bool SupportsKeyboardFocus() const override { return true; }
 	virtual FReply OnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override;
 	virtual FReply OnMouseButtonUp(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override;
@@ -89,13 +89,15 @@ public:
 	virtual void PostRedo(bool bSuccess) override { ClampSelection(); }
 
 private:
-	enum class EHit : uint8 { None, Ruler, Body, TrimLeft, TrimRight, Overlap, MarkerStart, MarkerEnd, FootLane };
+	enum class EHit : uint8 { None, Ruler, Body, TrimLeft, TrimRight, Overlap, MarkerStart, MarkerEnd, FootLane, TrackLane, TrackKey };
 	struct FHit
 	{
 		EHit Type = EHit::None;
 		int32 Index = INDEX_NONE;
+		/** Track keys: the key index. */
+		int32 Sub = INDEX_NONE;
 	};
-	enum class EDrag : uint8 { None, Scrub, Move, TrimLeft, TrimRight, Overlap, Pan, MarkerStart, MarkerEnd, FootLane };
+	enum class EDrag : uint8 { None, Scrub, Move, TrimLeft, TrimRight, Overlap, Pan, MarkerStart, MarkerEnd, FootLane, KeyMove };
 
 	void AddSequencesAt(const TArray<UAnimSequence*>& Sequences, int32 Index);
 	bool bPendingZoomFit = false;
@@ -103,6 +105,20 @@ private:
 	float GetLaneTop(int32 Foot) const { return RulerHeight + 4.f + Foot * (LaneHeight + 2.f); }
 	float GetTrackTop() const { return RulerHeight + 8.f + (IsFootLaneVisible() ? 2.f * (LaneHeight + 2.f) + 2.f : 0.f); }
 	void ToggleFootPlantAt(int32 Foot, double Time);
+
+	// ---- Manual bone correction lanes (Phase 9) ----
+	static constexpr float TrackLaneHeight = 30.f;
+	float GetTracksTop() const { return GetTrackTop() + TrackHeight + 10.f; }
+	float GetTrackLaneTop(int32 Track) const { return GetTracksTop() + Track * (TrackLaneHeight + 2.f); }
+	void PaintTrackLanes(FSlateWindowElementList& Out, int32 Layer, const FGeometry& G) const;
+	void OpenAddTrackMenu(const FPointerEvent& Event);
+	void OpenTrackMenu(const FPointerEvent& Event, int32 Track, int32 Key, double Time);
+	void AddBoneTrack(FName Bone, bool bRotationOnly, int32 GroupId);
+	void AddLimb(bool bLeft, bool bLeg, bool bIK);
+	void PickOtherBone();
+	int32 SelectedTrack = INDEX_NONE;
+	int32 SelectedKey = INDEX_NONE;
+	double InitialKeyTime = 0.0;
 	void OpenFootLaneMenu(const FPointerEvent& Event, int32 Foot, double Time);
 	int32 FindCutTarget() const;
 	void BrowseToSelectedAsset();
@@ -157,6 +173,9 @@ private:
 	bool bDropHover = false;
 	double DropTime = 0.0;
 };
+
+
+
 
 
 

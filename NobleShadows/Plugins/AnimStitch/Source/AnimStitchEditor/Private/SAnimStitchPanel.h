@@ -36,6 +36,22 @@ private:
 	double PlantDirtyAt = 0.0;
 	bool bPlantDirty = false;
 
+	// Viewport "Show" menu (bones, sockets, grid) like the animation editor's
+	TSharedRef<SWidget> MakeShowMenu();
+	TSharedRef<SWidget> MakeViewportToolbar();
+	void FillControlsMenu(class FMenuBuilder& Menu);
+	void FillAttachmentsMenu(class FMenuBuilder& Menu);
+	void FillBonesMenu(class FMenuBuilder& Menu);
+	int32 RightTab = 0; // 0 = Content Browser, 1 = Details
+
+	// Bone dropdown (alternative to clicking a joint in the viewport)
+	void RebuildBoneItems();
+	void OnBoneComboChanged(TSharedPtr<FString> Item, ESelectInfo::Type SelectInfo);
+	void OnPreviewBoneSelected();
+	TArray<TSharedPtr<FString>> BoneItems;
+	TSharedPtr<class SSearchableComboBox> BoneCombo;
+	TWeakObjectPtr<class USkeletalMesh> BoneItemsMesh;
+
 	void OnTimelineScrubbed();
 	void OpenFromDisk();
 	TSharedPtr<SWidget> OnGetAssetContextMenu(const TArray<FAssetData>& Selected);
@@ -83,10 +99,15 @@ private:
 	FText LastWarning;
 	FString MeshPath;
 	uint32 LastEditCounter = MAX_uint32;
+	uint32 LastManualCounter = MAX_uint32;
 	double LastPlayhead = -1.0;
 	bool bPlaying = false;
 	bool bLoop = false;
 	bool bShowGhosts = false;
 	bool bShowRootPath = false;
 };
+
+
+
+
 

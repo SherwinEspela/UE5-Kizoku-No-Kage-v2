@@ -1,5 +1,6 @@
 ﻿#include "AnimStitchTimelineAsset.h"
 #include "AnimStitchSettings.h"
+#include "AnimStitchManualEdits.h"
 #include "Animation/AnimData/IAnimationDataModel.h"
 #include "Animation/Skeleton.h"
 
@@ -14,6 +15,7 @@ void UAnimStitchTimelineAsset::PostTransacted(const FTransactionObjectEvent& Tra
 {
 	Super::PostTransacted(TransactionEvent);
 	++EditCounter;
+	++ManualCounter;
 }
 
 void UAnimStitchTimelineAsset::GetPlaybackRange(double& OutStart, double& OutEnd) const
@@ -256,6 +258,127 @@ void UAnimStitchTimelineAsset::ClearFootEvents(int32 Foot)
 		Clip.FootEvents.RemoveAll([Foot](const FAnimStitchFootEvent& E) { return Foot == INDEX_NONE || E.Foot == Foot; });
 	}
 }
+int32 UAnimStitchTimelineAsset::AddTrack(const FAnimStitchTrack& Track)
+{
+	for (int32 i = 0; i < Timeline.Tracks.Num(); ++i)
+	{
+		if (Timeline.Tracks[i].Kind == Track.Kind && Timeline.Tracks[i].Bone == Track.Bone)
+		{
+			return i;
+		}
+	}
+	TouchManual();
+	FAnimStitchTrack NewTrack = Track;
+	if (NewTrack.Keys.Num() == 0)
+	{
+		// Like a new Sequencer section: keys at the start and the end of the timeline (identity offset / IK off).
+		FAnimStitchTrackKey Start;
+		Start.Time = 0.0;
+		Start.Weight = NewTrack.Kind == EAnimStitchTrackKind::IKLimb ? 0.f : 1.f;
+		FAnimStitchManualEdits::SetKey(NewTrack, Start);
+		const double Total = Timeline.GetTotalLength();
+		if (Total > 0.05)
+		{
+			FAnimStitchTrackKey End = Start;
+			End.Time = Total;
+			FAnimStitchManualEdits::SetKey(NewTrack, End);
+		}
+	}
+	return Timeline.Tracks.Add(NewTrack);
+}
+
+void UAnimStitchTimelineAsset::RemoveTrack(int32 Index)
+{
+	if (Timeline.Tracks.IsValidIndex(Index))
+	{
+		TouchManual();
+		Timeline.Tracks.RemoveAt(Index);
+	}
+}
+
+void UAnimStitchTimelineAsset::SetTrackKey(int32 TrackIndex, const FAnimStitchTrackKey& Key)
+{
+	if (!Timeline.Tracks.IsValidIndex(TrackIndex))
+	{
+		return;
+	}
+	TouchManual();
+	FAnimStitchTrack& Track = Timeline.Tracks[TrackIndex];
+	if (Track.Keys.Num() == 0 && Key.Time > 1e-3)
+	{
+		// Anchor so the correction does not apply to the whole timeline before the first key (Sequencer holds the first value).
+		FAnimStitchTrackKey Anchor;
+		if (Track.Kind == EAnimStitchTrackKind::Bone)
+		{
+			Anchor.Time = 0.0; // identity offset
+		}
+		else
+		{
+			Anchor = Key;
+			Anchor.Time = FMath::Max(0.0, Key.Time - 0.1);
+			Anchor.Weight = 0.f; // IK off, then ramping on
+		}
+		FAnimStitchManualEdits::SetKey(Track, Anchor);
+	}
+	FAnimStitchManualEdits::SetKey(Track, Key);
+}
+
+void UAnimStitchTimelineAsset::RemoveTrackKey(int32 TrackIndex, int32 KeyIndex)
+{
+	if (Timeline.Tracks.IsValidIndex(TrackIndex) && Timeline.Tracks[TrackIndex].Keys.IsValidIndex(KeyIndex))
+	{
+		TouchManual();
+		Timeline.Tracks[TrackIndex].Keys.RemoveAt(KeyIndex);
+	}
+}
+
+int32 UAnimStitchTimelineAsset::MoveTrackKey(int32 TrackIndex, int32 KeyIndex, double NewTime)
+{
+	if (Timeline.Tracks.IsValidIndex(TrackIndex) && Timeline.Tracks[TrackIndex].Keys.IsValidIndex(KeyIndex))
+	{
+		TouchManual();
+		FAnimStitchTrack& Track = Timeline.Tracks[TrackIndex];
+		FAnimStitchTrackKey Moved = Track.Keys[KeyIndex];
+		Track.Keys.RemoveAt(KeyIndex);
+		Moved.Time = FMath::Max(0.0, NewTime);
+		return FAnimStitchManualEdits::SetKey(Track, Moved);
+	}
+	return KeyIndex;
+}
+
+void UAnimStitchTimelineAsset::SetTrackKeyWeight(int32 TrackIndex, int32 KeyIndex, float Weight)
+{
+	if (Timeline.Tracks.IsValidIndex(TrackIndex) && Timeline.Tracks[TrackIndex].Keys.IsValidIndex(KeyIndex))
+	{
+		TouchManual();
+		Timeline.Tracks[TrackIndex].Keys[KeyIndex].Weight = FMath::Clamp(Weight, 0.f, 1.f);
+	}
+}
+
+void UAnimStitchTimelineAsset::SetPinOffset(int32 ClipIndex, int32 EventIndex, const FVector& Offset)
+{
+	if (Timeline.Clips.IsValidIndex(ClipIndex) && Timeline.Clips[ClipIndex].FootEvents.IsValidIndex(EventIndex))
+	{
+		Touch(); // foot lock is an automatic pass: it has to be re-run
+		Timeline.Clips[ClipIndex].FootEvents[EventIndex].PinOffset = Offset;
+	}
+}
+
+void UAnimStitchTimelineAsset::AddPreviewAttachment(const FAnimStitchPreviewAttachment& Attachment)
+{
+	TouchManual();
+	Timeline.PreviewAttachments.Add(Attachment);
+}
+
+void UAnimStitchTimelineAsset::RemovePreviewAttachment(int32 Index)
+{
+	if (Timeline.PreviewAttachments.IsValidIndex(Index))
+	{
+		TouchManual();
+		Timeline.PreviewAttachments.RemoveAt(Index);
+	}
+}
+
 void UAnimStitchTimelineAsset::AddDefaultCrossfade(int32 Index)
 {
 	if (Index > 0 && Timeline.Clips.IsValidIndex(Index))
@@ -348,6 +471,9 @@ void UAnimStitchTimelineAsset::SetBlendCurve(int32 Index, EAnimStitchBlendCurve 
 }
 
 #undef LOCTEXT_NAMESPACE
+
+
+
 
 
 
