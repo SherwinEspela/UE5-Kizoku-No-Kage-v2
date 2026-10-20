@@ -43,6 +43,13 @@ public:
 	void RequestZoomToFit() { bPendingZoomFit = true; }
 	void ApplyPendingZoomFit()
 	{
+		// Resizing the panel (docking, floating, dragging a splitter) reframes the whole timeline to the new width.
+		const float Width = GetTickSpaceGeometry().GetLocalSize().X;
+		if (Width > 100.f && !FMath::IsNearlyEqual(Width, LastFitWidth, 1.f))
+		{
+			if (LastFitWidth > 0.f) { bPendingZoomFit = true; }
+			LastFitWidth = Width;
+		}
 		if (bPendingZoomFit && GetTickSpaceGeometry().GetLocalSize().X > 100.f)
 		{
 			ZoomToFit();
@@ -165,6 +172,7 @@ private:
 
 	void AddSequencesAt(const TArray<UAnimSequence*>& Sequences, int32 Index);
 	bool bPendingZoomFit = false;
+	float LastFitWidth = 0.f;
 	bool IsFootLaneVisible() const { return Asset->Timeline.FootLock.bEnabled; }
 	float GetLaneTop(int32 Foot) const { return RulerHeight + 4.f + Foot * (LaneHeight + 2.f); }
 	float GetTrackTop() const { return RulerHeight + 8.f + (IsFootLaneVisible() ? 2.f * (LaneHeight + 2.f) + 2.f : 0.f); }

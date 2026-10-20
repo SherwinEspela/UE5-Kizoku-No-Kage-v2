@@ -1,6 +1,7 @@
 ﻿#include "AnimStitchBaker.h"
 #include "AnimStitchFootLock.h"
 #include "AnimStitchManualEdits.h"
+#include "AnimStitchProvenance.h"
 #include "Animation/AnimData/IAnimationDataModel.h"
 #include "Animation/AnimData/IAnimationDataController.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -291,6 +292,12 @@ UAnimSequence* FAnimStitchBaker::Bake(const FAnimStitchTimeline& Timeline, const
 	Seq->bEnableRootMotion = Auth->bEnableRootMotion;
 	Seq->RootMotionRootLock = Auth->RootMotionRootLock;
 	Seq->bForceRootLock = Auth->bForceRootLock;
+
+	// Provenance: what produced this animation. Only the new sequence is touched, never the sources.
+	Seq->RemoveUserDataOfClass(UAnimStitchProvenance::StaticClass());
+	UAnimStitchProvenance* Provenance = NewObject<UAnimStitchProvenance>(Seq, NAME_None, RF_Public | RF_Transactional);
+	Provenance->Fill(Timeline, Options.SourceTimeline);
+	Seq->AddAssetUserData(Provenance);
 
 	Seq->MarkPackageDirty();
 	if (!Existing)

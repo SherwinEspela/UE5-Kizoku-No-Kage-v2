@@ -1,4 +1,4 @@
-﻿#include "AnimStitchBatch.h"
+#include "AnimStitchBatch.h"
 #include "AnimStitchBaker.h"
 #include "Misc/ScopedSlowTask.h"
 #include "Animation/AnimData/IAnimationDataModel.h"
@@ -122,6 +122,7 @@ FAnimStitchBatchResult FAnimStitchBatch::Run(const FAnimStitchTimeline& Template
 		BakeOptions.FrameRate = Options.FrameRate > 0 ? FFrameRate(Options.FrameRate, 1) : FFrameRate(0, 1);
 		BakeOptions.bSavePackage = Options.bSavePackages;
 		BakeOptions.bOverwriteExisting = Options.bOverwriteExisting;
+		BakeOptions.SourceTimeline = Options.SourceTimeline;
 		if (FAnimStitchBaker::Bake(RowTimeline, Path, BakeOptions, BakeError))
 		{
 			Result.CreatedAssets.Add(Path);

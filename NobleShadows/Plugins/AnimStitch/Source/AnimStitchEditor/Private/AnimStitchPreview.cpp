@@ -1,4 +1,4 @@
-﻿#include "AnimStitchPreview.h"
+#include "AnimStitchPreview.h"
 #include "AnimStitchPoseComponent.h"
 #include "AnimStitchManualEdits.h"
 #include "Components/StaticMeshComponent.h"
@@ -7,6 +7,8 @@
 #include "Engine/SkeletalMesh.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "SceneManagement.h"
+#include "SceneView.h"
+#include "Animation/AnimData/IAnimationDataModel.h"
 #include "CanvasItem.h"
 #include "CanvasTypes.h"
 #include "Engine/Engine.h"
@@ -168,7 +170,14 @@ void FAnimStitchPreview::RebuildDerivedData()
 
 	const FAnimStitchTimeline& TL = Evaluator.GetTimeline();
 	const double Length = TL.GetTotalLength();
-	for (double T = 0.0; T < Length + 0.5 / TrajectorySampleRate; T += 1.0 / TrajectorySampleRate)
+	// One sample per frame of the timeline (the first clip's rate, like the bake); the root path draws a dot on every one.
+	TrajectoryRate = TrajectorySampleRate;
+	if (TL.Clips.Num() > 0 && TL.Clips[0].Sequence)
+	{
+		const double SourceRate = TL.Clips[0].Sequence->GetDataModel()->GetFrameRate().AsDecimal();
+		if (SourceRate >= 1.0 && SourceRate <= 120.0) { TrajectoryRate = SourceRate; }
+	}
+	for (double T = 0.0; T < Length + 0.5 / TrajectoryRate; T += 1.0 / TrajectoryRate)
 	{
 		TrajectoryPoints.Add(Evaluator.EvaluateRoot(FMath::Min(T, Length)).GetTranslation());
 	}
@@ -610,22 +619,39 @@ void FAnimStitchPreview::Draw(const FSceneView* View, FPrimitiveDrawInterface* P
 	{
 		return;
 	}
-	// Animation Sequence editor style: a dark gray curve, small division points along it and dark dots at the start and end.
+	// Animation Sequence editor style: a dark gray curve, a round dot on every frame and larger round dots at the start and end.
 	const FLinearColor CurveColor(0.2f, 0.2f, 0.2f);
 	const FLinearColor DivisionColor = FLinearColor::Black;
 	auto OnGround = [](const FVector& P) { return FVector(P.X, P.Y, 1.0); };
 	for (int32 i = 1; i < TrajectoryPoints.Num(); ++i)
 	{
-		PDI->DrawLine(OnGround(TrajectoryPoints[i - 1]), OnGround(TrajectoryPoints[i]), CurveColor, SDPG_Foreground, 0.f); // hairline (thickness is in world units: a few cm would be a fat ribbon)
+		// A little thicker than a hairline; screen-space thickness in pixels (world-unit thickness would turn into a ribbon).
+		PDI->DrawLine(OnGround(TrajectoryPoints[i - 1]), OnGround(TrajectoryPoints[i]), CurveColor, SDPG_Foreground, 1.5f, 0.f, true);
 	}
-	// A division point every half second (the trajectory is sampled at TrajectorySampleRate).
-	const int32 DivisionStep = FMath::Max(1, int32(TrajectorySampleRate * 0.5));
-	for (int32 i = DivisionStep; i < TrajectoryPoints.Num() - 1; i += DivisionStep)
+	if (!View)
 	{
-		PDI->DrawPoint(OnGround(TrajectoryPoints[i]), DivisionColor, 7.f, SDPG_Foreground);
+		return;
 	}
-	PDI->DrawPoint(OnGround(TrajectoryPoints[0]), FLinearColor::Black, 9.f, SDPG_Foreground);
-	PDI->DrawPoint(OnGround(TrajectoryPoints.Last()), FLinearColor::Black, 9.f, SDPG_Foreground);
+	// Points are drawn as discs that face the camera, with a constant size in pixels (PDI points are square sprites).
+	const FVector CamRight = View->GetViewRight();
+	const FVector CamUp = View->GetViewUp();
+	const float ProjScale = View->ViewMatrices.GetViewToClip().M[0][0];
+	const float ViewWidth = float(FMath::Max(1, View->UnscaledViewRect.Width()));
+	auto DrawDot = [&](const FVector& World, float RadiusPixels, const FLinearColor& Color)
+	{
+		const float W = View->WorldToScreen(World).W;
+		const float Radius = RadiusPixels * 2.f * FMath::Max(W, 0.01f) / (ViewWidth * FMath::Max(ProjScale, 0.01f));
+		for (const float Fraction : { 1.f, 0.66f, 0.33f }) // concentric rings fill the disc
+		{
+			DrawCircle(PDI, World, CamRight, CamUp, Color, Radius * Fraction, 12, SDPG_Foreground, 1.5f, 0.f, true);
+		}
+	};
+	for (int32 i = 1; i < TrajectoryPoints.Num() - 1; ++i) // every frame
+	{
+		DrawDot(OnGround(TrajectoryPoints[i]), 2.5f, DivisionColor);
+	}
+	DrawDot(OnGround(TrajectoryPoints[0]), 6.f, FLinearColor::Black);
+	DrawDot(OnGround(TrajectoryPoints.Last()), 6.f, FLinearColor::Black);
 }
 // ---------------------------------------------------------------------------------------------
 

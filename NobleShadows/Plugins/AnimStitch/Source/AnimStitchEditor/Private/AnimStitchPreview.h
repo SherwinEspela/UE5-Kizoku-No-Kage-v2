@@ -288,6 +288,8 @@ private:
 	int32 DragUpdates = 0;
 	int32 DragWrites = 0;
 	TArray<FVector> TrajectoryPoints;
+	/** Samples per second of TrajectoryPoints (= the timeline's frame rate: one point per frame). */
+	double TrajectoryRate = 30.0;
 	/** One pose per ghost component (outgoing, incoming, outgoing, ...). */
 	TArray<TArray<FTransform>> GhostPoses;
 };

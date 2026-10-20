@@ -1,11 +1,13 @@
-#include "SAnimStitchAttachedProps.h"
+﻿#include "SAnimStitchAttachedProps.h"
 #include "SAnimStitchTimeline.h"
 #include "AnimStitchPreview.h"
 #include "AnimStitchTimelineAsset.h"
 #include "ScopedTransaction.h"
+#include "Widgets/Layout/SBox.h"
 #include "Styling/AppStyle.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SSpinBox.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Views/STableRow.h"
@@ -28,11 +30,13 @@ void SAnimStitchAttachedProps::Tick(const FGeometry& AllottedGeometry, const dou
 	SCompoundWidget::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
 	const UAnimStitchTimelineAsset* Asset = Timeline->GetAsset();
 	if (!Asset) { return; }
-	if (LastAsset.Get() != Asset || LastEditCounter != Asset->GetEditCounter() || LastManualCounter != Asset->GetManualCounter())
+	// Rows read their values live, so the list is only rebuilt when props are added / removed (a rebuild would kill a running slider drag).
+	if (LastAsset.Get() != Asset || LastCount != Asset->Timeline.PreviewAttachments.Num())
 	{
 		LastAsset = const_cast<UAnimStitchTimelineAsset*>(Asset);
 		LastEditCounter = Asset->GetEditCounter();
 		LastManualCounter = Asset->GetManualCounter();
+		LastCount = Asset->Timeline.PreviewAttachments.Num();
 		Rebuild();
 	}
 }
@@ -54,7 +58,7 @@ void SAnimStitchAttachedProps::Construct(const FArguments& InArgs)
 		+ SVerticalBox::Slot().AutoHeight().Padding(8.f)
 		[
 			SNew(STextBlock).AutoWrapText(true).ColorAndOpacity(FSlateColor::UseSubduedForeground())
-			.Text(LOCTEXT("NoPropsAttached", "No props attached — use the attach button in the toolbar"))
+			.Text(LOCTEXT("NoPropsAttached", "No props attached â€” use the attach button in the toolbar"))
 			.Visibility_Lambda([this]() { return Items.Num() == 0 ? EVisibility::Visible : EVisibility::Collapsed; })
 		]
 		+ SVerticalBox::Slot().FillHeight(1.f)
@@ -103,6 +107,35 @@ void SAnimStitchAttachedProps::Construct(const FArguments& InArgs)
 							.Text_Lambda([GetAttachment, Index]() { const FAnimStitchPreviewAttachment* A = GetAttachment(Index); return A ? FText::Format(LOCTEXT("PropSocket", "Socket: {0}"), FText::FromName(A->Socket)) : FText::GetEmpty(); })
 						]
 					]
+					// Uniform scale of this prop (stored with the attachment in the timeline asset)
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4.f, 2.f)
+					[
+						SNew(SBox).WidthOverride(90.f)
+						[
+							SNew(SSpinBox<float>)
+							.ToolTipText(LOCTEXT("PropScaleTip", "Scale of this prop (uniform). Drag or type a value."))
+							.MinValue(0.001f).MaxValue(1000.f).MinSliderValue(0.01f).MaxSliderValue(10.f).Delta(0.01f)
+							.Value_Lambda([GetAttachment, Index]() { const FAnimStitchPreviewAttachment* A = GetAttachment(Index); return A ? float(A->Scale.X) : 1.f; })
+							.OnBeginSliderMovement_Lambda([this]() { ScaleTransaction = MakeShared<FScopedTransaction>(LOCTEXT("PropScaleTx", "Scale Attached Prop")); })
+							.OnValueChanged_Lambda([this, Index](float V)
+							{
+								if (ScaleTransaction.IsValid()) { Timeline->GetAsset()->SetPreviewAttachmentScale(Index, FVector(V)); }
+							})
+							.OnEndSliderMovement_Lambda([this, Index](float V)
+							{
+								Timeline->GetAsset()->SetPreviewAttachmentScale(Index, FVector(V));
+								ScaleTransaction.Reset();
+							})
+							.OnValueCommitted_Lambda([this, Index](float V, ETextCommit::Type)
+							{
+								if (ScaleTransaction.IsValid()) { return; } // a slider drag already handled it
+								const UAnimStitchTimelineAsset* Current = Timeline->GetAsset();
+								if (Current && Current->Timeline.PreviewAttachments.IsValidIndex(Index) && FMath::IsNearlyEqual(float(Current->Timeline.PreviewAttachments[Index].Scale.X), V)) { return; } // nothing changed (the drag already applied it)
+								const FScopedTransaction Tx(LOCTEXT("PropScaleTx2", "Scale Attached Prop"));
+								Timeline->GetAsset()->SetPreviewAttachmentScale(Index, FVector(V));
+							})
+						]
+					]
 					// Remove (preview-only props: no confirmation)
 					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4.f, 2.f)
 					[
@@ -126,3 +159,4 @@ void SAnimStitchAttachedProps::Construct(const FArguments& InArgs)
 }
 
 #undef LOCTEXT_NAMESPACE
+

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "Widgets/SCompoundWidget.h"
@@ -53,19 +53,23 @@ private:
 	void FillControlsMenu(class FMenuBuilder& Menu);
 	void FillAttachmentsMenu(class FMenuBuilder& Menu);
 	void FillBonesMenu(class FMenuBuilder& Menu);
-	int32 RightTab = 0; // 0 = Content Browser, 1 = Details, 2 = Baked Assets, 3 = Control Properties, 4 = Attached Props
+	int32 InspectorTab = 0; // 0 = Details, 1 = Control Properties, 2 = Attached Props
+	int32 LibraryTab = 0; // Asset Library: 0 = Content Browser, 1 = Baked Assets
 	TSharedRef<SWidget> MakeBakedAssetsTab();
 	/** One value panel per bone track, created on demand, so any number of tracks can be expanded at once. */
 	void SyncKeyPanels();
 	TSharedPtr<class SOverlay> KeyPanelOverlay;
 	int32 KeyPanelCount = 0;
+	void PersistLayoutIfChanged(double Now);
+	double LastLayoutCheck = 0.0;
+	FString LastLayoutText;
 	void SaveLayoutAs();
 	void LoadSavedLayout(const FString& Name);
 	void DeleteSavedLayout(const FString& Name);
 	TSharedRef<FTabManager::FLayout> MakeDefaultLayout() const;
 	TSharedRef<SWidget> MakeLayoutMenu();
 	void ResetLayout();
-	TSharedPtr<SWidget> ViewportSection, ToolbarSection, TimelineSection, InspectorSection;
+	TSharedPtr<SWidget> ViewportSection, ToolbarSection, TimelineSection, InspectorSection, AssetLibrarySection;
 	/** Unsaved edits (shown as an asterisk on the Save icon). */
 	bool IsDirtyState() const;
 	/** Save / discard / cancel prompt before work is thrown away. False = the user cancelled (or a save did not finish). */

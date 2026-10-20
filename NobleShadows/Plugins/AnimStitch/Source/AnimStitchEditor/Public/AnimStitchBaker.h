@@ -14,6 +14,8 @@ struct ANIMSTITCHEDITOR_API FAnimStitchBakeOptions
 	bool bOverwriteExisting = false;
 	/** Show a cancellable progress dialog (editor UI only). */
 	bool bShowProgress = false;
+	/** The timeline project asset being baked (stamped into the baked asset's provenance record); empty for an unsaved timeline. */
+	FSoftObjectPath SourceTimeline;
 };
 
 /** Bakes a timeline into a single new UAnimSequence (bone transforms only in v1; notifies and curves are not carried over). */

@@ -503,6 +503,15 @@ void UAnimStitchTimelineAsset::SetPreviewAttachmentVisible(int32 Index, bool bVi
 	}
 }
 
+void UAnimStitchTimelineAsset::SetPreviewAttachmentScale(int32 Index, const FVector& Scale)
+{
+	if (Timeline.PreviewAttachments.IsValidIndex(Index))
+	{
+		TouchManual();
+		Timeline.PreviewAttachments[Index].Scale = Scale;
+	}
+}
+
 void UAnimStitchTimelineAsset::SetTrackKeepFeet(int32 TrackIndex, bool bKeep)
 {
 	if (Timeline.Tracks.IsValidIndex(TrackIndex))

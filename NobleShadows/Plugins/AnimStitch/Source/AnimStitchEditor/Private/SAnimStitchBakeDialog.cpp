@@ -1,4 +1,4 @@
-﻿#include "SAnimStitchBakeDialog.h"
+#include "SAnimStitchBakeDialog.h"
 #include "AnimStitchTimelineAsset.h"
 #include "AnimStitchBaker.h"
 #include "AnimStitchFootLock.h"
@@ -227,6 +227,7 @@ FReply SAnimStitchBakeDialog::OnBake()
 	Options.FrameRate = FrameRate > 0 ? FFrameRate(FrameRate, 1) : FFrameRate(0, 1);
 	Options.bOverwriteExisting = bAllowOverwrite;
 	Options.bShowProgress = true;
+	Options.SourceTimeline = Timeline->GetOutermost() != GetTransientPackage() ? FSoftObjectPath(Timeline) : FSoftObjectPath();
 
 	FString Error;
 	UAnimSequence* Baked = FAnimStitchBaker::Bake(Timeline->Timeline, Path, Options, Error);

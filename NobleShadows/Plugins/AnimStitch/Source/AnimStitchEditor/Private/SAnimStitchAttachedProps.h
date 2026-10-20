@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Widgets/SCompoundWidget.h"
@@ -32,4 +32,8 @@ private:
 	uint32 LastEditCounter = MAX_uint32;
 	uint32 LastManualCounter = MAX_uint32;
 	TWeakObjectPtr<UObject> LastAsset;
+	int32 LastCount = -1;
+	/** Open while a scale slider is being dragged: the whole drag is one undo step. */
+	TSharedPtr<class FScopedTransaction> ScaleTransaction;
 };
+

@@ -29,6 +29,7 @@ public class AnimStitchEditor : ModuleRules
 			"ContentBrowser",
 			"AssetTools",
 			"AssetDefinition",
+			"Projects",
 		});
 	}
 }

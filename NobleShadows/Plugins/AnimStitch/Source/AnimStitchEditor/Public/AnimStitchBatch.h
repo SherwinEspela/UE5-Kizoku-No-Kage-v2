@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "AnimStitchTimeline.h"
@@ -18,6 +18,8 @@ struct ANIMSTITCHEDITOR_API FAnimStitchBatchOptions
 	bool bSavePackages = true;
 	/** Replace outputs that already exist (same skeleton) instead of reporting a failure. */
 	bool bOverwriteExisting = false;
+	/** The template's timeline asset (stamped into every baked sequence's provenance); empty for an unsaved timeline. */
+	FSoftObjectPath SourceTimeline;
 };
 
 struct ANIMSTITCHEDITOR_API FAnimStitchBatchResult

@@ -1,4 +1,4 @@
-﻿#include "SAnimStitchPanel.h"
+#include "SAnimStitchPanel.h"
 #include "SAnimStitchTimeline.h"
 #include "SAnimStitchKeyPanel.h"
 #include "SAnimStitchTransportBar.h"
@@ -7,6 +7,11 @@
 #include "Widgets/Layout/SScrollBox.h"
 #include "SAnimStitchControlProperties.h"
 #include "AnimStitchContentBrowserBadge.h"
+#include "AnimStitchProvenance.h"
+#include "Styling/SlateIconFinder.h"
+#include "Widgets/Layout/SSeparator.h"
+#include "Engine/SkeletalMesh.h"
+#include "Animation/Skeleton.h"
 #include "IContentBrowserSingleton.h"
 #include "SAnimStitchAttachedProps.h"
 #include "AnimStitchManualEdits.h"
@@ -110,17 +115,16 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 			];
 	};
 
-	auto RightTabButton = [this](const FText& Label, int32 TabIndex)
+	auto TabButton = [this](int32* Selected, const FText& Label, int32 Index, TFunction<void()> OnPicked)
 	{
 		return SNew(SCheckBox)
 			.Style(FAppStyle::Get(), "ToggleButtonCheckbox")
-			.IsChecked_Lambda([this, TabIndex]() { return RightTab == TabIndex ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
-			.OnCheckStateChanged_Lambda([this, TabIndex](ECheckBoxState State) { if (State == ECheckBoxState::Checked) { RightTab = TabIndex; if (TabIndex == 2) { RebuildBakedList(); } } })
+			.IsChecked_Lambda([Selected, Index]() { return *Selected == Index ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+			.OnCheckStateChanged_Lambda([Selected, Index, OnPicked](ECheckBoxState State) { if (State == ECheckBoxState::Checked) { *Selected = Index; if (OnPicked) { OnPicked(); } } })
 			[
 				SNew(STextBlock).Text(Label).Margin(FMargin(10.f, 3.f))
 			];
 	};
-
 		auto AssetButton =[](const FText& Label, const FText& Tip, TFunction<void()> OnClick)
 	{
 		return SNew(SButton)
@@ -247,10 +251,6 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 			[
 				AssetButton(LOCTEXT("BatchBake", "Batch Bake..."), LOCTEXT("BatchBakeTip", "Use this timeline as a template and bake it over many source clips"), [this]() { OpenBatch(); })
 			]
-			+ SWrapBox::Slot().VAlign(VAlign_Center).Padding(0, 0, 14, 3)
-			[
-				SNew(STextBlock).Text(this, &SAnimStitchPanel::GetAssetLabel)
-			]
 			+ SWrapBox::Slot().Padding(0, 0, 6, 3)
 			[
 				ToggleButton(LOCTEXT("PredictFeet", "Predict Feet (experimental)"),
@@ -289,41 +289,64 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 					];
 				})
 			]
-		]
-		+ SVerticalBox::Slot().AutoHeight().Padding(6.f, 2.f, 6.f, 2.f)
-		[
-			SNew(SWrapBox).UseAllottedSize(true)
-			+ SWrapBox::Slot().VAlign(VAlign_Center).Padding(0, 0, 6, 3)
-			[
-				SNew(STextBlock).Text(LOCTEXT("PreviewMesh", "Preview mesh:"))
-			]
-			+ SWrapBox::Slot().VAlign(VAlign_Center).Padding(0, 0, 12, 3)
-			[
-				SNew(SBox).MinDesiredWidth(220.f).MaxDesiredWidth(320.f)[SNew(SObjectPropertyEntryBox)
-				.AllowedClass(USkeletalMesh::StaticClass())
-				.ObjectPath(this, &SAnimStitchPanel::GetMeshPath)
-				.OnObjectChanged(this, &SAnimStitchPanel::OnMeshChanged)
-				.OnShouldFilterAsset(this, &SAnimStitchPanel::ShouldFilterMesh)
-				.AllowClear(true)
-				.DisplayThumbnail(false)]
-			]
-			+ SWrapBox::Slot().Padding(0, 0, 12, 3)
-			[
-				SNew(SComboButton).HasDownArrow(true)
-				.ToolTipText(LOCTEXT("AttachPropsTip", "Attach props (static or skeletal meshes) to a socket or bone of the preview character. Preview only, never baked."))
-				.ButtonContent()[SNew(STextBlock).Text(LOCTEXT("AttachProps", "Attach Props"))]
-				.OnGetMenuContent_Lambda([this]() -> TSharedRef<SWidget> { FMenuBuilder Menu(true, nullptr); FillAttachmentsMenu(Menu); return Menu.MakeWidget(); })
-			]
-			+ SWrapBox::Slot().Padding(0, 0, 4, 3)
-			[
-				ToggleButton(LOCTEXT("Ghosts", "Ghost Joins"), LOCTEXT("GhostsTip", "Show the last pose of the outgoing clip (orange) and the first pose of the incoming clip (blue) at every join"),
-					[this]() { return bShowGhosts; }, [this](bool b) { bShowGhosts = b; Preview->SetShowGhosts(b); })
-			]
-			+ SWrapBox::Slot()
-			[
-				ToggleButton(LOCTEXT("RootPath", "Root Path"), LOCTEXT("RootPathTip", "Draw the root bone's path across the timeline on the ground"),
-					[this]() { return bShowRootPath; }, [this](bool b) { bShowRootPath = b; Preview->SetShowRootPath(b); })
-			]
+				// ---- Preview group (was the second toolbar row): a clear divider separates it from the file / bake group ----
+				+ SWrapBox::Slot().VAlign(VAlign_Center).Padding(8, 0, 14, 3)
+				[
+					SNew(SBox).HeightOverride(22.f)[SNew(SSeparator).Orientation(Orient_Vertical)]
+				]
+				+ SWrapBox::Slot().VAlign(VAlign_Center).Padding(0, 0, 6, 3)
+				[
+					SNew(STextBlock).Text(LOCTEXT("PreviewMesh", "Preview mesh:"))
+				]
+				+ SWrapBox::Slot().VAlign(VAlign_Center).Padding(0, 0, 2, 3)
+				[
+					SNew(SBox).MinDesiredWidth(220.f).MaxDesiredWidth(320.f)[SNew(SObjectPropertyEntryBox)
+					.AllowedClass(USkeletalMesh::StaticClass())
+					.ObjectPath(this, &SAnimStitchPanel::GetMeshPath)
+					.OnObjectChanged(this, &SAnimStitchPanel::OnMeshChanged)
+					.OnShouldFilterAsset(this, &SAnimStitchPanel::ShouldFilterMesh)
+					.AllowClear(true)
+					.DisplayThumbnail(false)]
+				]
+				+ SWrapBox::Slot().VAlign(VAlign_Center).Padding(0, 0, 12, 3)
+				[
+					// Opens the Skeleton asset of the preview mesh (same icon as the Skeleton asset in the Skeletal Mesh Editor).
+					SNew(SButton).ButtonStyle(FAppStyle::Get(), "SimpleButton").ContentPadding(FMargin(4.f))
+					.ToolTipText(LOCTEXT("OpenSkeletonTip", "Open Skeleton"))
+					.IsEnabled_Lambda([this]() { return Preview.IsValid() && Preview->GetMesh() && Preview->GetMesh()->GetSkeleton(); })
+					.OnClicked_Lambda([this]()
+					{
+						USkeletalMesh* PreviewMesh = Preview.IsValid() ? Preview->GetMesh() : nullptr;
+						if (GEditor && PreviewMesh && PreviewMesh->GetSkeleton())
+						{
+							GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(PreviewMesh->GetSkeleton());
+						}
+						return FReply::Handled();
+					})
+					[
+						SNew(SBox).WidthOverride(16.f).HeightOverride(16.f)
+						[
+							SNew(SImage).Image(FSlateIconFinder::FindIconBrushForClass(USkeleton::StaticClass())).ColorAndOpacity(FSlateColor::UseForeground())
+						]
+					]
+				]
+				+ SWrapBox::Slot().Padding(0, 0, 12, 3)
+				[
+					SNew(SComboButton).HasDownArrow(true)
+					.ToolTipText(LOCTEXT("AttachPropsTip", "Attach props (static or skeletal meshes) to a socket or bone of the preview character. Preview only, never baked."))
+					.ButtonContent()[SNew(STextBlock).Text(LOCTEXT("AttachProps", "Attach Props"))]
+					.OnGetMenuContent_Lambda([this]() -> TSharedRef<SWidget> { FMenuBuilder Menu(true, nullptr); FillAttachmentsMenu(Menu); return Menu.MakeWidget(); })
+				]
+				+ SWrapBox::Slot().Padding(0, 0, 4, 3)
+				[
+					ToggleButton(LOCTEXT("Ghosts", "Ghost Joins"), LOCTEXT("GhostsTip", "Show the last pose of the outgoing clip (orange) and the first pose of the incoming clip (blue) at every join"),
+						[this]() { return bShowGhosts; }, [this](bool b) { bShowGhosts = b; Preview->SetShowGhosts(b); })
+				]
+				+ SWrapBox::Slot().Padding(0, 0, 0, 3)
+				[
+					ToggleButton(LOCTEXT("RootPath", "Root Path"), LOCTEXT("RootPathTip", "Draw the root bone's path across the timeline on the ground"),
+						[this]() { return bShowRootPath; }, [this](bool b) { bShowRootPath = b; Preview->SetShowRootPath(b); })
+				]
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(6.f, 2.f, 6.f, 4.f)
 		[
@@ -459,31 +482,22 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 		+ SVerticalBox::Slot().FillHeight(1.f)[TimelineBorder]
 		+ SVerticalBox::Slot().AutoHeight()[TransportBar];
 
+	// Inspector: Details, Control Properties and Attached Props only. Content Browser and Baked Assets live in the Asset Library.
 	InspectorSection = SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight().Padding(6.f, 6.f, 6.f, 2.f)
 		[
 			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 2, 0)[RightTabButton(LOCTEXT("ContentBrowserTab", "Content Browser"), 0)]
-			+ SHorizontalBox::Slot().AutoWidth()[RightTabButton(LOCTEXT("DetailsTab", "Details"), 1)]
-			+ SHorizontalBox::Slot().AutoWidth().Padding(2, 0, 0, 0)[RightTabButton(LOCTEXT("BakedAssetsTab", "Baked Assets"), 2)]
-			+ SHorizontalBox::Slot().AutoWidth().Padding(2, 0, 0, 0)[RightTabButton(LOCTEXT("ControlPropsTab", "Control Properties"), 3)]
-			+ SHorizontalBox::Slot().AutoWidth().Padding(2, 0, 0, 0)[RightTabButton(LOCTEXT("AttachedPropsTab", "Attached Props"), 4)]
+			+ SHorizontalBox::Slot().AutoWidth()[TabButton(&InspectorTab, LOCTEXT("DetailsTab", "Details"), 0, nullptr)]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(2, 0, 0, 0)[TabButton(&InspectorTab, LOCTEXT("ControlPropsTab", "Control Properties"), 1, nullptr)]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(2, 0, 0, 0)[TabButton(&InspectorTab, LOCTEXT("AttachedPropsTab", "Attached Props"), 2, nullptr)]
 		]
 		+ SVerticalBox::Slot().FillHeight(1.f)
 		[
-			SNew(SWidgetSwitcher).WidgetIndex_Lambda([this]() { return RightTab; })
-			+ SWidgetSwitcher::Slot()
-			[
-				SAssignNew(BrowserBox, SBox)
-			]
+			SNew(SWidgetSwitcher).WidgetIndex_Lambda([this]() { return InspectorTab; })
 			+ SWidgetSwitcher::Slot()
 			[
 				SNew(SAnimStitchBoneDetails).Preview(Preview).Timeline(Timeline)
 				.LiveIK([this](int32 Track, FAnimStitchTrackKey& OutKey) { return Preview->GetIKLiveKey(Track, OutKey); })
-			]
-			+ SWidgetSwitcher::Slot()
-			[
-				MakeBakedAssetsTab()
 			]
 			+ SWidgetSwitcher::Slot()
 			[
@@ -492,6 +506,27 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 			+ SWidgetSwitcher::Slot()
 			[
 				SNew(SAnimStitchAttachedProps).Preview(Preview).Timeline(Timeline)
+			]
+		];
+
+	// Asset Library: Content Browser (animation sequences of the preview skeleton) and the Baked Assets list.
+	AssetLibrarySection = SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(6.f, 6.f, 6.f, 2.f)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 2, 0)[TabButton(&LibraryTab, LOCTEXT("ContentBrowserTab", "Content Browser"), 0, nullptr)]
+			+ SHorizontalBox::Slot().AutoWidth()[TabButton(&LibraryTab, LOCTEXT("BakedAssetsTab", "Baked Assets"), 1, [this]() { RebuildBakedList(); })]
+		]
+		+ SVerticalBox::Slot().FillHeight(1.f)
+		[
+			SNew(SWidgetSwitcher).WidgetIndex_Lambda([this]() { return LibraryTab; })
+			+ SWidgetSwitcher::Slot()
+			[
+				SAssignNew(BrowserBox, SBox)
+			]
+			+ SWidgetSwitcher::Slot()
+			[
+				MakeBakedAssetsTab()
 			]
 		];
 	RebuildSequenceBrowser();
@@ -552,6 +587,20 @@ void SAnimStitchPanel::AddReferencedObjects(FReferenceCollector& Collector)
 	Collector.AddReferencedObject(Asset);
 }
 
+void SAnimStitchPanel::PersistLayoutIfChanged(double Now)
+{
+	// Docked and FLOATING panels (positions and sizes of floating windows included) are saved shortly after they change, so a
+	// restart brings back exactly this arrangement. Moving / resizing a floating window does not always notify the tab manager.
+	if (!TabManager.IsValid() || bSkipLayoutPersist || Now - LastLayoutCheck < 1.0) { return; }
+	LastLayoutCheck = Now;
+	const TSharedRef<FTabManager::FLayout> Current = TabManager->PersistLayout();
+	const FString Text = Current->ToString();
+	if (Text != LastLayoutText)
+	{
+		LastLayoutText = Text;
+		FLayoutSaveRestore::SaveToConfig(GEditorLayoutIni, Current);
+	}
+}
 EActiveTimerReturnType SAnimStitchPanel::UpdatePreview(double CurrentTime, float DeltaTime)
 {
 	if (Asset->GetEditCounter() != LastEditCounter)
@@ -559,6 +608,7 @@ EActiveTimerReturnType SAnimStitchPanel::UpdatePreview(double CurrentTime, float
 		SyncPreviewToTimeline();
 	}
 	Timeline->ApplyPendingZoomFit();
+	PersistLayoutIfChanged(CurrentTime);
 	SyncBrowserSelection(CurrentTime);
 	SyncKeyPanels();
 	if (Timeline->GetTrackSelectionSerial() != LastTrackSerial)
@@ -999,7 +1049,7 @@ void SAnimStitchPanel::OnBoneComboChanged(TSharedPtr<FString> Item, ESelectInfo:
 		return; // the change came from the viewport (or a refresh), not from the user picking in the list
 	}
 	Preview->SelectBone(Preview->FindMeshBone(FName(**Item)));
-	RightTab = 1; // picking a bone in the dropdown shows its Details
+	InspectorTab = 0; // picking a bone in the dropdown shows its Details
 }
 
 void SAnimStitchPanel::OnPreviewBoneSelected()
@@ -1102,25 +1152,29 @@ namespace
 	const FName ViewportTabId(TEXT("AnimStitch.Viewport"));
 	const FName TimelineTabId(TEXT("AnimStitch.Timeline"));
 	const FName InspectorTabId(TEXT("AnimStitch.Inspector"));
+	const FName AssetLibraryTabId(TEXT("AnimStitch.AssetLibrary"));
 }
 
 TSharedRef<FTabManager::FLayout> SAnimStitchPanel::MakeDefaultLayout() const
 {
-	return FTabManager::NewLayout("AnimStitchLayout_v2")
+	// Layout name bumped to v3 so previously auto-saved layouts do not mask this default (author's "Default" layout).
+	return FTabManager::NewLayout("AnimStitchLayout_v3")
 		->AddArea
 		(
-			FTabManager::NewPrimaryArea()->SetOrientation(Orient_Vertical)
-			->Split(FTabManager::NewStack()->SetSizeCoefficient(0.14f)->AddTab(ToolbarTabId, ETabState::OpenedTab))
+			FTabManager::NewPrimaryArea()->SetOrientation(Orient_Horizontal)
 			->Split
 			(
-				FTabManager::NewSplitter()->SetOrientation(Orient_Horizontal)->SetSizeCoefficient(0.86f)
-				->Split
-				(
-					FTabManager::NewSplitter()->SetOrientation(Orient_Vertical)->SetSizeCoefficient(0.74f)
-					->Split(FTabManager::NewStack()->SetSizeCoefficient(0.52f)->AddTab(ViewportTabId, ETabState::OpenedTab))
-					->Split(FTabManager::NewStack()->SetSizeCoefficient(0.48f)->AddTab(TimelineTabId, ETabState::OpenedTab))
-				)
-				->Split(FTabManager::NewStack()->SetSizeCoefficient(0.26f)->AddTab(InspectorTabId, ETabState::OpenedTab))
+				FTabManager::NewSplitter()->SetOrientation(Orient_Vertical)->SetSizeCoefficient(1.6112f)
+				->Split(FTabManager::NewStack()->SetSizeCoefficient(0.14f)->AddTab(ToolbarTabId, ETabState::OpenedTab))
+				->Split(FTabManager::NewStack()->SetSizeCoefficient(0.5253f)->AddTab(ViewportTabId, ETabState::OpenedTab))
+				->Split(FTabManager::NewStack()->SetSizeCoefficient(0.3347f)->AddTab(TimelineTabId, ETabState::OpenedTab))
+			)
+			->Split
+			(
+				// Right column: the Inspector sits above the Asset Library.
+				FTabManager::NewSplitter()->SetOrientation(Orient_Vertical)->SetSizeCoefficient(0.3888f)
+				->Split(FTabManager::NewStack()->SetSizeCoefficient(0.55f)->AddTab(InspectorTabId, ETabState::OpenedTab))
+				->Split(FTabManager::NewStack()->SetSizeCoefficient(0.45f)->AddTab(AssetLibraryTabId, ETabState::OpenedTab))
 			)
 		);
 }
@@ -1144,6 +1198,7 @@ void SAnimStitchPanel::InitializeDocking(const TSharedRef<SDockTab>& Tab)
 	Register(ViewportTabId, LOCTEXT("ViewportTab", "Viewport"), ViewportSection, false);
 	Register(TimelineTabId, LOCTEXT("TimelineTab", "Timeline"), TimelineSection, true);
 	Register(InspectorTabId, LOCTEXT("InspectorTab", "Inspector"), InspectorSection, true);
+	Register(AssetLibraryTabId, LOCTEXT("AssetLibraryTab", "Asset Library"), AssetLibrarySection, true);
 
 	// Layout preferences save themselves whenever the layout changes.
 	TabManager->SetOnPersistLayout(FTabManager::FOnPersistLayout::CreateLambda([](const TSharedRef<FTabManager::FLayout>& InLayout)
@@ -1194,6 +1249,7 @@ TSharedRef<SWidget> SAnimStitchPanel::MakeLayoutMenu()
 	};
 	ShowEntry(LOCTEXT("ShowTimeline", "Show Timeline"), TimelineTabId);
 	ShowEntry(LOCTEXT("ShowInspector", "Show Inspector"), InspectorTabId);
+	ShowEntry(LOCTEXT("ShowAssetLibrary", "Show Asset Library"), AssetLibraryTabId);
 	return Menu.MakeWidget();
 }
 
@@ -1256,7 +1312,7 @@ void SAnimStitchPanel::DeleteSavedLayout(const FString& Name)
 
 void SAnimStitchPanel::ResetLayout()
 {
-	if (FMessageDialog::Open(EAppMsgType::YesNo, LOCTEXT("ResetLayoutConfirm", "Reset all sections (toolbar, viewport, timeline, inspector) to the default layout?\n\nYour timeline stays as it is.")) != EAppReturnType::Yes)
+	if (FMessageDialog::Open(EAppMsgType::YesNo, LOCTEXT("ResetLayoutConfirm", "Reset all sections (toolbar, viewport, timeline, inspector, asset library) to the default layout?\n\nYour timeline stays as it is.")) != EAppReturnType::Yes)
 	{
 		return;
 	}
@@ -1338,7 +1394,19 @@ TSharedRef<SWidget> SAnimStitchPanel::MakeBakedAssetsTab()
 						SNew(SBox).WidthOverride(104.f)
 						[
 							SNew(STextBlock).Text(FText::FromString(Item->Path.GetAssetName())).Justification(ETextJustify::Center).AutoWrapText(true)
-							.ToolTipText(FText::FromString(Item->Path.ToString()))
+							.ToolTipText_Lambda([Item]()
+							{
+								// "Baked from:" - the provenance record AnimStitch stamped on the baked sequence.
+								FText Tip = FText::FromString(Item->Path.ToString());
+								if (const UAnimSequence* Sequence = Cast<UAnimSequence>(Item->Path.TryLoad()))
+								{
+									if (UAnimStitchProvenance* Provenance = Cast<UAnimStitchProvenance>(const_cast<UAnimSequence*>(Sequence)->GetAssetUserDataOfClass(UAnimStitchProvenance::StaticClass())))
+									{
+										Tip = FText::Format(LOCTEXT("BakedTip", "{0}\n\n{1}"), Tip, Provenance->MakeSummary());
+									}
+								}
+								return Tip;
+							})
 						]
 					]
 				];

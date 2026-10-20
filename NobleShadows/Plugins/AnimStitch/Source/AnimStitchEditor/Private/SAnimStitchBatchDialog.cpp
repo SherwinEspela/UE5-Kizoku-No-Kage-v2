@@ -291,6 +291,7 @@ FReply SAnimStitchBatchDialog::OnBake()
 		TArray<UAnimSequence*>& Out = Raw.AddDefaulted_GetRef();
 		for (UAnimSequence* S : List) { Out.Add(S); }
 	}
+	Options.SourceTimeline = Template->GetOutermost() != GetTransientPackage() ? FSoftObjectPath(Template) : FSoftObjectPath();
 	const FAnimStitchBatchResult Result = FAnimStitchBatch::Run(Template->Timeline, Raw, Options);
 
 	FTextBuilder Summary;

@@ -160,3 +160,8 @@ Right-click **below the clip lanes** > *Add Bone Track* to add a Sequencer-style
 - Content Browser: animation sequences on the timeline get an 'On the AnimStitch timeline' badge (with a count for repeats); selecting one in the Content Browser selects its clip. The extender places icons at the thumbnail's top-left.
 - Layout > Save Layout As / Load Layout / Delete Saved Layout (stored in the AnimStitch settings; the current layout still auto-saves).
 - Duplicate, Remove, Split, Trim Start, Trim End and Zoom to Fit are icon buttons. The root path hides with G.
+
+## Phase 15 additions
+- Panels (Toolbar, Viewport, Timeline, Inspector, Asset Library) are tabs of the AnimStitch tab manager: drag them out as floating windows or re-dock them; the arrangement (floating windows included) is saved automatically, and *Layout* offers Reset to Default and named presets. The Inspector holds Details, Control Properties and Attached Props; the Asset Library holds the Content Browser and Baked Assets.
+- Every baked sequence carries an `AnimStitch Provenance` record (Asset User Data): ordered sources, trims, crossfades, root motion authority, foot lock / prediction state, source timeline, date and plugin version. Hover a tile in *Baked Assets* to read it. No effect on playback; the sources are never touched.
+- The timeline reframes (Zoom to Fit) whenever its panel is resized. Attached props have a per-prop scale saved with the timeline. *Open Skeleton* button next to the preview mesh picker. Root path: a round dot on every frame, larger start / end dots.
