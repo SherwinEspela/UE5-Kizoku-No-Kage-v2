@@ -265,6 +265,62 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 					const FAnimStitchControlId Picked = bProj ? FAnimStitchControlId() : FAnimStitchControlId();
 					const FAnimStitchControlId Nothing;
 					UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest PICK: control projects=%d; pick 3 px away returns kind %d (track %d, expected Bone/%d); far pick returns none=%d"), bProj, (int32)Picked.Kind, Picked.A, PelvisTrack, !Nothing.IsValid());
+
+				// ---- Phase 12 checks: dragging the first and a later control, control style, pelvis-only feet, moving a lock handle ----
+				{
+					FAnimStitchTrack Spine; Spine.Kind = EAnimStitchTrackKind::Bone; Spine.Bone = TEXT("spine_01");
+					const int32 SpineTrack = TLAsset->AddTrack(Spine);
+					Preview->SetManualTracks(TLAsset->Timeline.Tracks);
+					Preview->SetPlayhead(2.0);
+					for (const int32 T : { PelvisTrack, SpineTrack })
+					{
+						const FAnimStitchControlId Id = { EAnimStitchControlKind::Bone, T, INDEX_NONE };
+						auto PositionOf = [&]() { TArray<FAnimStitchControl> C; Preview->BuildControls(C); const FAnimStitchControl* F = C.FindByPredicate([&Id](const FAnimStitchControl& K) { return K.Id == Id; }); return F ? F->Position : FVector(1e9); };
+						const FVector Before = PositionOf();
+						const bool bStarted = Preview->DebugDragControl(Id, FVector(0.0, 0.0, 10.0));
+						const FVector During = PositionOf(); // while the drag is still active
+						Preview->EndGizmoDrag();
+						const FVector After = PositionOf();
+						UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest P12 DRAG: track %d started=%d: control moved %.2f cm during the drag and %.2f cm total after it (expected 10 / 10)"), T, bStarted, (During - Before).Size(), (After - Before).Size());
+					}
+					UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest P12 PELVIS-ONLY: keep-feet flag pelvis=%d spine=%d | IsPelvisBone(pelvis)=%d (spine_01)=%d (foot_l)=%d"),
+						TLAsset->Timeline.Tracks[PelvisTrack].bKeepFeetPlanted, TLAsset->Timeline.Tracks[SpineTrack].bKeepFeetPlanted,
+						FAnimStitchManualEdits::IsPelvisBone(TEXT("pelvis")), FAnimStitchManualEdits::IsPelvisBone(TEXT("spine_01")), FAnimStitchManualEdits::IsPelvisBone(TEXT("foot_l")));
+
+					FAnimStitchControlStyle Style; Style.bOverrideSize = true; Style.Size = 2.f; Style.bOverrideOpacity = true; Style.Opacity = 0.6f; Style.Shape = EAnimStitchControlShape::Sphere; Style.Offset = FVector(0.0, 15.0, 0.0);
+					TLAsset->SetTrackControlStyle(PelvisTrack, false, Style);
+					Preview->SetManualTracks(TLAsset->Timeline.Tracks);
+					TArray<FAnimStitchControl> StyledControls; Preview->BuildControls(StyledControls);
+					const FAnimStitchControl* Styled = StyledControls.FindByPredicate([PelvisTrack](const FAnimStitchControl& K) { return K.Id.Kind == EAnimStitchControlKind::Bone && K.Id.A == PelvisTrack; });
+					UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest P12 STYLE: pelvis control size mul %.1f opacity %.2f sphere=%d offset %s (expected 2.0 / 0.60 / 1 / Y=15)"), Styled ? Styled->SizeMul : -9.f, Styled ? Styled->Opacity : -9.f, Styled ? Styled->bSphere : -1, Styled ? *Styled->Offset.ToCompactString() : TEXT("none"));
+
+					TLAsset->AddFootEvent(0, 1.0, EAnimStitchFootAction::Lock);
+					TLAsset->AddFootEvent(0, 1.5, EAnimStitchFootAction::Unlock);
+					TLAsset->MoveFootEvent(0, 1.5, 1.8);
+					TLAsset->MoveFootEvent(0, 1.0, 0.7);
+					FString Times;
+					for (const FAnimStitchClip& Clip : TLAsset->Timeline.Clips)
+					{
+						for (const FAnimStitchFootEvent& E : Clip.FootEvents) { if (E.Foot == 0) { Times += FString::Printf(TEXT("%s@%.2f "), E.Action == EAnimStitchFootAction::Lock ? TEXT("Lock") : TEXT("Unlock"), Clip.StartTime + (E.SrcTime - Clip.TrimIn)); } }
+					}
+					UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest P12 LOCK HANDLES: foot 0 events after dragging both handles: %s(expected Lock@0.70 Unlock@1.80)"), *Times);
+
+					// ---- Phase 13 checks: correction keys follow their clip ----
+					if (TLAsset->Timeline.Clips.Num() >= 2)
+					{
+						const FAnimStitchClip& Second = TLAsset->Timeline.Clips[1];
+						const double KeyTime = Second.StartTime + 0.5;
+						FAnimStitchTrackKey Probe; Probe.Time = KeyTime; Probe.Translation = FVector(0.0, 0.0, 7.0);
+						TLAsset->SetTrackKey(PelvisTrack, Probe);
+						const double Before = KeyTime;
+						const double SecondTrimIn = Second.TrimIn;
+						TLAsset->MoveClip(1, 0); // the second clip becomes the first
+						double After = -1.0;
+						for (const FAnimStitchTrackKey& K : TLAsset->Timeline.Tracks[PelvisTrack].Keys) { if (K.Translation.Equals(FVector(0.0, 0.0, 7.0), 1e-3)) { After = K.Time; } }
+						UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest P13 KEYS FOLLOW CLIP: key 0.50 s into clip 2 sat at %.2f s; after moving that clip to the front it sits at %.2f s (expected %.2f)"), Before, After, TLAsset->Timeline.Clips[0].StartTime + (SecondTrimIn + 0.5 - TLAsset->Timeline.Clips[0].TrimIn));
+					}
+					UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest P13 DIRTY: HasUnsavedChanges=%d after the edits above"), TLAsset->HasUnsavedChanges());
+				}
 				}
 			}
 		}

@@ -136,3 +136,18 @@ Right-click **below the clip lanes** > *Add Bone Track* to add a Sequencer-style
 - Control cubes are sized per bone (pelvis large, fingers small), coloured by side (left blue, right red, centre grey), rotate with the control and start aligned to the joint. Show > Controls: Control Size (global multiplier), Gizmo Size, Control Opacity. Their translucent fill is drawn on the viewport canvas so the mesh shows through.
 - Rotate defaults to local. IK pole / effector controls stay on the animated limb while IK is off, so pelvis edits do not drag them.
 - Timeline: wheel zooms (wheel over the track column scrolls the lanes), the lane column has a vertical scrollbar and a draggable width handle, Delete removes a selected track, adding a clip auto-keys every lane at the clip end, adding a duplicate bone shows a warning. Picking a bone in the viewport dropdown switches to the Details tab.
+
+## Phase 12 additions
+- Bone-track workflow: **Add Core Bone** and **Add Limb** buttons on the main toolbar (same menus as right-clicking the empty lane area). The bone picker only offers bones not yet on the track list, and hands / feet offer Single bone, FK limb or IK limb. Adding or clicking a track selects its bone and control shape in the viewport. Keep feet planted exists only on the pelvis track (a status message shows in the viewport while it is on).
+- **Control Properties** tab: per-control opacity, size, shape (box / sphere) and display offset; overrides win over the global Show > Controls values.
+- Docking: toolbar, viewport, timeline, bottom bar and side panel are separate dockable tabs; the layout saves itself. Toolbar > **Layout** has Reset to Default Layout (asks first) and Show entries for closed sections.
+- G toggles all helpers (control shapes, gizmo, grid). Baked Assets shows thumbnail tiles. Right-click menus have Copy / Paste Keys. Green manual foot-lock regions have white handles: drag them to resize the lock.
+
+## Phase 13 additions
+- Docking: the timeline and its bottom bar are ONE dockable tab (Timeline); the side tabs are the **Inspector**; the toolbar wraps / scrolls to fit any width. Layout version is now v2 (older saved layouts are ignored).
+- Selecting a control in the viewport selects its track in the timeline (and the other way round). T toggles the gizmo's World / Local; F frames the selected control (same focus call as the regular viewport).
+- Context menus: Copy Keys and Paste at Playhead (needs selected keys and a playhead elsewhere); Paste Keys only when the clipboard holds keys for an existing track; foot lane: Clear All Footlocks.
+- The Save icon shows an asterisk with unsaved changes; New (and Open) ask Save / Discard / Cancel first.
+- Correction keys follow their clip when it moves, is trimmed or reordered (they are glued to the clip's source time).
+- Foot locks: drag the white handles to resize, drag inside a green region to move it; the lane refreshes while you drag.
+- Root path: dark gray curve, small division points every half second, dark dots at start and end.

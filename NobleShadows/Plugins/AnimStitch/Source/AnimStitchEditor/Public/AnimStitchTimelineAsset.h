@@ -72,6 +72,10 @@ public:
 	void SetTrackKeyWeight(int32 Track, int32 KeyIndex, float Weight);
 	/** Bone tracks: keep the feet planted (leg IK) while this bone moves the legs. */
 	void SetTrackKeepFeet(int32 Track, bool bKeep);
+	/** Sets the per-control look of a track (bPole = the IK pole control, otherwise the bone control / effector). */
+	void SetTrackControlStyle(int32 Track, bool bPole, const FAnimStitchControlStyle& Style);
+	/** Moves one manual foot-lock event (the start or end handle of a locked region) to another timeline time, keeping its action and pin offset. */
+	void MoveFootEvent(int32 Foot, double FromTime, double ToTime);
 	/** Moves the pin of a manual foot lock (free IK target). */
 	void SetPinOffset(int32 ClipIndex, int32 EventIndex, const FVector& Offset);
 	void AddPreviewAttachment(const FAnimStitchPreviewAttachment& Attachment);
@@ -94,13 +98,31 @@ public:
 	/** Bumped by every edit, undo and redo; lets the preview know when to re-evaluate. */
 	uint32 GetEditCounter() const { return EditCounter; }
 
+	/** True after any edit (or undo / redo) since the last save or load; drives the Save button's asterisk. */
+	bool HasUnsavedChanges() const { return bUnsavedChanges; }
+	void ClearUnsavedChanges() { bUnsavedChanges = false; }
+
 	virtual void PostTransacted(const FTransactionObjectEvent& TransactionEvent) override;
 
 private:
-	void Touch() { Modify(); ++EditCounter; }
+	void Touch() { Modify(); ++EditCounter; bUnsavedChanges = true; }
 	/** Manual track edits don't change what the automatic passes see, so they only bump this counter. */
-	void TouchManual() { Modify(); ++ManualCounter; }
+	void TouchManual() { Modify(); ++ManualCounter; bUnsavedChanges = true; }
 
+	/** While alive, remembers which clip owns every correction key and, when applied (or destroyed), re-places the keys so they follow their clip. */
+	struct FKeyFollowScope
+	{
+		explicit FKeyFollowScope(UAnimStitchTimelineAsset& InAsset);
+		~FKeyFollowScope() { Apply(); }
+		void Apply();
+		struct FOwner { int32 Track = INDEX_NONE; int32 Key = INDEX_NONE; FGuid Clip; double SourceTime = 0.0; };
+		UAnimStitchTimelineAsset& Asset;
+		TArray<FOwner> Owners;
+		bool bApplied = false;
+	};
+	friend struct FKeyFollowScope;
+
+	bool bUnsavedChanges = false;
 	uint32 EditCounter = 0;
 	uint32 ManualCounter = 0;
 };

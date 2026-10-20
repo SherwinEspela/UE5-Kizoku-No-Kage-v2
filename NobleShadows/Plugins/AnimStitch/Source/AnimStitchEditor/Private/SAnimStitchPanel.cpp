@@ -2,7 +2,16 @@
 #include "SAnimStitchTimeline.h"
 #include "SAnimStitchKeyPanel.h"
 #include "SAnimStitchTransportBar.h"
+#include "Widgets/Layout/SWrapBox.h"
+#include "Widgets/Layout/SScrollBox.h"
+#include "SAnimStitchControlProperties.h"
+#include "AnimStitchManualEdits.h"
+#include "Framework/Docking/TabManager.h"
+#include "Framework/Docking/LayoutService.h"
+#include "Widgets/Docking/SDockTab.h"
 #include "AnimStitchBaker.h"
+#include "AnimStitchEditorModule.h"
+#include "AssetThumbnail.h"
 #include "Editor/Transactor.h"
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -130,295 +139,337 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 		.OnPlayheadChanged(FSimpleDelegate::CreateSP(this, &SAnimStitchPanel::OnTimelineScrubbed))
 		.OnWarnings(FAnimStitchWarningsDelegate::CreateSP(this, &SAnimStitchPanel::HandleWarnings));
 
-	ChildSlot
-	[
-		SNew(SSplitter).Orientation(Orient_Horizontal)
-		+ SSplitter::Slot().Value(0.74f)
+	// ---- The sections of the editor. Each one becomes a tab of its own, so it can be docked anywhere (see InitializeDocking). ----
+	ViewportSection = SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight()
 		[
-		SNew(SSplitter).Orientation(Orient_Vertical)
-		+ SSplitter::Slot().Value(0.55f)
+			MakeViewportToolbar()
+		]
+		+ SVerticalBox::Slot().FillHeight(1.f)
+		[
+			SNew(SOverlay)
+			+ SOverlay::Slot()
+			[
+				SAssignNew(Viewport, SAnimStitchViewport).Preview(Preview)
+			]
+			+ SOverlay::Slot().HAlign(HAlign_Left).VAlign(VAlign_Top).Padding(10.f)
 			[
 				SNew(SVerticalBox)
 				+ SVerticalBox::Slot().AutoHeight()
 				[
-					MakeViewportToolbar()
-				]
-				+ SVerticalBox::Slot().FillHeight(1.f)
-				[
-					SNew(SOverlay)
-					+ SOverlay::Slot()
+					SNew(SBorder).BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder")).Padding(6.f)
+					.Visibility(this, &SAnimStitchPanel::GetProblemVisibility)
 					[
-						SAssignNew(Viewport, SAnimStitchViewport).Preview(Preview)
-					]
-					+ SOverlay::Slot().HAlign(HAlign_Left).VAlign(VAlign_Top).Padding(10.f)
-					[
-						SNew(SBorder).BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder")).Padding(6.f)
-						.Visibility(this, &SAnimStitchPanel::GetProblemVisibility)
-						[
-							SNew(STextBlock).Text(this, &SAnimStitchPanel::GetProblemText).AutoWrapText(true)
-						]
+						SNew(STextBlock).Text(this, &SAnimStitchPanel::GetProblemText).AutoWrapText(true)
 					]
 				]
-			]
-		+ SSplitter::Slot().Value(0.45f)
-		[
-			SNew(SVerticalBox)
-			+ SVerticalBox::Slot().AutoHeight().Padding(6.f, 6.f, 6.f, 2.f)
-			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f, 0.f, 0.f)
 				[
-					IconButton(TAttribute<const FSlateBrush*>(FAppStyle::GetBrush("Icons.Plus")), LOCTEXT("NewTimelineTip", "New: start a new, empty timeline"), [this]() { NewTimeline(); })
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
-				[
-					IconButton(TAttribute<const FSlateBrush*>(FAppStyle::GetBrush("Icons.FolderOpen")), LOCTEXT("OpenTimelineTip", "Open a saved AnimStitch timeline asset"), [this]() { OpenFromDisk(); })
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
-				[
-					IconButton(TAttribute<const FSlateBrush*>(FAppStyle::GetBrush("AssetEditor.SaveAsset")), LOCTEXT("SaveTimelineTip", "Save the timeline as an asset (Ctrl+S)"), [this]() { Save(); })
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
-				[
-					IconButton(TAttribute<const FSlateBrush*>(FAppStyle::GetBrush("AssetEditor.SaveAssetAs")), LOCTEXT("SaveTimelineAsTip", "Save a copy of the timeline as a new asset"), [this]() { SaveAs(); })
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
-				[
-					AssetButton(LOCTEXT("BakeSingle", "Bake..."), LOCTEXT("BakeSingleTip", "Bake the timeline to a single animation sequence"), [this]() { OpenBake(); })
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 14, 0)
-				[
-					AssetButton(LOCTEXT("BatchBake", "Batch Bake..."), LOCTEXT("BatchBakeTip", "Use this timeline as a template and bake it over many source clips"), [this]() { OpenBatch(); })
-				]
-				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-				[
-					SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 14, 0)
-					[
-						SNew(STextBlock).Text(this, &SAnimStitchPanel::GetAssetLabel)
-					]
-					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
-					[
-						ToggleButton(LOCTEXT("PredictFeet", "Predict Feet (experimental)"),
-							LOCTEXT("PredictFeetTip", "EXPERIMENTAL. Makes crossfades plant-aware: plants are detected on each source clip on its own, then inside every crossfade the outgoing clip's planted feet are held and the feet settle onto the incoming clip's stance. The pelvis is never moved. Works with Foot Lock (prediction first, Foot Lock cleans up). Uses the foot bones and thresholds from the Foot Lock settings."),
-							[this]() { return Asset->Timeline.bPredictFeet; },
-							[this](bool bOn)
-							{
-								const FScopedTransaction Tx(LOCTEXT("PredictFeetTx", "Toggle Predict Feet"));
-								Asset->SetPredictFeet(bOn);
-							})
-					]
-					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 2, 0)
-					[
-						ToggleButton(LOCTEXT("FootLock", "Foot Lock"),
-							LOCTEXT("FootLockToggleTip", "Pin planted feet (and manually locked feet) in the preview and in every bake. Settings are in the dropdown."),
-							[this]() { return Asset->Timeline.FootLock.bEnabled; },
-							[this](bool bOn)
-							{
-								FAnimStitchFootLockSettings Settings = Asset->Timeline.FootLock;
-								Settings.bEnabled = bOn;
-								const FScopedTransaction Tx(LOCTEXT("FootLockToggleTx", "Toggle Foot Lock"));
-								Asset->SetFootLockSettings(Settings);
-							})
-					]
-					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 2, 0)
-					[
-						SNew(SComboButton)
-						.HasDownArrow(true)
-						.ToolTipText(LOCTEXT("FootLockSettingsTip", "Foot lock settings: foot bones, ground height, plant detection"))
-						.ButtonContent()[SNew(STextBlock).Text(LOCTEXT("FootLockSettingsLabel", "Settings"))]
-						.OnGetMenuContent_Lambda([this]() -> TSharedRef<SWidget>
+					// Shown while a pelvis track has Keep feet planted on.
+					SNew(SBorder).BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder")).Padding(6.f)
+					.Visibility_Lambda([this]()
+					{
+						for (const FAnimStitchTrack& Track : Asset->Timeline.Tracks)
 						{
-							return SNew(SBox).MinDesiredWidth(600.f).Padding(10.f)
-							[
-								SNew(SAnimStitchFootLockSettings).Timeline(Asset)
-							];
-						})
-					]
-				]
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(6.f, 2.f, 6.f, 2.f)
-			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
-				[
-					SNew(STextBlock).Text(LOCTEXT("PreviewMesh", "Preview mesh:"))
-				]
-				+ SHorizontalBox::Slot().FillWidth(1.f).MaxWidth(320.f).Padding(0, 0, 12, 0)
-				[
-					SNew(SObjectPropertyEntryBox)
-					.AllowedClass(USkeletalMesh::StaticClass())
-					.ObjectPath(this, &SAnimStitchPanel::GetMeshPath)
-					.OnObjectChanged(this, &SAnimStitchPanel::OnMeshChanged)
-					.OnShouldFilterAsset(this, &SAnimStitchPanel::ShouldFilterMesh)
-					.AllowClear(true)
-					.DisplayThumbnail(false)
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 12, 0)
-				[
-					SNew(SComboButton).HasDownArrow(true)
-					.ToolTipText(LOCTEXT("AttachPropsTip", "Attach props (static or skeletal meshes) to a socket or bone of the preview character. Preview only, never baked."))
-					.ButtonContent()[SNew(STextBlock).Text(LOCTEXT("AttachProps", "Attach Props"))]
-					.OnGetMenuContent_Lambda([this]() -> TSharedRef<SWidget> { FMenuBuilder Menu(true, nullptr); FillAttachmentsMenu(Menu); return Menu.MakeWidget(); })
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
-				[
-					ToggleButton(LOCTEXT("Ghosts", "Ghost Joins"), LOCTEXT("GhostsTip", "Show the last pose of the outgoing clip (orange) and the first pose of the incoming clip (blue) at every join"),
-						[this]() { return bShowGhosts; }, [this](bool b) { bShowGhosts = b; Preview->SetShowGhosts(b); })
-				]
-				+ SHorizontalBox::Slot().AutoWidth()
-				[
-					ToggleButton(LOCTEXT("RootPath", "Root Path"), LOCTEXT("RootPathTip", "Draw the root bone's path across the timeline on the ground"),
-						[this]() { return bShowRootPath; }, [this](bool b) { bShowRootPath = b; Preview->SetShowRootPath(b); })
-				]
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(6.f, 2.f)
-			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
-				[
-					SNew(SButton).Text(LOCTEXT("Duplicate", "Duplicate"))
-					.ToolTipText(LOCTEXT("DuplicateTip", "Duplicate the selected clip (Ctrl+D)"))
-					.OnClicked_Lambda([this]() { Timeline->DuplicateSelected(); return FReply::Handled(); })
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
-				[
-					SNew(SButton).Text(LOCTEXT("Remove", "Remove"))
-					.ToolTipText(LOCTEXT("RemoveTip", "Remove the selected clip (Delete)"))
-					.OnClicked_Lambda([this]() { Timeline->DeleteSelected(); return FReply::Handled(); })
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 2, 0)
-				[
-					SNew(SButton).ButtonStyle(FAppStyle::Get(), "SimpleButton").ContentPadding(FMargin(4.f))
-					.ToolTipText(LOCTEXT("UndoTip", "Undo (Ctrl+Z)"))
-					.IsEnabled_Lambda([]() { return GEditor && GEditor->Trans && GEditor->Trans->CanUndo(); })
-					.OnClicked_Lambda([]() { if (GEditor) { GEditor->UndoTransaction(); } return FReply::Handled(); })
+							if (Track.Kind == EAnimStitchTrackKind::Bone && Track.bKeepFeetPlanted && FAnimStitchManualEdits::IsPelvisBone(Track.Bone)) { return EVisibility::HitTestInvisible; }
+						}
+						return EVisibility::Collapsed;
+					})
 					[
-						SNew(SImage).Image(FAppStyle::GetBrush("GenericCommands.Undo")).ColorAndOpacity(FSlateColor::UseForeground())
-					]
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 14, 0)
-				[
-					SNew(SButton).ButtonStyle(FAppStyle::Get(), "SimpleButton").ContentPadding(FMargin(4.f))
-					.ToolTipText(LOCTEXT("RedoTip", "Redo (Ctrl+Y)"))
-					.IsEnabled_Lambda([]() { return GEditor && GEditor->Trans && GEditor->Trans->CanRedo(); })
-					.OnClicked_Lambda([]() { if (GEditor) { GEditor->RedoTransaction(); } return FReply::Handled(); })
-					[
-						SNew(SImage).Image(FAppStyle::GetBrush("GenericCommands.Redo")).ColorAndOpacity(FSlateColor::UseForeground())
-					]
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 18, 0)
-				[
-					TimelineButton(LOCTEXT("Split", "Split"), LOCTEXT("SplitTip", "Split the clip under the playhead into two clips"), [this]() { Timeline->SplitAtPlayhead(); })
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
-				[
-					TimelineButton(LOCTEXT("TrimStart", "Trim Start"), LOCTEXT("TrimStartTip", "Cut the part of the clip before the playhead"), [this]() { Timeline->TrimStartAtPlayhead(); })
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
-				[
-					TimelineButton(LOCTEXT("TrimEnd", "Trim End"), LOCTEXT("TrimEndTip", "Cut the part of the clip after the playhead"), [this]() { Timeline->TrimEndAtPlayhead(); })
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 18, 0)
-				[
-					SNew(SButton).Text(LOCTEXT("ZoomFit", "Zoom to Fit"))
-					.OnClicked_Lambda([this]() { Timeline->ZoomToFit(); return FReply::Handled(); })
-				]
-				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
-				[
-					SNew(STextBlock).Text(LOCTEXT("CrossfadeCurve", "Crossfade curve:"))
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 2, 0)
-				[
-					CurveButton(EAnimStitchBlendCurve::Linear, LOCTEXT("Linear", "Linear"))
-				]
-				+ SHorizontalBox::Slot().AutoWidth()
-				[
-					CurveButton(EAnimStitchBlendCurve::Smoothstep, LOCTEXT("Smoothstep", "Ease In/Out"))
-				]
-			]
-			+ SVerticalBox::Slot().FillHeight(1.f).Padding(6.f, 2.f)
-			[
-				SNew(SBorder).Padding(0)
-				[
-					SNew(SOverlay).Clipping(EWidgetClipping::ClipToBounds)
-					+ SOverlay::Slot()
-					[
-						Timeline.ToSharedRef()
-					]
-					+ SOverlay::Slot().VAlign(VAlign_Top).HAlign(HAlign_Left)
-					.Padding(TAttribute<FMargin>::CreateLambda([this]() { return FMargin(0.f, Timeline.IsValid() ? Timeline->GetExpanderTop() : 0.f, 0.f, 0.f); }))
-					[
-						SNew(SBox).WidthOverride_Lambda([this]() -> FOptionalSize { return FOptionalSize(Timeline->GetLabelWidth() - 2.f); })
-						.Visibility_Lambda([this]()
-						{
-							if (!Timeline.IsValid() || !Timeline->IsExpanderOpen()) { return EVisibility::Collapsed; }
-							const float Top = Timeline->GetExpanderTop();
-							return (Top >= Timeline->GetTrackAreaTop() - 1.f && Top < Timeline->GetTrackAreaTop() + Timeline->GetTrackViewHeight() - 24.f) ? EVisibility::Visible : EVisibility::Collapsed;
-						})
-						[
-							SNew(SAnimStitchKeyPanel).Timeline(Timeline)
-							.LiveIK([this](int32 Track, FAnimStitchTrackKey& OutKey) { return Preview->GetIKLiveKey(Track, OutKey); })
-						]
-					]
-					+ SOverlay::Slot().HAlign(HAlign_Right).VAlign(VAlign_Fill)
-					.Padding(TAttribute<FMargin>::CreateLambda([this]() { return FMargin(0.f, Timeline.IsValid() ? Timeline->GetTrackAreaTop() : 0.f, 0.f, 0.f); }))
-					[
-						SAssignNew(TrackScrollBar, SScrollBar).Orientation(Orient_Vertical).Thickness(FVector2D(9.f, 9.f))
-						.Visibility_Lambda([this]() { return Timeline.IsValid() && Timeline->GetTrackScrollMax() > 0.f ? EVisibility::Visible : EVisibility::Collapsed; })
-						.OnUserScrolled(FOnUserScrolled::CreateLambda([this](float Offset) { if (Timeline.IsValid()) { Timeline->SetTrackScroll(Offset * Timeline->GetTrackContentHeight()); } }))
+						SNew(STextBlock).Text(LOCTEXT("KeepFeetStatus", "Keep feet planted: ON - the feet stay on the ground (leg IK) while the pelvis moves"))
 					]
 				]
 			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(6.f, 0.f, 6.f, 2.f)
-			[
-				SNew(SAnimStitchTransportBar).Timeline(Timeline)
-				.OnGoToStart([this]() { double S, E; Asset->GetPlaybackRange(S, E); Timeline->SetPlayhead(S); OnTimelineScrubbed(); })
-				.OnPreviousKey([this]() { Timeline->JumpToAdjacentKey(-1); })
-				.OnPlayPause([this]() { TogglePlayback(); })
-				.OnNextKey([this]() { Timeline->JumpToAdjacentKey(1); })
-				.OnGoToEnd([this]() { double S, E; Asset->GetPlaybackRange(S, E); Timeline->SetPlayhead(E); OnTimelineScrubbed(); })
-				.OnStop([this]() { Stop(); })
-				.OnToggleLoop([this]() { bLoop = !bLoop; })
-				.OnSetPlayhead([this](double T) { Timeline->SetPlayhead(T); OnTimelineScrubbed(); })
-				.IsPlaying([this]() { return bPlaying; })
-				.IsLooping([this]() { return bLoop; })
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(8.f, 4.f)
-			[
-				SNew(STextBlock).Text(this, &SAnimStitchPanel::GetStatusText).AutoWrapText(true)
-			]
-		]
-		]
-		+ SSplitter::Slot().Value(0.26f)
-		[
-			SNew(SVerticalBox)
-			+ SVerticalBox::Slot().AutoHeight().Padding(6.f, 6.f, 6.f, 2.f)
-			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 2, 0)[RightTabButton(LOCTEXT("ContentBrowserTab", "Content Browser"), 0)]
-				+ SHorizontalBox::Slot().AutoWidth()[RightTabButton(LOCTEXT("DetailsTab", "Details"), 1)]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(2, 0, 0, 0)[RightTabButton(LOCTEXT("BakedAssetsTab", "Baked Assets"), 2)]
-			]
-			+ SVerticalBox::Slot().FillHeight(1.f)
-			[
-				SNew(SWidgetSwitcher).WidgetIndex_Lambda([this]() { return RightTab; })
-				+ SWidgetSwitcher::Slot()
-				[
-					SAssignNew(BrowserBox, SBox)
-				]
-				+ SWidgetSwitcher::Slot()
-				[
-					SNew(SAnimStitchBoneDetails).Preview(Preview)
-				]
-				+ SWidgetSwitcher::Slot()
-				[
-					MakeBakedAssetsTab()
-				]
-			]
-		]
-	];
+		];
 
+	TSharedRef<SVerticalBox> ToolbarRows = SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(6.f, 4.f, 6.f, 0.f)
+		[
+			// Layout menu: reset the docking layout, bring back closed sections.
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().FillWidth(1.f)[SNullWidget::NullWidget]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SNew(SComboButton).HasDownArrow(true)
+				.ToolTipText(LOCTEXT("LayoutTip", "Docking layout of the editor sections"))
+				.ButtonContent()[SNew(STextBlock).Text(LOCTEXT("LayoutLabel", "Layout"))]
+				.OnGetMenuContent_Lambda([this]() -> TSharedRef<SWidget> { return MakeLayoutMenu(); })
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(6.f, 6.f, 6.f, 2.f)
+		[
+			SNew(SWrapBox).UseAllottedSize(true)
+			+ SWrapBox::Slot().Padding(0, 0, 6, 3)
+			[
+				IconButton(TAttribute<const FSlateBrush*>(FAppStyle::GetBrush("Icons.Plus")), LOCTEXT("NewTimelineTip", "New: start a new, empty timeline"), [this]() { NewTimeline(); })
+			]
+			+ SWrapBox::Slot().Padding(0, 0, 6, 3)
+			[
+				IconButton(TAttribute<const FSlateBrush*>(FAppStyle::GetBrush("Icons.FolderOpen")), LOCTEXT("OpenTimelineTip", "Open a saved AnimStitch timeline asset"), [this]() { OpenFromDisk(); })
+			]
+			+ SWrapBox::Slot().Padding(0, 0, 6, 3)
+			[
+				IconButton(TAttribute<const FSlateBrush*>::CreateLambda([this]() { return FAppStyle::GetBrush(IsDirtyState() ? "Icons.SaveChanged" : "AssetEditor.SaveAsset"); }), LOCTEXT("SaveTimelineTip", "Save the timeline as an asset (Ctrl+S). An asterisk on the icon means unsaved changes."), [this]() { Save(); })
+			]
+			+ SWrapBox::Slot().Padding(0, 0, 6, 3)
+			[
+				IconButton(TAttribute<const FSlateBrush*>(FAppStyle::GetBrush("AssetEditor.SaveAssetAs")), LOCTEXT("SaveTimelineAsTip", "Save a copy of the timeline as a new asset"), [this]() { SaveAs(); })
+			]
+			+ SWrapBox::Slot().Padding(0, 0, 6, 3)
+			[
+				AssetButton(LOCTEXT("BakeSingle", "Bake..."), LOCTEXT("BakeSingleTip", "Bake the timeline to a single animation sequence"), [this]() { OpenBake(); })
+			]
+			+ SWrapBox::Slot().Padding(0, 0, 14, 3)
+			[
+				AssetButton(LOCTEXT("BatchBake", "Batch Bake..."), LOCTEXT("BatchBakeTip", "Use this timeline as a template and bake it over many source clips"), [this]() { OpenBatch(); })
+			]
+			+ SWrapBox::Slot().VAlign(VAlign_Center).Padding(0, 0, 14, 3)
+			[
+				SNew(STextBlock).Text(this, &SAnimStitchPanel::GetAssetLabel)
+			]
+			+ SWrapBox::Slot().Padding(0, 0, 6, 3)
+			[
+				ToggleButton(LOCTEXT("PredictFeet", "Predict Feet (experimental)"),
+					LOCTEXT("PredictFeetTip", "EXPERIMENTAL. Makes crossfades plant-aware: plants are detected on each source clip on its own, then inside every crossfade the outgoing clip's planted feet are held and the feet settle onto the incoming clip's stance. The pelvis is never moved. Works with Foot Lock (prediction first, Foot Lock cleans up). Uses the foot bones and thresholds from the Foot Lock settings."),
+					[this]() { return Asset->Timeline.bPredictFeet; },
+					[this](bool bOn)
+					{
+						const FScopedTransaction Tx(LOCTEXT("PredictFeetTx", "Toggle Predict Feet"));
+						Asset->SetPredictFeet(bOn);
+					})
+			]
+			+ SWrapBox::Slot().Padding(0, 0, 2, 3)
+			[
+				ToggleButton(LOCTEXT("FootLock", "Foot Lock"),
+					LOCTEXT("FootLockToggleTip", "Pin planted feet (and manually locked feet) in the preview and in every bake. Settings are in the dropdown."),
+					[this]() { return Asset->Timeline.FootLock.bEnabled; },
+					[this](bool bOn)
+					{
+						FAnimStitchFootLockSettings Settings = Asset->Timeline.FootLock;
+						Settings.bEnabled = bOn;
+						const FScopedTransaction Tx(LOCTEXT("FootLockToggleTx", "Toggle Foot Lock"));
+						Asset->SetFootLockSettings(Settings);
+					})
+			]
+			+ SWrapBox::Slot().Padding(0, 0, 2, 3)
+			[
+				SNew(SComboButton)
+				.HasDownArrow(true)
+				.ToolTipText(LOCTEXT("FootLockSettingsTip", "Foot lock settings: foot bones, ground height, plant detection"))
+				.ButtonContent()[SNew(STextBlock).Text(LOCTEXT("FootLockSettingsLabel", "Settings"))]
+				.OnGetMenuContent_Lambda([this]() -> TSharedRef<SWidget>
+				{
+					return SNew(SBox).MinDesiredWidth(600.f).Padding(10.f)
+					[
+						SNew(SAnimStitchFootLockSettings).Timeline(Asset)
+					];
+				})
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(6.f, 2.f, 6.f, 2.f)
+		[
+			SNew(SWrapBox).UseAllottedSize(true)
+			+ SWrapBox::Slot().VAlign(VAlign_Center).Padding(0, 0, 6, 3)
+			[
+				SNew(STextBlock).Text(LOCTEXT("PreviewMesh", "Preview mesh:"))
+			]
+			+ SWrapBox::Slot().VAlign(VAlign_Center).Padding(0, 0, 12, 3)
+			[
+				SNew(SBox).MinDesiredWidth(220.f).MaxDesiredWidth(320.f)[SNew(SObjectPropertyEntryBox)
+				.AllowedClass(USkeletalMesh::StaticClass())
+				.ObjectPath(this, &SAnimStitchPanel::GetMeshPath)
+				.OnObjectChanged(this, &SAnimStitchPanel::OnMeshChanged)
+				.OnShouldFilterAsset(this, &SAnimStitchPanel::ShouldFilterMesh)
+				.AllowClear(true)
+				.DisplayThumbnail(false)]
+			]
+			+ SWrapBox::Slot().Padding(0, 0, 12, 3)
+			[
+				SNew(SComboButton).HasDownArrow(true)
+				.ToolTipText(LOCTEXT("AttachPropsTip", "Attach props (static or skeletal meshes) to a socket or bone of the preview character. Preview only, never baked."))
+				.ButtonContent()[SNew(STextBlock).Text(LOCTEXT("AttachProps", "Attach Props"))]
+				.OnGetMenuContent_Lambda([this]() -> TSharedRef<SWidget> { FMenuBuilder Menu(true, nullptr); FillAttachmentsMenu(Menu); return Menu.MakeWidget(); })
+			]
+			+ SWrapBox::Slot().Padding(0, 0, 4, 3)
+			[
+				ToggleButton(LOCTEXT("Ghosts", "Ghost Joins"), LOCTEXT("GhostsTip", "Show the last pose of the outgoing clip (orange) and the first pose of the incoming clip (blue) at every join"),
+					[this]() { return bShowGhosts; }, [this](bool b) { bShowGhosts = b; Preview->SetShowGhosts(b); })
+			]
+			+ SWrapBox::Slot()
+			[
+				ToggleButton(LOCTEXT("RootPath", "Root Path"), LOCTEXT("RootPathTip", "Draw the root bone's path across the timeline on the ground"),
+					[this]() { return bShowRootPath; }, [this](bool b) { bShowRootPath = b; Preview->SetShowRootPath(b); })
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(6.f, 2.f, 6.f, 4.f)
+		[
+			SNew(SWrapBox).UseAllottedSize(true)
+			// Edit group: Undo, Redo, Duplicate, ...
+			+ SWrapBox::Slot().Padding(0, 0, 2, 3)
+			[
+				SNew(SButton).ButtonStyle(FAppStyle::Get(), "SimpleButton").ContentPadding(FMargin(4.f))
+				.ToolTipText(LOCTEXT("UndoTip", "Undo (Ctrl+Z)"))
+				.IsEnabled_Lambda([]() { return GEditor && GEditor->Trans && GEditor->Trans->CanUndo(); })
+				.OnClicked_Lambda([]() { if (GEditor) { GEditor->UndoTransaction(); } return FReply::Handled(); })
+				[
+					SNew(SImage).Image(FAppStyle::GetBrush("GenericCommands.Undo")).ColorAndOpacity(FSlateColor::UseForeground())
+				]
+			]
+			+ SWrapBox::Slot().Padding(0, 0, 8, 3)
+			[
+				SNew(SButton).ButtonStyle(FAppStyle::Get(), "SimpleButton").ContentPadding(FMargin(4.f))
+				.ToolTipText(LOCTEXT("RedoTip", "Redo (Ctrl+Y)"))
+				.IsEnabled_Lambda([]() { return GEditor && GEditor->Trans && GEditor->Trans->CanRedo(); })
+				.OnClicked_Lambda([]() { if (GEditor) { GEditor->RedoTransaction(); } return FReply::Handled(); })
+				[
+					SNew(SImage).Image(FAppStyle::GetBrush("GenericCommands.Redo")).ColorAndOpacity(FSlateColor::UseForeground())
+				]
+			]
+			+ SWrapBox::Slot().Padding(0, 0, 6, 3)
+			[
+				SNew(SButton).Text(LOCTEXT("Duplicate", "Duplicate"))
+				.ToolTipText(LOCTEXT("DuplicateTip", "Duplicate the selected clip (Ctrl+D)"))
+				.OnClicked_Lambda([this]() { Timeline->DuplicateSelected(); return FReply::Handled(); })
+			]
+			+ SWrapBox::Slot().Padding(0, 0, 18, 3)
+			[
+				SNew(SButton).Text(LOCTEXT("Remove", "Remove"))
+				.ToolTipText(LOCTEXT("RemoveTip", "Remove the selected clip (Delete)"))
+				.OnClicked_Lambda([this]() { Timeline->DeleteSelected(); return FReply::Handled(); })
+			]
+			+ SWrapBox::Slot().Padding(0, 0, 6, 3)
+			[
+				TimelineButton(LOCTEXT("Split", "Split"), LOCTEXT("SplitTip", "Split the clip under the playhead into two clips"), [this]() { Timeline->SplitAtPlayhead(); })
+			]
+			+ SWrapBox::Slot().Padding(0, 0, 6, 3)
+			[
+				TimelineButton(LOCTEXT("TrimStart", "Trim Start"), LOCTEXT("TrimStartTip", "Cut the part of the clip before the playhead"), [this]() { Timeline->TrimStartAtPlayhead(); })
+			]
+			+ SWrapBox::Slot().Padding(0, 0, 6, 3)
+			[
+				TimelineButton(LOCTEXT("TrimEnd", "Trim End"), LOCTEXT("TrimEndTip", "Cut the part of the clip after the playhead"), [this]() { Timeline->TrimEndAtPlayhead(); })
+			]
+			+ SWrapBox::Slot().Padding(0, 0, 18, 3)
+			[
+				SNew(SButton).Text(LOCTEXT("ZoomFit", "Zoom to Fit"))
+				.OnClicked_Lambda([this]() { Timeline->ZoomToFit(); return FReply::Handled(); })
+			]
+			+ SWrapBox::Slot().Padding(0, 0, 6, 3)
+			[
+				SNew(SComboButton).HasDownArrow(true)
+				.ToolTipText(LOCTEXT("AddCoreBoneTip", "Add a bone track: pelvis, spine, head or any other bone (bones already on the list are not offered)"))
+				.ButtonContent()[SNew(STextBlock).Text(LOCTEXT("AddCoreBone", "Add Core Bone"))]
+				.OnGetMenuContent_Lambda([this]() -> TSharedRef<SWidget> { FMenuBuilder Menu(true, nullptr); Timeline->BuildCoreBoneMenu(Menu); return Menu.MakeWidget(); })
+			]
+			+ SWrapBox::Slot().Padding(0, 0, 18, 3)
+			[
+				SNew(SComboButton).HasDownArrow(true)
+				.ToolTipText(LOCTEXT("AddLimbTip", "Add arm or leg tracks, FK (a control on each joint) or IK (effector + pole vector)"))
+				.ButtonContent()[SNew(STextBlock).Text(LOCTEXT("AddLimb", "Add Limb"))]
+				.OnGetMenuContent_Lambda([this]() -> TSharedRef<SWidget> { FMenuBuilder Menu(true, nullptr); Timeline->BuildLimbMenu(Menu); return Menu.MakeWidget(); })
+			]
+			+ SWrapBox::Slot().VAlign(VAlign_Center).Padding(0, 0, 6, 3)
+			[
+				SNew(STextBlock).Text(LOCTEXT("CrossfadeCurve", "Crossfade curve:"))
+			]
+			+ SWrapBox::Slot().Padding(0, 0, 2, 3)
+			[
+				CurveButton(EAnimStitchBlendCurve::Linear, LOCTEXT("Linear", "Linear"))
+			]
+			+ SWrapBox::Slot()
+			[
+				CurveButton(EAnimStitchBlendCurve::Smoothstep, LOCTEXT("Smoothstep", "Ease In/Out"))
+			]
+		];
+
+	// The toolbar reflows (wraps) to whatever width its panel has, and scrolls when even that is too short.
+	ToolbarSection = SNew(SScrollBox) + SScrollBox::Slot()[ToolbarRows];
+
+	TSharedRef<SWidget> TimelineBorder = SNew(SBorder).Padding(0)
+		[
+			SNew(SOverlay).Clipping(EWidgetClipping::ClipToBounds)
+			+ SOverlay::Slot()
+			[
+				Timeline.ToSharedRef()
+			]
+			+ SOverlay::Slot().VAlign(VAlign_Top).HAlign(HAlign_Left)
+			.Padding(TAttribute<FMargin>::CreateLambda([this]() { return FMargin(0.f, Timeline.IsValid() ? Timeline->GetExpanderTop() : 0.f, 0.f, 0.f); }))
+			[
+				SNew(SBox).WidthOverride_Lambda([this]() -> FOptionalSize { return FOptionalSize(Timeline->GetLabelWidth() - 2.f); })
+				.Visibility_Lambda([this]()
+				{
+					if (!Timeline.IsValid() || !Timeline->IsExpanderOpen()) { return EVisibility::Collapsed; }
+					const float Top = Timeline->GetExpanderTop();
+					return (Top >= Timeline->GetTrackAreaTop() - 1.f && Top < Timeline->GetTrackAreaTop() + Timeline->GetTrackViewHeight() - 24.f) ? EVisibility::Visible : EVisibility::Collapsed;
+				})
+				[
+					SNew(SAnimStitchKeyPanel).Timeline(Timeline)
+					.LiveIK([this](int32 Track, FAnimStitchTrackKey& OutKey) { return Preview->GetIKLiveKey(Track, OutKey); })
+				]
+			]
+			+ SOverlay::Slot().HAlign(HAlign_Right).VAlign(VAlign_Fill)
+			.Padding(TAttribute<FMargin>::CreateLambda([this]() { return FMargin(0.f, Timeline.IsValid() ? Timeline->GetTrackAreaTop() : 0.f, 0.f, 0.f); }))
+			[
+				SAssignNew(TrackScrollBar, SScrollBar).Orientation(Orient_Vertical).Thickness(FVector2D(9.f, 9.f))
+				.Visibility_Lambda([this]() { return Timeline.IsValid() && Timeline->GetTrackScrollMax() > 0.f ? EVisibility::Visible : EVisibility::Collapsed; })
+				.OnUserScrolled(FOnUserScrolled::CreateLambda([this](float Offset) { if (Timeline.IsValid()) { Timeline->SetTrackScroll(Offset * Timeline->GetTrackContentHeight()); } }))
+			]
+		];
+
+	TSharedRef<SWidget> TransportBar = SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(6.f, 2.f, 6.f, 2.f)
+		[
+			SNew(SAnimStitchTransportBar).Timeline(Timeline)
+			.OnGoToStart([this]() { double S, E; Asset->GetPlaybackRange(S, E); Timeline->SetPlayhead(S); OnTimelineScrubbed(); })
+			.OnPreviousKey([this]() { Timeline->JumpToAdjacentKey(-1); })
+			.OnPlayPause([this]() { TogglePlayback(); })
+			.OnNextKey([this]() { Timeline->JumpToAdjacentKey(1); })
+			.OnGoToEnd([this]() { double S, E; Asset->GetPlaybackRange(S, E); Timeline->SetPlayhead(E); OnTimelineScrubbed(); })
+			.OnStop([this]() { Stop(); })
+			.OnToggleLoop([this]() { bLoop = !bLoop; })
+			.OnSetPlayhead([this](double T) { Timeline->SetPlayhead(T); OnTimelineScrubbed(); })
+			.IsPlaying([this]() { return bPlaying; })
+			.IsLooping([this]() { return bLoop; })
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(8.f, 2.f)
+		[
+			SNew(STextBlock).Text(this, &SAnimStitchPanel::GetStatusText).AutoWrapText(true)
+		];
+
+	// The timeline and its bottom bar (transport, time, scroll / zoom) are ONE dockable unit: they always move together.
+	TimelineSection = SNew(SVerticalBox)
+		+ SVerticalBox::Slot().FillHeight(1.f)[TimelineBorder]
+		+ SVerticalBox::Slot().AutoHeight()[TransportBar];
+
+	InspectorSection = SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(6.f, 6.f, 6.f, 2.f)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 2, 0)[RightTabButton(LOCTEXT("ContentBrowserTab", "Content Browser"), 0)]
+			+ SHorizontalBox::Slot().AutoWidth()[RightTabButton(LOCTEXT("DetailsTab", "Details"), 1)]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(2, 0, 0, 0)[RightTabButton(LOCTEXT("BakedAssetsTab", "Baked Assets"), 2)]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(2, 0, 0, 0)[RightTabButton(LOCTEXT("ControlPropsTab", "Control Properties"), 3)]
+		]
+		+ SVerticalBox::Slot().FillHeight(1.f)
+		[
+			SNew(SWidgetSwitcher).WidgetIndex_Lambda([this]() { return RightTab; })
+			+ SWidgetSwitcher::Slot()
+			[
+				SAssignNew(BrowserBox, SBox)
+			]
+			+ SWidgetSwitcher::Slot()
+			[
+				SNew(SAnimStitchBoneDetails).Preview(Preview)
+			]
+			+ SWidgetSwitcher::Slot()
+			[
+				MakeBakedAssetsTab()
+			]
+			+ SWidgetSwitcher::Slot()
+			[
+				SNew(SAnimStitchControlProperties).Preview(Preview).Timeline(Timeline)
+			]
+		];
 	RebuildSequenceBrowser();
 	RebuildBakedList();
 	FAnimStitchBaker::OnAssetBaked().AddSP(this, &SAnimStitchPanel::RebuildBakedList);
@@ -450,6 +501,34 @@ EActiveTimerReturnType SAnimStitchPanel::UpdatePreview(double CurrentTime, float
 		SyncPreviewToTimeline();
 	}
 	Timeline->ApplyPendingZoomFit();
+	if (Timeline->GetTrackSelectionSerial() != LastTrackSerial)
+	{
+		// Selecting (or adding) a bone track selects its bone and its control shape in the viewport.
+		LastTrackSerial = Timeline->GetTrackSelectionSerial();
+		const int32 SelectedTrack = Timeline->GetSelectedTrack();
+		if (Asset->Timeline.Tracks.IsValidIndex(SelectedTrack))
+		{
+			const FAnimStitchTrack& Track = Asset->Timeline.Tracks[SelectedTrack];
+			Preview->SelectBone(Preview->FindMeshBone(Track.Bone));
+			FAnimStitchControlId Id;
+			Id.Kind = Track.Kind == EAnimStitchTrackKind::IKLimb ? EAnimStitchControlKind::IKEffector : EAnimStitchControlKind::Bone;
+			Id.A = SelectedTrack;
+			Preview->SelectControl(Id);
+		}
+	}
+	{
+		// Selecting a control in the viewport selects its bone track in the timeline.
+		const FAnimStitchControlId Control = Preview->GetSelectedControl();
+		if ((int32)Control.Kind != LastControlKind || Control.A != LastControlTrack)
+		{
+			LastControlKind = (int32)Control.Kind;
+			LastControlTrack = Control.A;
+			if (Control.Kind == EAnimStitchControlKind::Bone || Control.Kind == EAnimStitchControlKind::IKEffector || Control.Kind == EAnimStitchControlKind::IKPole)
+			{
+				Timeline->SelectTrackFromViewport(Control.A);
+			}
+		}
+	}
 	if (TrackScrollBar.IsValid())
 	{
 		Timeline->SetTrackScroll(Timeline->GetTrackScroll()); // re-clamp when lanes were removed or the panel was resized
@@ -534,10 +613,17 @@ void SAnimStitchPanel::UpdatePlantLanes(double Now)
 		PlantDirtyAt = Now;
 		bPlantDirty = true;
 	}
-	if (!bPlantDirty || Now - PlantDirtyAt < 0.25)
+	if (!bPlantDirty) { return; }
+	if (Timeline->IsDraggingFootLock())
+	{
+		// Dragging a foot-lock handle or region: refresh the lane about ten times a second so it follows the mouse.
+		if (Now - LastPlantAnalysis < 0.1) { return; }
+	}
+	else if (Now - PlantDirtyAt < 0.25)
 	{
 		return;
 	}
+	LastPlantAnalysis = Now;
 	bPlantDirty = false;
 
 	constexpr double AnalysisFps = 30.0;
@@ -900,7 +986,7 @@ void SAnimStitchPanel::OpenFromDisk()
 		{
 			if (const TSharedPtr<SAnimStitchPanel> Panel = WeakPanel.Pin())
 			{
-				if (Chosen.Num() > 0)
+				if (Chosen.Num() > 0 && Panel->ConfirmDiscardChanges())
 				{
 					Panel->SetAsset(Cast<UAnimStitchTimelineAsset>(Chosen[0].GetAsset()));
 				}
@@ -947,14 +1033,116 @@ TSharedPtr<SWidget> SAnimStitchPanel::OnGetAssetContextMenu(const TArray<FAssetD
 	return Menu.MakeWidget();
 }
 
+bool SAnimStitchPanel::bSkipLayoutPersist = false;
+
+namespace
+{
+	const FName ToolbarTabId(TEXT("AnimStitch.Toolbar"));
+	const FName ViewportTabId(TEXT("AnimStitch.Viewport"));
+	const FName TimelineTabId(TEXT("AnimStitch.Timeline"));
+	const FName InspectorTabId(TEXT("AnimStitch.Inspector"));
+}
+
+TSharedRef<FTabManager::FLayout> SAnimStitchPanel::MakeDefaultLayout() const
+{
+	return FTabManager::NewLayout("AnimStitchLayout_v2")
+		->AddArea
+		(
+			FTabManager::NewPrimaryArea()->SetOrientation(Orient_Vertical)
+			->Split(FTabManager::NewStack()->SetSizeCoefficient(0.14f)->AddTab(ToolbarTabId, ETabState::OpenedTab))
+			->Split
+			(
+				FTabManager::NewSplitter()->SetOrientation(Orient_Horizontal)->SetSizeCoefficient(0.86f)
+				->Split
+				(
+					FTabManager::NewSplitter()->SetOrientation(Orient_Vertical)->SetSizeCoefficient(0.74f)
+					->Split(FTabManager::NewStack()->SetSizeCoefficient(0.52f)->AddTab(ViewportTabId, ETabState::OpenedTab))
+					->Split(FTabManager::NewStack()->SetSizeCoefficient(0.48f)->AddTab(TimelineTabId, ETabState::OpenedTab))
+				)
+				->Split(FTabManager::NewStack()->SetSizeCoefficient(0.26f)->AddTab(InspectorTabId, ETabState::OpenedTab))
+			)
+		);
+}
+
+void SAnimStitchPanel::InitializeDocking(const TSharedRef<SDockTab>& Tab)
+{
+	TabManager = FGlobalTabmanager::Get()->NewTabManager(Tab);
+	TabManager->SetCanDoDragOperation(true);
+
+	auto Register = [this](FName Id, const FText& Name, const TSharedPtr<SWidget>& Section, bool bCanClose)
+	{
+		TabManager->RegisterTabSpawner(Id, FOnSpawnTab::CreateLambda([Section, Name, bCanClose](const FSpawnTabArgs&) -> TSharedRef<SDockTab>
+		{
+			TSharedRef<SDockTab> SectionTab = SNew(SDockTab).TabRole(ETabRole::PanelTab).Label(Name)[Section.ToSharedRef()];
+			if (!bCanClose) { SectionTab->SetCanCloseTab(SDockTab::FCanCloseTab::CreateLambda([]() { return false; })); }
+			return SectionTab;
+		})).SetDisplayName(Name);
+	};
+	// The toolbar (it holds the Layout menu) and the viewport cannot be closed; the other sections can, and come back from Layout.
+	Register(ToolbarTabId, LOCTEXT("ToolbarTab", "Toolbar"), ToolbarSection, false);
+	Register(ViewportTabId, LOCTEXT("ViewportTab", "Viewport"), ViewportSection, false);
+	Register(TimelineTabId, LOCTEXT("TimelineTab", "Timeline"), TimelineSection, true);
+	Register(InspectorTabId, LOCTEXT("InspectorTab", "Inspector"), InspectorSection, true);
+
+	// Layout preferences save themselves whenever the layout changes.
+	TabManager->SetOnPersistLayout(FTabManager::FOnPersistLayout::CreateLambda([](const TSharedRef<FTabManager::FLayout>& InLayout)
+	{
+		if (!bSkipLayoutPersist) { FLayoutSaveRestore::SaveToConfig(GEditorLayoutIni, InLayout); }
+	}));
+
+	TSharedRef<FTabManager::FLayout> Layout = FLayoutSaveRestore::LoadFromConfig(GEditorLayoutIni, MakeDefaultLayout());
+	TSharedPtr<SWidget> Restored = TabManager->RestoreFrom(Layout, TSharedPtr<SWindow>(), false);
+	if (!Restored.IsValid())
+	{
+		Restored = TabManager->RestoreFrom(MakeDefaultLayout(), TSharedPtr<SWindow>(), false);
+	}
+	ChildSlot
+	[
+		Restored.IsValid() ? Restored.ToSharedRef() : SNullWidget::NullWidget
+	];
+}
+
+TSharedRef<SWidget> SAnimStitchPanel::MakeLayoutMenu()
+{
+	FMenuBuilder Menu(true, nullptr);
+	Menu.AddMenuEntry(LOCTEXT("ResetLayout", "Reset to Default Layout"), LOCTEXT("ResetLayoutTip", "Put every section back where it started (asks first)"), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateSP(this, &SAnimStitchPanel::ResetLayout)));
+	Menu.AddSeparator();
+	// Sections that were closed can be brought back.
+	auto ShowEntry = [this, &Menu](const FText& Label, FName Id)
+	{
+		Menu.AddMenuEntry(Label, FText::GetEmpty(), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, Id]() { if (TabManager.IsValid()) { TabManager->TryInvokeTab(FTabId(Id)); } })));
+	};
+	ShowEntry(LOCTEXT("ShowTimeline", "Show Timeline"), TimelineTabId);
+	ShowEntry(LOCTEXT("ShowInspector", "Show Inspector"), InspectorTabId);
+	return Menu.MakeWidget();
+}
+
+void SAnimStitchPanel::ResetLayout()
+{
+	if (FMessageDialog::Open(EAppMsgType::YesNo, LOCTEXT("ResetLayoutConfirm", "Reset all sections (toolbar, viewport, timeline, inspector) to the default layout?\n\nYour timeline stays as it is.")) != EAppReturnType::Yes)
+	{
+		return;
+	}
+	bSkipLayoutPersist = true; // the layout being closed must not overwrite the default saved below
+	FLayoutSaveRestore::SaveToConfig(GEditorLayoutIni, MakeDefaultLayout());
+	FAnimStitchEditorModule::RequestLayoutReset(Asset);
+}
+
 void SAnimStitchPanel::RebuildBakedList()
 {
 	BakedItems.Reset();
+	if (!ThumbnailPool.IsValid()) { ThumbnailPool = MakeShared<FAssetThumbnailPool>(64); }
 	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
 	const TArray<FSoftObjectPath>& Baked = GetDefault<UAnimStitchSettings>()->BakedAssets;
 	for (int32 i = Baked.Num() - 1; i >= 0; --i) // newest first
 	{
-		if (Registry.GetAssetByObjectPath(Baked[i]).IsValid()) { BakedItems.Add(MakeShared<FSoftObjectPath>(Baked[i])); }
+		const FAssetData Data = Registry.GetAssetByObjectPath(Baked[i]);
+		if (!Data.IsValid()) { continue; }
+		TSharedRef<FBakedItem> Item = MakeShared<FBakedItem>();
+		Item->Path = Baked[i];
+		Item->Thumbnail = MakeShared<FAssetThumbnail>(Data, 96, 96, ThumbnailPool);
+		BakedItems.Add(Item);
 	}
 	if (BakedList.IsValid()) { BakedList->RequestListRefresh(); }
 }
@@ -970,31 +1158,44 @@ TSharedRef<SWidget> SAnimStitchPanel::MakeBakedAssetsTab()
 		]
 		+ SVerticalBox::Slot().FillHeight(1.f)
 		[
-			SAssignNew(BakedList, SListView<TSharedPtr<FSoftObjectPath>>)
+			// Content Browser style: a tile with a thumbnail and the name.
+			SAssignNew(BakedList, STileView<TSharedPtr<FBakedItem>>)
 			.ListItemsSource(&BakedItems)
 			.SelectionMode(ESelectionMode::Single)
-			.OnGenerateRow_Lambda([](TSharedPtr<FSoftObjectPath> Item, const TSharedRef<STableViewBase>& Owner) -> TSharedRef<ITableRow>
+			.ItemWidth(112.f).ItemHeight(138.f)
+			.ItemAlignment(EListItemAlignment::EvenlyDistributed)
+			.OnGenerateTile_Lambda([](TSharedPtr<FBakedItem> Item, const TSharedRef<STableViewBase>& Owner) -> TSharedRef<ITableRow>
 			{
-				return SNew(STableRow<TSharedPtr<FSoftObjectPath>>, Owner)
+				return SNew(STableRow<TSharedPtr<FBakedItem>>, Owner)
 				[
 					SNew(SVerticalBox)
-					+ SVerticalBox::Slot().AutoHeight().Padding(4.f, 2.f, 4.f, 0.f)[SNew(STextBlock).Text(FText::FromString(Item->GetAssetName())).Font(FAppStyle::GetFontStyle("BoldFont"))]
-					+ SVerticalBox::Slot().AutoHeight().Padding(4.f, 0.f, 4.f, 2.f)[SNew(STextBlock).Text(FText::FromString(Item->GetLongPackageName())).ColorAndOpacity(FSlateColor::UseSubduedForeground())]
+					+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(4.f, 4.f, 4.f, 2.f)
+					[
+						SNew(SBox).WidthOverride(96.f).HeightOverride(96.f)[Item->Thumbnail->MakeThumbnailWidget()]
+					]
+					+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(2.f, 0.f, 2.f, 4.f)
+					[
+						SNew(SBox).WidthOverride(104.f)
+						[
+							SNew(STextBlock).Text(FText::FromString(Item->Path.GetAssetName())).Justification(ETextJustify::Center).AutoWrapText(true)
+							.ToolTipText(FText::FromString(Item->Path.ToString()))
+						]
+					]
 				];
 			})
-			.OnMouseButtonDoubleClick_Lambda([](TSharedPtr<FSoftObjectPath> Item)
+			.OnMouseButtonDoubleClick_Lambda([](TSharedPtr<FBakedItem> Item)
 			{
 				// Opens in the Animation editor.
-				if (UObject* Object = Item.IsValid() ? Item->TryLoad() : nullptr)
+				if (UObject* Object = Item.IsValid() ? Item->Path.TryLoad() : nullptr)
 				{
 					if (GEditor) { GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(Object); }
 				}
 			})
 			.OnContextMenuOpening_Lambda([this]() -> TSharedPtr<SWidget>
 			{
-				const TArray<TSharedPtr<FSoftObjectPath>> Selected = BakedList->GetSelectedItems();
+				const TArray<TSharedPtr<FBakedItem>> Selected = BakedList->GetSelectedItems();
 				if (Selected.Num() == 0) { return nullptr; }
-				const FSoftObjectPath Path = *Selected[0];
+				const FSoftObjectPath Path = Selected[0]->Path;
 				FMenuBuilder Menu(true, nullptr);
 				Menu.AddMenuEntry(LOCTEXT("ShowInContentBrowser", "Show in Content Browser"), FText::GetEmpty(), FSlateIcon(),
 					FUIAction(FExecuteAction::CreateLambda([Path]()
@@ -1008,7 +1209,6 @@ TSharedRef<SWidget> SAnimStitchPanel::MakeBakedAssetsTab()
 			})
 		];
 }
-
 FText SAnimStitchPanel::GetTabTitle() const
 {
 	if (Asset->GetOutermost() == GetTransientPackage())
@@ -1027,13 +1227,30 @@ FText SAnimStitchPanel::GetAssetLabel() const
 	return FText::Format(LOCTEXT("AssetLabel", "{0}{1}"), FText::FromString(Asset->GetName()), Asset->GetOutermost()->IsDirty() ? FText::FromString(TEXT("*")) : FText::GetEmpty());
 }
 
+bool SAnimStitchPanel::IsDirtyState() const
+{
+	const UPackage* Package = Asset->GetOutermost();
+	return Asset->HasUnsavedChanges() || (Package != GetTransientPackage() && Package->IsDirty());
+}
+
+bool SAnimStitchPanel::ConfirmDiscardChanges()
+{
+	if (!IsDirtyState()) { return true; }
+	const bool bUntitled = Asset->GetOutermost() == GetTransientPackage();
+	const EAppReturnType::Type Answer = FMessageDialog::Open(EAppMsgType::YesNoCancel,
+		FText::Format(LOCTEXT("SaveFirstPrompt", "Save changes to {0} before continuing?\n\nYes saves, No discards the changes, Cancel keeps working."), bUntitled ? LOCTEXT("UntitledName", "the untitled timeline") : FText::FromString(Asset->GetName())));
+	if (Answer == EAppReturnType::Cancel) { return false; }
+	if (Answer == EAppReturnType::Yes)
+	{
+		Save();
+		if (IsDirtyState()) { return false; } // the save was cancelled or did not finish
+	}
+	return true;
+}
+
 void SAnimStitchPanel::NewTimeline()
 {
-	if (Asset->GetOutermost() == GetTransientPackage() && Asset->Timeline.Clips.Num() > 0
-		&& FMessageDialog::Open(EAppMsgType::YesNo, LOCTEXT("DiscardUntitled", "The current timeline has not been saved. Discard it and start a new one?")) != EAppReturnType::Yes)
-	{
-		return;
-	}
+	if (!ConfirmDiscardChanges()) { return; }
 	SetAsset(NewObject<UAnimStitchTimelineAsset>(GetTransientPackage(), NAME_None, RF_Transactional));
 }
 
@@ -1045,6 +1262,7 @@ void SAnimStitchPanel::Save()
 		return;
 	}
 	FEditorFileUtils::PromptForCheckoutAndSave({ Asset->GetOutermost() }, false, false);
+	if (!Asset->GetOutermost()->IsDirty()) { Asset->ClearUnsavedChanges(); }
 }
 
 void SAnimStitchPanel::SaveAs()

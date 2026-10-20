@@ -160,6 +160,41 @@ struct ANIMSTITCHEDITOR_API FAnimStitchTrackKey
 	float Weight = 1.f;
 };
 
+/** Shape of a control in the viewport. */
+UENUM()
+enum class EAnimStitchControlShape : uint8
+{
+	Box,
+	Sphere,
+};
+
+/** Per-control look. Overrides win over the global Show > Controls values; the offset only moves the drawn control (to separate overlapping shapes). */
+USTRUCT()
+struct ANIMSTITCHEDITOR_API FAnimStitchControlStyle
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	bool bOverrideOpacity = false;
+
+	UPROPERTY()
+	float Opacity = 0.25f;
+
+	UPROPERTY()
+	bool bOverrideSize = false;
+
+	/** Size multiplier used instead of the global Control Size while overridden. */
+	UPROPERTY()
+	float Size = 1.f;
+
+	UPROPERTY()
+	EAnimStitchControlShape Shape = EAnimStitchControlShape::Box;
+
+	/** Display offset (cm, component space). */
+	UPROPERTY()
+	FVector Offset = FVector::ZeroVector;
+};
+
 /** A transform lane under the clip lanes (Sequencer style). Corrections are applied after foot prediction and foot lock: manual wins. */
 USTRUCT()
 struct ANIMSTITCHEDITOR_API FAnimStitchTrack
@@ -180,6 +215,13 @@ struct ANIMSTITCHEDITOR_API FAnimStitchTrack
 	/** Bone tracks: when this bone moves the legs (pelvis etc.), keep the feet planted where the animation had them (leg IK). */
 	UPROPERTY()
 	bool bKeepFeetPlanted = true;
+
+	/** Look of this track's control (bone control / IK effector) and, for IK limbs, of its pole control. */
+	UPROPERTY()
+	FAnimStitchControlStyle ControlStyle;
+
+	UPROPERTY()
+	FAnimStitchControlStyle PoleStyle;
 
 	/** Tracks created together as the FK joints of one limb share a group (0 = none). */
 	UPROPERTY()
@@ -208,6 +250,10 @@ struct ANIMSTITCHEDITOR_API FAnimStitchClip
 	/** How far this clip overlaps the previous one (the crossfade length). Always 0 for the first clip. */
 	UPROPERTY()
 	double OverlapIn = 0.0;
+
+	/** Stable identity (survives reordering), so correction keys can follow their clip. Assigned on demand. */
+	UPROPERTY()
+	FGuid ClipId;
 
 	/** Derived by FAnimStitchTimeline::Relayout(): position of the clip start on the timeline. */
 	UPROPERTY()

@@ -143,6 +143,17 @@ int32 SAnimStitchTimeline::OnPaint(const FPaintArgs& Args, const FGeometry& G, c
 					const FLinearColor Tick = Mark.Action == EAnimStitchFootAction::Lock ? FLinearColor(0.4f, 1.f, 0.5f) : Mark.Action == EAnimStitchFootAction::Unlock ? FLinearColor(1.f, 0.35f, 0.35f) : FLinearColor(0.8f, 0.8f, 0.8f);
 					DrawRect(Out, Layer + 5, G, FVector2f(X - 1.f, GetLaneTop(Foot) - 1.f), FVector2f(2.f, LaneHeight + 2.f), Tick);
 				}
+				// Drag handles on both ends of a manually locked region (start = Lock mark, end = the next mark).
+				const TArray<FAnimStitchFootLockResult::FEventMark>& Marks = Plants->Events[Foot];
+				for (int32 m = 0; m < Marks.Num(); ++m)
+				{
+					if (Marks[m].Action != EAnimStitchFootAction::Lock) { continue; }
+					for (const int32 Index : { m, m + 1 })
+					{
+						if (!Marks.IsValidIndex(Index)) { continue; }
+						DrawRect(Out, Layer + 6, G, FVector2f(TimeToX(Marks[Index].Time) - 3.f, GetLaneTop(Foot) - 2.f), FVector2f(6.f, LaneHeight + 4.f), FLinearColor(1.f, 1.f, 1.f, 0.85f));
+					}
+				}
 			}
 		}
 		if (DragMode == EDrag::FootLane && bDragStarted)
@@ -335,8 +346,33 @@ SAnimStitchTimeline::FHit SAnimStitchTimeline::HitTest(const FVector2f& P) const
 	{
 		for (int32 Foot = 0; Foot < 2; ++Foot)
 		{
-			if (P.Y >= GetLaneTop(Foot) && P.Y <= GetLaneTop(Foot) + LaneHeight)
+			if (P.Y >= GetLaneTop(Foot) - 2.f && P.Y <= GetLaneTop(Foot) + LaneHeight + 2.f)
 			{
+				if (Plants.IsValid() && Plants->bValid)
+				{
+					// A handle on either end of a manual lock wins over painting a new region.
+					const TArray<FAnimStitchFootLockResult::FEventMark>& Marks = Plants->Events[Foot];
+					float BestDistance = 6.f;
+					for (int32 m = 0; m < Marks.Num(); ++m)
+					{
+						if (Marks[m].Action != EAnimStitchFootAction::Lock) { continue; }
+						for (const int32 Index : { m, m + 1 })
+						{
+							if (!Marks.IsValidIndex(Index)) { continue; }
+							const float Distance = FMath::Abs(P.X - TimeToX(Marks[Index].Time));
+							if (Distance <= BestDistance) { BestDistance = Distance; Result.Type = EHit::FootHandle; Result.Index = Foot; Result.Sub = Index; }
+						}
+					}
+					if (Result.Type == EHit::FootHandle) { return Result; }
+					// Inside a manual lock (between its Lock mark and the next mark): drag moves the whole region.
+					const double Time = XToTime(P.X);
+					for (int32 m = 0; m < Marks.Num(); ++m)
+					{
+						if (Marks[m].Action != EAnimStitchFootAction::Lock) { continue; }
+						const double End = Marks.IsValidIndex(m + 1) ? Marks[m + 1].Time : Asset->Timeline.GetTotalLength();
+						if (Time >= Marks[m].Time && Time <= End) { Result.Type = EHit::FootRegion; Result.Index = Foot; Result.Sub = m; return Result; }
+					}
+				}
 				Result.Type = EHit::FootLane;
 				Result.Index = Foot;
 				return Result;
@@ -440,6 +476,45 @@ namespace
 	TArray<FClipboardEntry> KeyClipboard;
 }
 
+bool SAnimStitchTimeline::HasKeyClipboard()
+{
+	return KeyClipboard.Num() > 0;
+}
+
+bool SAnimStitchTimeline::CanPasteKeys() const
+{
+	for (const FClipboardEntry& Entry : KeyClipboard)
+	{
+		if (Entry.Keys.Num() > 0 && HasTrackFor(Entry.Bone, Entry.Kind)) { return true; }
+	}
+	return false;
+}
+
+bool SAnimStitchTimeline::CanDuplicateKeysToPlayhead() const
+{
+	const FAnimStitchTimeline& TL = Asset->Timeline;
+	double Earliest = TNumericLimits<double>::Max();
+	for (const FKeyRef& Ref : SelectedKeys)
+	{
+		if (TL.Tracks.IsValidIndex(Ref.Track) && TL.Tracks[Ref.Track].Keys.IsValidIndex(Ref.Key)) { Earliest = FMath::Min(Earliest, TL.Tracks[Ref.Track].Keys[Ref.Key].Time); }
+	}
+	if (TL.Tracks.IsValidIndex(SelectedTrack) && TL.Tracks[SelectedTrack].Keys.IsValidIndex(SelectedKey)) { Earliest = FMath::Min(Earliest, TL.Tracks[SelectedTrack].Keys[SelectedKey].Time); }
+	return Earliest != TNumericLimits<double>::Max() && FMath::Abs(Earliest - Playhead) > 1.0 / 120.0;
+}
+
+void SAnimStitchTimeline::SelectTrackFromViewport(int32 Track)
+{
+	if (!Asset->Timeline.Tracks.IsValidIndex(Track) || Track == SelectedTrack) { return; }
+	SelectedTrack = Track;
+	SelectedKey = INDEX_NONE;
+	SelectedKeys.Reset();
+	// Scroll the lane into view.
+	const float Top = Track * (TrackLaneHeight + 2.f) + (IsExpanderOpen() && Track > ExpandedTrack ? ExpanderHeight : 0.f);
+	const float View = GetTrackViewHeight();
+	if (Top < VScroll) { SetTrackScroll(Top); }
+	else if (Top + TrackLaneHeight > VScroll + View) { SetTrackScroll(Top + TrackLaneHeight - View + 4.f); }
+}
+
 void SAnimStitchTimeline::CopySelectedKeys()
 {
 	const FAnimStitchTimeline& TL = Asset->Timeline;
@@ -541,7 +616,7 @@ void SAnimStitchTimeline::JumpToKey(int32 Track, int32 Direction)
 	{
 		for (int32 k = Keys.Num() - 1; k >= 0; --k) { if (Keys[k].Time < Playhead - Eps) { Target = k; break; } }
 	}
-	SelectedTrack = Track;
+	SelectedTrack = Track; ++TrackSelectionSerial;
 	if (Target == INDEX_NONE) { return; }
 	SelectedKey = Target;
 	SelectedKeys.Reset();
@@ -668,12 +743,12 @@ FReply SAnimStitchTimeline::OnMouseButtonDown(const FGeometry& G, const FPointer
 		JumpToKey(Hit.Index, Hit.Type == EHit::TrackNext ? 1 : -1);
 		return FReply::Handled();
 	case EHit::TrackExpand:
-		SelectedTrack = Hit.Index;
+		SelectedTrack = Hit.Index; ++TrackSelectionSerial;
 		ExpandedTrack = (ExpandedTrack == Hit.Index) ? INDEX_NONE : Hit.Index;
 		return FReply::Handled();
 	case EHit::TrackAddKey:
 	{
-		SelectedTrack = Hit.Index;
+		SelectedTrack = Hit.Index; ++TrackSelectionSerial;
 		const FAnimStitchTrack& Track = Asset->Timeline.Tracks[Hit.Index];
 		const FScopedTransaction Tx(LOCTEXT("AddKeyTx", "Add Key"));
 		FAnimStitchTrackKey Key = Track.Keys.Num() > 0 ? FAnimStitchManualEdits::Sample(Track, Playhead) : FAnimStitchTrackKey();
@@ -699,7 +774,7 @@ FReply SAnimStitchTimeline::OnMouseButtonDown(const FGeometry& G, const FPointer
 				SelectedKeys.Reset();
 				SelectedKeys.Add(FKeyRef{ Hit.Index, Hit.Sub });
 			}
-			SelectedTrack = Hit.Index;
+			SelectedTrack = Hit.Index; ++TrackSelectionSerial;
 			if (!bAdd || !bAlready) { SelectedKey = Hit.Sub; }
 			// Dragging moves a single key; with several keys selected the drag is ignored (copy / paste and delete work on all of them).
 			if (SelectedKeys.Num() <= 1)
@@ -711,7 +786,7 @@ FReply SAnimStitchTimeline::OnMouseButtonDown(const FGeometry& G, const FPointer
 		else
 		{
 			// Empty lane space: select the track and start a marquee.
-			SelectedTrack = Hit.Index;
+			SelectedTrack = Hit.Index; ++TrackSelectionSerial;
 			SelectedKey = INDEX_NONE;
 			if (Local.X >= LabelWidth)
 			{
@@ -722,6 +797,32 @@ FReply SAnimStitchTimeline::OnMouseButtonDown(const FGeometry& G, const FPointer
 			}
 		}
 		break;
+	case EHit::FootHandle:
+	{
+		DragMode = EDrag::FootHandle;
+		DragFoot = Hit.Index;
+		const TArray<FAnimStitchFootLockResult::FEventMark>& Marks = Plants->Events[Hit.Index];
+		FootHandleTime = Marks[Hit.Sub].Time;
+		constexpr double Gap = 0.04;
+		FootHandleMin = Marks.IsValidIndex(Hit.Sub - 1) ? Marks[Hit.Sub - 1].Time + Gap : 0.0;
+		FootHandleMax = Marks.IsValidIndex(Hit.Sub + 1) ? Marks[Hit.Sub + 1].Time - Gap : TL.GetTotalLength();
+		break;
+	}
+	case EHit::FootRegion:
+	{
+		DragMode = EDrag::FootRegion;
+		DragFoot = Hit.Index;
+		FootDragStartTime = FootDragCurTime = XToTime(Local.X); // a plain click still toggles the plant
+		const TArray<FAnimStitchFootLockResult::FEventMark>& Marks = Plants->Events[Hit.Index];
+		constexpr double Gap = 0.04;
+		FootAnchor = XToTime(Local.X);
+		FootRegionStart = Marks[Hit.Sub].Time;
+		bFootRegionHasEnd = Marks.IsValidIndex(Hit.Sub + 1);
+		FootRegionEnd = bFootRegionHasEnd ? Marks[Hit.Sub + 1].Time : FootRegionStart;
+		FootRegionMin = Marks.IsValidIndex(Hit.Sub - 1) ? Marks[Hit.Sub - 1].Time + Gap : 0.0;
+		FootRegionMax = Marks.IsValidIndex(Hit.Sub + 2) ? Marks[Hit.Sub + 2].Time - Gap : TL.GetTotalLength();
+		break;
+	}
 	case EHit::FootLane:
 		DragMode = EDrag::FootLane;
 		DragFoot = Hit.Index;
@@ -776,7 +877,7 @@ FReply SAnimStitchTimeline::OnMouseButtonUp(const FGeometry& G, const FPointerEv
 		const FHit Hit = HitTest(LocalPos);
 		if (Hit.Type == EHit::TrackLane || Hit.Type == EHit::TrackKey)
 		{
-			SelectedTrack = Hit.Index;
+			SelectedTrack = Hit.Index; ++TrackSelectionSerial;
 			SelectedKey = Hit.Type == EHit::TrackKey ? Hit.Sub : INDEX_NONE;
 			OpenTrackMenu(Event, Hit.Index, SelectedKey, XToTime(LocalPos.X));
 			return FReply::Handled();
@@ -786,7 +887,7 @@ FReply SAnimStitchTimeline::OnMouseButtonUp(const FGeometry& G, const FPointerEv
 			OpenAddTrackMenu(Event); // right-click below the clip lanes
 			return FReply::Handled();
 		}
-		if (Hit.Type == EHit::FootLane)
+		if (Hit.Type == EHit::FootLane || Hit.Type == EHit::FootHandle || Hit.Type == EHit::FootRegion)
 		{
 			OpenFootLaneMenu(Event, Hit.Index, XToTime(G.AbsoluteToLocal(Event.GetScreenSpacePosition()).X));
 			return FReply::Handled();
@@ -802,6 +903,10 @@ FReply SAnimStitchTimeline::OnMouseButtonUp(const FGeometry& G, const FPointerEv
 	if ((Event.GetEffectingButton() != EKeys::LeftMouseButton && !bEndingPan) || !HasMouseCapture())
 	{
 		return FReply::Unhandled();
+	}
+	if (DragMode == EDrag::FootRegion && !bDragStarted)
+	{
+		ToggleFootPlantAt(DragFoot, FootDragStartTime);
 	}
 	if (DragMode == EDrag::FootLane)
 	{
@@ -840,6 +945,46 @@ void SAnimStitchTimeline::OnDragMove(float LocalX)
 {
 	FAnimStitchTimeline& TL = Asset->Timeline;
 
+	if (DragMode == EDrag::FootRegion)
+	{
+		if (!bDragStarted)
+		{
+			if (FMath::Abs(LocalX - DragStartX) < 3.f) { return; }
+			bDragStarted = true;
+			DragTransaction = MakeUnique<FScopedTransaction>(LOCTEXT("MoveLockTx", "Move Foot Lock"));
+		}
+		const double Length = bFootRegionHasEnd ? FootRegionEnd - FootRegionStart : 0.0;
+		double NewStart = FootRegionStart + (XToTime(LocalX) - FootAnchor);
+		NewStart = FMath::Clamp(NewStart, FootRegionMin, FMath::Max(FootRegionMin, FootRegionMax - Length));
+		const double Shift = NewStart - FootRegionStart;
+		if (!FMath::IsNearlyZero(Shift, 1e-6))
+		{
+			// The end moves first when going right, the start first when going left, so the two never cross.
+			if (bFootRegionHasEnd && Shift > 0.0) { Asset->MoveFootEvent(DragFoot, FootRegionEnd, FootRegionEnd + Shift); }
+			Asset->MoveFootEvent(DragFoot, FootRegionStart, FootRegionStart + Shift);
+			if (bFootRegionHasEnd && Shift < 0.0) { Asset->MoveFootEvent(DragFoot, FootRegionEnd, FootRegionEnd + Shift); }
+			FootRegionStart += Shift;
+			FootRegionEnd += Shift;
+			FootAnchor += Shift;
+		}
+		return;
+	}
+	if (DragMode == EDrag::FootHandle)
+	{
+		if (!bDragStarted)
+		{
+			if (FMath::Abs(LocalX - DragStartX) < 3.f) { return; }
+			bDragStarted = true;
+			DragTransaction = MakeUnique<FScopedTransaction>(LOCTEXT("ResizeLockTx", "Resize Foot Lock"));
+		}
+		const double NewTime = FMath::Clamp(XToTime(LocalX), FootHandleMin, FMath::Max(FootHandleMin, FootHandleMax));
+		if (!FMath::IsNearlyEqual(NewTime, FootHandleTime, 1e-6))
+		{
+			Asset->MoveFootEvent(DragFoot, FootHandleTime, NewTime);
+			FootHandleTime = NewTime;
+		}
+		return;
+	}
 	if (DragMode == EDrag::Splitter)
 	{
 		LabelWidth = FMath::Clamp(LocalX, 260.f, 620.f);
@@ -980,7 +1125,7 @@ FCursorReply SAnimStitchTimeline::OnCursorQuery(const FGeometry& G, const FPoint
 	if (HasMouseCapture())
 	{
 		Type = DragMode == EDrag::TrimLeft ? EHit::TrimLeft : DragMode == EDrag::TrimRight ? EHit::TrimRight
-			: (DragMode == EDrag::MarkerStart || DragMode == EDrag::MarkerEnd || DragMode == EDrag::Splitter) ? EHit::MarkerStart
+			: (DragMode == EDrag::MarkerStart || DragMode == EDrag::MarkerEnd || DragMode == EDrag::Splitter || DragMode == EDrag::FootHandle) ? EHit::MarkerStart : DragMode == EDrag::FootRegion ? EHit::Body
 			: (DragMode == EDrag::Pan || DragMode == EDrag::Move) ? EHit::Body : EHit::None;
 	}
 	else
@@ -995,8 +1140,10 @@ FCursorReply SAnimStitchTimeline::OnCursorQuery(const FGeometry& G, const FPoint
 	case EHit::MarkerStart:
 	case EHit::MarkerEnd:
 	case EHit::Splitter:
+	case EHit::FootHandle:
 		return FCursorReply::Cursor(EMouseCursor::ResizeLeftRight);
 	case EHit::Body:
+	case EHit::FootRegion:
 		return FCursorReply::Cursor(EMouseCursor::GrabHand);
 	default:
 		return FCursorReply::Unhandled();
@@ -1142,18 +1289,19 @@ void SAnimStitchTimeline::OpenFootLaneMenu(const FPointerEvent& Event, int32 Foo
 	AddAction(LOCTEXT("UnlockHere", "Unlock Foot Here"), LOCTEXT("UnlockHereTip", "Release this foot here; it stays free until you lock it again"), EAnimStitchFootAction::Unlock);
 	AddAction(LOCTEXT("AutoHere", "Resume Auto-Detection Here"), LOCTEXT("AutoHereTip", "From here on, plants are detected automatically again"), EAnimStitchFootAction::Auto);
 	Menu.AddSeparator();
-	Menu.AddMenuEntry(LOCTEXT("ClearFootEvents", "Clear Manual Locks (This Foot)"), LOCTEXT("ClearFootEventsTip", "Remove all manual lock/unlock marks for this foot: back to automatic detection"),
-		FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, Foot]()
-		{
-			const FScopedTransaction Tx(LOCTEXT("ClearFootTx", "Clear Foot Locks"));
-			Asset->ClearFootEvents(Foot);
-		})));
-	Menu.AddMenuEntry(LOCTEXT("ClearAllFootEvents", "Clear Manual Locks (Both Feet)"), LOCTEXT("ClearAllFootEventsTip", "Back to automatic detection for both feet"),
+	auto HasFootEvents = [this](int32 FootOrAll) { for (const FAnimStitchClip& C : Asset->Timeline.Clips) { for (const FAnimStitchFootEvent& E : C.FootEvents) { if (FootOrAll == INDEX_NONE || E.Foot == FootOrAll) { return true; } } } return false; };
+	Menu.AddMenuEntry(LOCTEXT("ClearAllFootEvents", "Clear All Footlocks"), LOCTEXT("ClearAllFootEventsTip", "Remove every manual lock / unlock mark on both feet: back to automatic detection"),
 		FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this]()
 		{
-			const FScopedTransaction Tx(LOCTEXT("ClearAllFootTx", "Clear Foot Locks"));
+			const FScopedTransaction Tx(LOCTEXT("ClearAllFootTx", "Clear All Footlocks"));
 			Asset->ClearFootEvents(INDEX_NONE);
-		})));
+		}), FCanExecuteAction::CreateLambda([HasFootEvents]() { return HasFootEvents(INDEX_NONE); })));
+	Menu.AddMenuEntry(LOCTEXT("ClearFootEvents", "Clear Footlocks (This Foot)"), LOCTEXT("ClearFootEventsTip", "Remove the manual lock / unlock marks of this foot only"),
+		FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, Foot]()
+		{
+			const FScopedTransaction Tx(LOCTEXT("ClearFootTx", "Clear Footlocks"));
+			Asset->ClearFootEvents(Foot);
+		}), FCanExecuteAction::CreateLambda([HasFootEvents, Foot]() { return HasFootEvents(Foot); })));
 	const FWidgetPath Path = Event.GetEventPath() != nullptr ? *Event.GetEventPath() : FWidgetPath();
 	FSlateApplication::Get().PushMenu(AsShared(), Path, Menu.MakeWidget(), Event.GetScreenSpacePosition(), FPopupTransitionEffect(FPopupTransitionEffect::ContextMenu));
 }

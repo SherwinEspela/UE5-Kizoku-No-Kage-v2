@@ -7,6 +7,7 @@
 #include "EditorViewportClient.h"
 #include "AnimStitchTimeline.h"
 #include "AnimStitchFootLock.h"
+#include "Application/ThrottleManager.h"
 
 /** A manual-correction control shape in the viewport. */
 enum class EAnimStitchControlKind : uint8 { None, Bone, IKEffector, IKPole, LockPin };
@@ -36,6 +37,12 @@ struct FAnimStitchControl
 	int32 Style = 0;
 	/** Half-size of the cube in cm before the global multiplier (from the bone's size). */
 	float BaseSize = 4.f;
+	/** Per-control look from the track (negative = use the global value). */
+	float Opacity = -1.f;
+	float SizeMul = -1.f;
+	bool bSphere = false;
+	/** Display offset (cm): moves the drawn control and its manipulator, not the value it edits. */
+	FVector Offset = FVector::ZeroVector;
 	FString Label;
 };
 
@@ -155,6 +162,13 @@ public:
 	/** Auto size of a bone's control cube (half-extent, cm): big for the pelvis, small for fingers. */
 	float GetBoneControlSize(int32 MeshBone) const;
 	void SetShowControls(bool bShow) { bShowControls = bShow; RequestRedraw(); }
+	/** G: hides / shows every helper at once (control shapes, manipulator, grid), like the regular viewport's game view. */
+	void ToggleHelpers() { bHelpersVisible = !bHelpersVisible; RequestRedraw(); }
+	bool AreHelpersVisible() const { return bHelpersVisible; }
+	/** Test hook: runs the same path as dragging a control by Translation (no viewport needed). */
+	bool DebugDragControl(const FAnimStitchControlId& Id, const FVector& Translation);
+	/** What F frames: the selected control, else the selected bone, else the whole mesh. */
+	bool GetFocusBox(FBox& OutBox) const;
 	bool GetShowControls() const { return bShowControls; }
 
 	/** Props shown on the preview character (from the timeline asset). */
@@ -221,6 +235,7 @@ private:
 	mutable bool bPlantFeetResolved = false;
 	float ControlDrawSize = 1.f;
 	bool bShowControls = true;
+	bool bHelpersVisible = true;
 	TArray<FAnimStitchPreviewAttachment> Attachments;
 	TArray<TObjectPtr<class UPrimitiveComponent>> AttachmentComponents;
 	void RebuildAttachments();
@@ -262,6 +277,9 @@ private:
 		FVector Axes[3] = { FVector::ForwardVector, FVector::RightVector, FVector::UpVector };
 	} Drag;
 	TSharedPtr<class FScopedTransaction> DragTransaction;
+	FThrottleRequest DragThrottle;
+	int32 DragUpdates = 0;
+	int32 DragWrites = 0;
 	TArray<FVector> TrajectoryPoints;
 	/** One pose per ghost component (outgoing, incoming, outgoing, ...). */
 	TArray<TArray<FTransform>> GhostPoses;
@@ -300,6 +318,11 @@ public:
 	/** Frames the camera on the preview mesh. */
 	void FocusOnMesh();
 	void HandleRedraw();
+	virtual FReply OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent) override;
+protected:
+	/** F: the regular viewport's focus command, centring and zooming to the selected control. */
+	virtual void OnFocusViewportToSelection() override;
+public:
 
 protected:
 	virtual TSharedRef<FEditorViewportClient> MakeEditorViewportClient() override;

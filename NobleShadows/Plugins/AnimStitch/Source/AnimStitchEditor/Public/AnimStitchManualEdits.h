@@ -48,4 +48,7 @@ public:
 
 	/** -1 = left, +1 = right, 0 = centre / unknown, guessed from the bone name. */
 	static int32 GetBoneSide(FName Bone);
+
+	/** True for the pelvis / hips bone (the only bone track that offers Keep Feet Planted). */
+	static bool IsPelvisBone(FName Bone);
 };

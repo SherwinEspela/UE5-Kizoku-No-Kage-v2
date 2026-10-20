@@ -5,10 +5,14 @@
 #include "UObject/GCObject.h"
 #include "AnimStitchTimelineAsset.h"
 #include "ContentBrowserDelegates.h"
-#include "Widgets/Views/SListView.h"
+#include "Widgets/Views/STileView.h"
+#include "Framework/Docking/TabManager.h"
 
 class SAnimStitchTimeline;
 class SAnimStitchViewport;
+class SDockTab;
+class FAssetThumbnail;
+class FAssetThumbnailPool;
 class FAnimStitchPreview;
 struct FAssetData;
 
@@ -24,6 +28,11 @@ public:
 	// FGCObject
 	virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
 	virtual FString GetReferencerName() const override { return TEXT("SAnimStitchPanel"); }
+
+	/** Builds the dockable layout (toolbar, viewport, timeline, bottom bar, side panel) inside the given tab and restores the saved one. */
+	void InitializeDocking(const TSharedRef<SDockTab>& Tab);
+	/** Set while a layout reset is in progress: the old layout must not be saved again. */
+	static bool bSkipLayoutPersist;
 
 	/** Loads another timeline asset into the panel (Open). */
 	void SetAsset(UAnimStitchTimelineAsset* NewAsset);
@@ -45,9 +54,29 @@ private:
 	void FillBonesMenu(class FMenuBuilder& Menu);
 	int32 RightTab = 0; // 0 = Content Browser, 1 = Details, 2 = Baked Assets
 	TSharedRef<SWidget> MakeBakedAssetsTab();
+	TSharedRef<FTabManager::FLayout> MakeDefaultLayout() const;
+	TSharedRef<SWidget> MakeLayoutMenu();
+	void ResetLayout();
+	TSharedPtr<SWidget> ViewportSection, ToolbarSection, TimelineSection, InspectorSection;
+	/** Unsaved edits (shown as an asterisk on the Save icon). */
+	bool IsDirtyState() const;
+	/** Save / discard / cancel prompt before work is thrown away. False = the user cancelled (or a save did not finish). */
+	bool ConfirmDiscardChanges();
+	int32 LastControlKind = 0;
+	int32 LastControlTrack = -1;
+	double LastPlantAnalysis = 0.0;
+	TSharedPtr<FTabManager> TabManager;
+	uint32 LastTrackSerial = 0;
 	void RebuildBakedList();
-	TArray<TSharedPtr<FSoftObjectPath>> BakedItems;
-	TSharedPtr<SListView<TSharedPtr<FSoftObjectPath>>> BakedList;
+	/** One tile of the Baked Assets tab. */
+	struct FBakedItem
+	{
+		FSoftObjectPath Path;
+		TSharedPtr<FAssetThumbnail> Thumbnail;
+	};
+	TArray<TSharedPtr<FBakedItem>> BakedItems;
+	TSharedPtr<STileView<TSharedPtr<FBakedItem>>> BakedList;
+	TSharedPtr<FAssetThumbnailPool> ThumbnailPool;
 	TSharedPtr<class SScrollBar> TrackScrollBar;
 
 	// Bone dropdown (alternative to clicking a joint in the viewport)

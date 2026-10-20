@@ -218,6 +218,14 @@ void FAnimStitchPreview::BuildControlsFromPose(TArray<FAnimStitchControl>& Out) 
 	const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
 	if (Component.Num() != Ref.GetNum()) { return; }
 
+	auto ApplyStyle = [](FAnimStitchControl& Control, const FAnimStitchControlStyle& Style)
+	{
+		Control.Opacity = Style.bOverrideOpacity ? Style.Opacity : -1.f;
+		Control.SizeMul = Style.bOverrideSize ? Style.Size : -1.f;
+		Control.bSphere = Style.Shape == EAnimStitchControlShape::Sphere;
+		Control.Offset = Style.Offset;
+	};
+
 	// Left / right colour coding (blue / red), centre neutral.
 	static const FLinearColor SideColors[3] = { FLinearColor(0.85f, 0.85f, 0.85f), FLinearColor(0.2f, 0.45f, 1.f), FLinearColor(1.f, 0.25f, 0.25f) };
 	auto SideStyle = [](FName Bone) { const int32 Side = FAnimStitchManualEdits::GetBoneSide(Bone); return Side < 0 ? 1 : (Side > 0 ? 2 : 0); };
@@ -241,6 +249,7 @@ void FAnimStitchPreview::BuildControlsFromPose(TArray<FAnimStitchControl>& Out) 
 			C.Color = SideColors[Style];
 			C.BaseSize = GetBoneControlSize(Bone);
 			C.Label = Track.Bone.ToString();
+			ApplyStyle(C, Track.ControlStyle);
 			Out.Add(C);
 		}
 		else
@@ -273,6 +282,7 @@ void FAnimStitchPreview::BuildControlsFromPose(TArray<FAnimStitchControl>& Out) 
 			Effector.Color = SideColors[Style];
 			Effector.BaseSize = FMath::Max(GetBoneControlSize(Chain.Foot) * 1.3f, 3.5f);
 			Effector.Label = Track.Bone.ToString() + TEXT(" IK");
+			ApplyStyle(Effector, Track.ControlStyle);
 			Out.Add(Effector);
 
 			FAnimStitchControl Pole;
@@ -284,6 +294,7 @@ void FAnimStitchPreview::BuildControlsFromPose(TArray<FAnimStitchControl>& Out) 
 			Pole.Color = SideColors[Style];
 			Pole.BaseSize = Effector.BaseSize * 0.6f;
 			Pole.Label = Track.Bone.ToString() + TEXT(" pole");
+			ApplyStyle(Pole, Track.PoleStyle);
 			Out.Add(Pole);
 		}
 	}
@@ -315,18 +326,19 @@ namespace
 	/** Half-size of a control cube in world units: the bone's own size times the global multiplier. */
 	double ControlHalfSize(const FAnimStitchControl& C, float DrawSize, bool bSelected)
 	{
-		return C.BaseSize * DrawSize * (bSelected ? 1.12 : 1.0);
+		const float Multiplier = C.SizeMul >= 0.f ? C.SizeMul : DrawSize;
+		return C.BaseSize * Multiplier * (bSelected ? 1.12 : 1.0);
 	}
 
 	FVector CubeCorner(const FAnimStitchControl& C, double Half, int32 Corner)
 	{
-		return C.Position + C.Orientation.RotateVector(FVector((Corner & 1) ? Half : -Half, (Corner & 2) ? Half : -Half, (Corner & 4) ? Half : -Half));
+		return C.Position + C.Offset + C.Orientation.RotateVector(FVector((Corner & 1) ? Half : -Half, (Corner & 2) ? Half : -Half, (Corner & 4) ? Half : -Half));
 	}
 }
 
 FAnimStitchControlId FAnimStitchPreview::PickControl(const FSceneView& View, const FVector2D& Pixel) const
 {
-	if (!bShowControls) { return FAnimStitchControlId(); }
+	if (!bShowControls || !bHelpersVisible) { return FAnimStitchControlId(); }
 	TArray<FAnimStitchControl> Controls;
 	BuildControls(Controls);
 	FAnimStitchControlId Best;
@@ -354,7 +366,7 @@ FAnimStitchControlId FAnimStitchPreview::PickControl(const FSceneView& View, con
 
 void FAnimStitchPreview::DrawControlsCanvas(const FSceneView& View, FCanvas& Canvas, float DPIScale) const
 {
-	if (!bShowControls) { return; }
+	if (!bShowControls || !bHelpersVisible) { return; }
 	TArray<FAnimStitchControl> Controls;
 	BuildControls(Controls);
 	const FMatrix WorldToClip = View.ViewMatrices.GetWorldToClip();
@@ -365,6 +377,33 @@ void FAnimStitchPreview::DrawControlsCanvas(const FSceneView& View, FCanvas& Can
 	{
 		const bool bSelected = C.Id == SelectedControl;
 		const double Half = ControlHalfSize(C, ControlDrawSize, bSelected);
+		const float BaseOpacity = C.Opacity >= 0.f ? C.Opacity : ControlOpacity;
+		FLinearColor Fill = bSelected ? FLinearColor(1.f, 0.9f, 0.2f) : C.Color;
+		Fill.A = FMath::Clamp(BaseOpacity + (bSelected ? 0.12f : 0.f), 0.f, 1.f);
+
+		if (C.bSphere)
+		{
+			// A filled disc facing the camera: the projected sphere.
+			const FVector Centre = C.Position + C.Offset;
+			FVector2D CentrePixel, EdgePixel;
+			if (!FSceneView::ProjectWorldToScreen(Centre, View.UnconstrainedViewRect, WorldToClip, CentrePixel)
+				|| !FSceneView::ProjectWorldToScreen(Centre + View.GetViewRight() * Half, View.UnconstrainedViewRect, WorldToClip, EdgePixel))
+			{
+				continue;
+			}
+			const double Radius = FVector2D::Distance(CentrePixel, EdgePixel);
+			constexpr int32 Segments = 28;
+			for (int32 i = 0; i < Segments; ++i)
+			{
+				const double A0 = 2.0 * PI * i / Segments, A1 = 2.0 * PI * (i + 1) / Segments;
+				FCanvasTriangleItem Triangle(CentrePixel * Scale, (CentrePixel + FVector2D(FMath::Cos(A0), FMath::Sin(A0)) * Radius) * Scale, (CentrePixel + FVector2D(FMath::Cos(A1), FMath::Sin(A1)) * Radius) * Scale, GWhiteTexture);
+				Triangle.SetColor(Fill);
+				Triangle.BlendMode = SE_BLEND_Translucent;
+				Canvas.DrawItem(Triangle);
+			}
+			continue;
+		}
+
 		FVector World[8];
 		FVector2D Screen[8];
 		bool bAll = true;
@@ -375,8 +414,6 @@ void FAnimStitchPreview::DrawControlsCanvas(const FSceneView& View, FCanvas& Can
 			Screen[k] *= Scale;
 		}
 		if (!bAll) { continue; }
-		FLinearColor Fill = bSelected ? FLinearColor(1.f, 0.9f, 0.2f) : C.Color;
-		Fill.A = FMath::Clamp(ControlOpacity + (bSelected ? 0.12f : 0.f), 0.f, 1.f);
 		// Far faces first, so the blend reads correctly.
 		TArray<TPair<double, int32>, TInlineAllocator<6>> Order;
 		for (int32 f = 0; f < 6; ++f)
@@ -403,7 +440,7 @@ void FAnimStitchPreview::DrawControlsCanvas(const FSceneView& View, FCanvas& Can
 
 void FAnimStitchPreview::DrawControls(const FSceneView& View, FPrimitiveDrawInterface* PDI) const
 {
-	if (!bShowControls) { return; }
+	if (!bShowControls || !bHelpersVisible) { return; }
 	TArray<FAnimStitchControl> Controls;
 	BuildControls(Controls);
 	if (Controls.Num() == 0) { return; }
@@ -413,22 +450,30 @@ void FAnimStitchPreview::DrawControls(const FSceneView& View, FPrimitiveDrawInte
 		const bool bSelected = C.Id == SelectedControl;
 		const double Half = ControlHalfSize(C, ControlDrawSize, bSelected);
 		const FLinearColor Color = bSelected ? FLinearColor(1.f, 0.9f, 0.2f) : C.Color;
-		// The translucent faces are drawn on the canvas; here only the crisp edges, rotated with the control.
-		DrawWireBox(PDI, FQuatRotationTranslationMatrix(C.Orientation, C.Position), FBox(FVector(-Half), FVector(Half)), Color, SDPG_Foreground);
+		const FVector Display = C.Position + C.Offset;
+		// The translucent fill is drawn on the canvas; here only the crisp edges, rotated with the control.
+		if (C.bSphere)
+		{
+			DrawWireSphere(PDI, Display, Color, Half, 16, SDPG_Foreground);
+		}
+		else
+		{
+			DrawWireBox(PDI, FQuatRotationTranslationMatrix(C.Orientation, Display), FBox(FVector(-Half), FVector(Half)), Color, SDPG_Foreground);
+		}
 		if (C.Id.Kind == EAnimStitchControlKind::IKPole && MainComponent && Mesh && ManualTracks.IsValidIndex(C.Id.A))
 		{
 			const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
 			const FAnimStitchFootChain Chain = FAnimStitchFootLock::BuildChain(Ref, ManualTracks[C.Id.A].Bone);
 			if (Chain.IsValid())
 			{
-				DrawDashedLine(PDI, MainComponent->GetComponentSpaceTransforms()[Chain.Calf].GetTranslation(), C.Position, C.Color, 6.0, SDPG_Foreground);
+				DrawDashedLine(PDI, MainComponent->GetComponentSpaceTransforms()[Chain.Calf].GetTranslation(), Display, C.Color, 6.0, SDPG_Foreground);
 			}
 		}
 	}
 	// Modern-style manipulator on the selected control: thin long axes with small cone tips, plane handles, thin rings, cube scale tips.
 	const FAnimStitchControl* Selected = Controls.FindByPredicate([this](const FAnimStitchControl& C) { return C.Id == SelectedControl; });
 	if (!Selected) { return; }
-	const FVector P = Selected->Position;
+	const FVector P = Selected->Position + Selected->Offset;
 	const double L = GizmoScale(View, P) * GizmoDrawSize;
 	EAnimStitchGizmoMode Mode = GizmoMode;
 	if (Mode == EAnimStitchGizmoMode::Translate && !Selected->bTranslate) { Mode = EAnimStitchGizmoMode::Rotate; }
@@ -491,7 +536,7 @@ void FAnimStitchPreview::DrawControls(const FSceneView& View, FPrimitiveDrawInte
 }
 bool FAnimStitchPreview::BeginGizmoDrag(const FSceneView& View, const FVector2D& Pixel)
 {
-	if (!bShowControls) { return false; }
+	if (!bShowControls || !bHelpersVisible) { return false; }
 	TArray<FAnimStitchControl> Controls;
 	BuildControls(Controls);
 	const FAnimStitchControl* Selected = Controls.FindByPredicate([this](const FAnimStitchControl& C) { return C.Id == SelectedControl; });
@@ -502,7 +547,7 @@ bool FAnimStitchPreview::BeginGizmoDrag(const FSceneView& View, const FVector2D&
 	if (Mode == EAnimStitchGizmoMode::Rotate && !Selected->bRotate) { Mode = EAnimStitchGizmoMode::Translate; }
 	if (Mode == EAnimStitchGizmoMode::Scale && !Selected->bScale) { Mode = Selected->bTranslate ? EAnimStitchGizmoMode::Translate : EAnimStitchGizmoMode::Rotate; }
 
-	const FVector P = Selected->Position;
+	const FVector P = Selected->Position + Selected->Offset;
 	const double L = GizmoScale(View, P) * GizmoDrawSize;
 	FVector Axes[3];
 	MakeAxes(*Selected, CoordSpaces[(int32)Mode], Axes);
@@ -621,14 +666,18 @@ bool FAnimStitchPreview::BeginGizmoDrag(const FSceneView& View, const FVector2D&
 		}
 	}
 	DragTransaction = MakeShared<FScopedTransaction>(LOCTEXT("GizmoDragTx", "Edit Bone Correction"));
+	DragUpdates = 0;
+	DragWrites = 0;
+	DragThrottle = FSlateThrottleManager::Get().EnterResponsiveMode(); // keep the viewport repainting at full rate during the drag
 	return true;
 }
 
 void FAnimStitchPreview::UpdateGizmoDrag(const FSceneView& View, const FVector2D& Pixel)
 {
 	if (!Drag.bActive) { return; }
+	++DragUpdates;
 	const FAnimStitchControl& C = Drag.Control;
-	const FVector P = C.Position;
+	const FVector P = C.Position + C.Offset;
 	EAnimStitchGizmoMode Mode = GizmoMode;
 	if (Mode == EAnimStitchGizmoMode::Translate && !C.bTranslate) { Mode = EAnimStitchGizmoMode::Rotate; }
 	if (Mode == EAnimStitchGizmoMode::Rotate && !C.bRotate) { Mode = EAnimStitchGizmoMode::Translate; }
@@ -686,8 +735,53 @@ void FAnimStitchPreview::UpdateGizmoDrag(const FSceneView& View, const FVector2D
 	Drag.LastRotation = Rotation;
 	ApplyControlEdit(Translation, Rotation, Scale);
 }
+bool FAnimStitchPreview::GetFocusBox(FBox& OutBox) const
+{
+	TArray<FAnimStitchControl> Controls;
+	BuildControls(Controls);
+	if (const FAnimStitchControl* C = Controls.FindByPredicate([this](const FAnimStitchControl& K) { return K.Id == SelectedControl; }))
+	{
+		const double Radius = FMath::Max(ControlHalfSize(*C, ControlDrawSize, true) * 2.5, 18.0);
+		OutBox = FBox::BuildAABB(C->Position + C->Offset, FVector(Radius));
+		return true;
+	}
+	if (SelectedBone != INDEX_NONE && MainComponent && MainComponent->GetComponentSpaceTransforms().IsValidIndex(SelectedBone))
+	{
+		OutBox = FBox::BuildAABB(MainComponent->GetComponentTransform().TransformPosition(MainComponent->GetComponentSpaceTransforms()[SelectedBone].GetTranslation()), FVector(18.0));
+		return true;
+	}
+	if (Mesh)
+	{
+		OutBox = Mesh->GetBounds().GetBox();
+		return true;
+	}
+	return false;
+}
+
+bool FAnimStitchPreview::DebugDragControl(const FAnimStitchControlId& Id, const FVector& Translation)
+{
+	TArray<FAnimStitchControl> Controls;
+	BuildControls(Controls);
+	const FAnimStitchControl* Found = Controls.FindByPredicate([&Id](const FAnimStitchControl& C) { return C.Id == Id; });
+	if (!Found || !ManualTracks.IsValidIndex(Found->Id.A) || Drag.bActive) { return false; }
+	Drag = FDragState();
+	Drag.bActive = true;
+	Drag.Control = *Found;
+	Drag.Time = Playhead;
+	Drag.StartKey = FAnimStitchManualEdits::Sample(ManualTracks[Found->Id.A], Playhead);
+	Drag.StartKey.Time = Playhead;
+	Drag.LastTranslation = Translation;
+	ApplyControlEdit(Translation, FQuat::Identity, FVector::OneVector);
+	return true;
+}
+
 void FAnimStitchPreview::EndGizmoDrag()
 {
+	if (Drag.bActive)
+	{
+		UE_LOG(LogTemp, Display, TEXT("AnimStitch drag: control kind %d on track %d: %d mouse updates, %d key writes, moved %s"), (int32)Drag.Control.Id.Kind, Drag.Control.Id.A, DragUpdates, DragWrites, *Drag.LastTranslation.ToCompactString());
+		FSlateThrottleManager::Get().LeaveResponsiveMode(DragThrottle);
+	}
 	Drag.bActive = false;
 	DragTransaction.Reset(); // closes the undo transaction
 }
@@ -725,6 +819,7 @@ void FAnimStitchPreview::ApplyControlEdit(const FVector& Translation, const FQua
 		Key.Pole = Drag.StartKey.Pole + Translation;
 	}
 	AssetPtr->SetTrackKey(Id.A, Key);
+	++DragWrites;
 	// Show the result right now (the panel would only pick the change up on its next tick).
 	ManualTracks = AssetPtr->Timeline.Tracks;
 	SetPlayhead(Playhead);

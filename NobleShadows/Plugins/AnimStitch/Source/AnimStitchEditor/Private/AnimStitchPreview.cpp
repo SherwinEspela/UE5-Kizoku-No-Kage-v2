@@ -495,7 +495,7 @@ void FAnimStitchPreview::Draw(const FSceneView* View, FPrimitiveDrawInterface* P
 	{
 		DrawControls(*View, PDI);
 	}
-	if (bShowGrid)
+	if (bShowGrid && bHelpersVisible)
 	{
 		// Ground grid: 1 m cells, a stronger line every 5 m, coloured world axes. Lifted slightly to avoid z-fighting with the floor.
 		constexpr int32 HalfCells = 20;
@@ -603,25 +603,22 @@ void FAnimStitchPreview::Draw(const FSceneView* View, FPrimitiveDrawInterface* P
 	{
 		return;
 	}
-	// Animation Sequence editor style: dark gray curve, small division points, dark circles at the start and end.
-	const FLinearColor CurveColor(0.12f, 0.12f, 0.12f);
-	const FLinearColor DotColor(0.2f, 0.2f, 0.2f);
+	// Animation Sequence editor style: a dark gray curve, small division points along it and dark dots at the start and end.
+	const FLinearColor CurveColor(0.16f, 0.16f, 0.16f);
+	const FLinearColor DivisionColor(0.04f, 0.04f, 0.04f);
 	auto OnGround = [](const FVector& P) { return FVector(P.X, P.Y, 1.0); };
 	for (int32 i = 1; i < TrajectoryPoints.Num(); ++i)
 	{
 		PDI->DrawLine(OnGround(TrajectoryPoints[i - 1]), OnGround(TrajectoryPoints[i]), CurveColor, SDPG_Foreground, 1.5f);
 	}
-	// One small division point per second so speed changes and snaps read clearly.
-	for (int32 i = 0; i < TrajectoryPoints.Num(); i += int32(TrajectorySampleRate))
+	// A division point every half second (the trajectory is sampled at TrajectorySampleRate).
+	const int32 DivisionStep = FMath::Max(1, int32(TrajectorySampleRate * 0.5));
+	for (int32 i = DivisionStep; i < TrajectoryPoints.Num() - 1; i += DivisionStep)
 	{
-		PDI->DrawPoint(OnGround(TrajectoryPoints[i]), DotColor, 4.f, SDPG_Foreground);
+		PDI->DrawPoint(OnGround(TrajectoryPoints[i]), DivisionColor, 5.f, SDPG_Foreground);
 	}
-	for (const FVector& End : { TrajectoryPoints[0], TrajectoryPoints.Last() })
-	{
-		const FVector Centre = OnGround(End);
-		DrawCircle(PDI, Centre, FVector::ForwardVector, FVector::RightVector, FLinearColor(0.02f, 0.02f, 0.02f), 14.0, 24, SDPG_Foreground, 2.f);
-		PDI->DrawPoint(Centre, FLinearColor(0.02f, 0.02f, 0.02f), 9.f, SDPG_Foreground);
-	}
+	PDI->DrawPoint(OnGround(TrajectoryPoints[0]), FLinearColor::Black, 9.f, SDPG_Foreground);
+	PDI->DrawPoint(OnGround(TrajectoryPoints.Last()), FLinearColor::Black, 9.f, SDPG_Foreground);
 }
 // ---------------------------------------------------------------------------------------------
 
@@ -731,6 +728,14 @@ bool FAnimStitchViewportClient::InputKey(const FInputKeyEventArgs& EventArgs)
 	if (Pinned && EventArgs.Event == IE_Pressed && !EventArgs.Viewport->KeyState(EKeys::LeftControl) && !EventArgs.Viewport->KeyState(EKeys::LeftAlt) && !EventArgs.Viewport->KeyState(EKeys::LeftShift))
 	{
 		// W / E / R: translate / rotate / scale gizmo, like the standard editor widget.
+		if (EventArgs.Key == EKeys::G) { Pinned->ToggleHelpers(); return true; }
+		if (EventArgs.Key == EKeys::T) { Pinned->SetCoordSpace(Pinned->GetCoordSpace() == EAnimStitchCoordSpace::World ? EAnimStitchCoordSpace::Local : EAnimStitchCoordSpace::World); return true; }
+		if (EventArgs.Key == EKeys::F)
+		{
+			FBox Box;
+			if (Pinned->GetFocusBox(Box)) { FocusViewportOnBox(Box, false); }
+			return true;
+		}
 		if (EventArgs.Key == EKeys::W) { Pinned->SetGizmoMode(EAnimStitchGizmoMode::Translate); return true; }
 		if (EventArgs.Key == EKeys::E) { Pinned->SetGizmoMode(EAnimStitchGizmoMode::Rotate); return true; }
 		if (EventArgs.Key == EKeys::R) { Pinned->SetGizmoMode(EAnimStitchGizmoMode::Scale); return true; }
@@ -758,6 +763,30 @@ void FAnimStitchViewportClient::CapturedMouseMove(FViewport* InViewport, int32 I
 {
 	if (bGizmoDrag) { UpdateDrag(InViewport, InMouseX, InMouseY); return; }
 	FEditorViewportClient::CapturedMouseMove(InViewport, InMouseX, InMouseY);
+}
+
+FReply SAnimStitchViewport::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
+{
+	// W / E / R / G also work when the key reaches the widget instead of the viewport client.
+	if (Preview.IsValid() && !InKeyEvent.IsControlDown() && !InKeyEvent.IsAltDown() && !InKeyEvent.IsShiftDown() && !InKeyEvent.IsRepeat())
+	{
+		const FKey Key = InKeyEvent.GetKey();
+		if (Key == EKeys::W) { Preview->SetGizmoMode(EAnimStitchGizmoMode::Translate); return FReply::Handled(); }
+		if (Key == EKeys::E) { Preview->SetGizmoMode(EAnimStitchGizmoMode::Rotate); return FReply::Handled(); }
+		if (Key == EKeys::R) { Preview->SetGizmoMode(EAnimStitchGizmoMode::Scale); return FReply::Handled(); }
+		if (Key == EKeys::G) { Preview->ToggleHelpers(); return FReply::Handled(); }
+		if (Key == EKeys::T) { Preview->SetCoordSpace(Preview->GetCoordSpace() == EAnimStitchCoordSpace::World ? EAnimStitchCoordSpace::Local : EAnimStitchCoordSpace::World); return FReply::Handled(); }
+	}
+	return SEditorViewport::OnKeyDown(MyGeometry, InKeyEvent);
+}
+
+void SAnimStitchViewport::OnFocusViewportToSelection()
+{
+	FBox Box;
+	if (Client.IsValid() && Preview.IsValid() && Preview->GetFocusBox(Box))
+	{
+		Client->FocusViewportOnBox(Box, false); // same call the regular viewport makes: centres and zooms, animated
+	}
 }
 
 void SAnimStitchViewport::HandleRedraw()

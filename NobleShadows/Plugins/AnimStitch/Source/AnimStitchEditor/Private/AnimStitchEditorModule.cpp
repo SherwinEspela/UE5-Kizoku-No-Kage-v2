@@ -6,12 +6,17 @@
 #include "WorkspaceMenuStructureModule.h"
 #include "Styling/AppStyle.h"
 #include "SAnimStitchPanel.h"
+#include "Editor.h"
+#include "TimerManager.h"
+#include "UObject/StrongObjectPtr.h"
 
 #define LOCTEXT_NAMESPACE "AnimStitch"
 
 static const FName AnimStitchTabName("AnimStitch");
 
 TWeakPtr<SAnimStitchPanel> FAnimStitchEditorModule::ActivePanel;
+TWeakPtr<SDockTab> FAnimStitchEditorModule::ActiveTab;
+static TStrongObjectPtr<UAnimStitchTimelineAsset> GCarryOverAsset;
 
 void FAnimStitchEditorModule::StartupModule()
 {
@@ -39,10 +44,39 @@ TSharedRef<SDockTab> FAnimStitchEditorModule::SpawnTab(const FSpawnTabArgs& Args
 	[
 		Panel
 	];
+	// The editor sections (toolbar, viewport, timeline, bottom bar, side panel) live in their own dockable tabs inside this one.
+	Panel->InitializeDocking(Tab);
+	if (UAnimStitchTimelineAsset* Carried = TakeCarryOverAsset())
+	{
+		Panel->SetAsset(Carried);
+	}
 	ActivePanel = Panel;
+	ActiveTab = Tab;
 	return Tab;
 }
 
+void FAnimStitchEditorModule::RequestLayoutReset(UAnimStitchTimelineAsset* CarryOverAsset)
+{
+	GCarryOverAsset.Reset(CarryOverAsset);
+	if (!GEditor) { return; }
+	// Close and re-open from the next ticks (never from inside the panel's own menu callback).
+	GEditor->GetTimerManager()->SetTimerForNextTick(FTimerDelegate::CreateLambda([]()
+	{
+		if (const TSharedPtr<SDockTab> Tab = ActiveTab.Pin()) { Tab->RequestCloseTab(); }
+		GEditor->GetTimerManager()->SetTimerForNextTick(FTimerDelegate::CreateLambda([]()
+		{
+			SAnimStitchPanel::bSkipLayoutPersist = false;
+			FGlobalTabmanager::Get()->TryInvokeTab(AnimStitchTabName);
+		}));
+	}));
+}
+
+UAnimStitchTimelineAsset* FAnimStitchEditorModule::TakeCarryOverAsset()
+{
+	UAnimStitchTimelineAsset* Asset = GCarryOverAsset.Get();
+	GCarryOverAsset.Reset();
+	return Asset;
+}
 void FAnimStitchEditorModule::OpenTimelineAsset(UAnimStitchTimelineAsset* Timeline)
 {
 	FGlobalTabmanager::Get()->TryInvokeTab(AnimStitchTabName);

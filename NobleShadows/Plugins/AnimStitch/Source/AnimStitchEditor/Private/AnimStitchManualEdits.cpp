@@ -25,6 +25,13 @@ namespace
 	}
 }
 
+bool FAnimStitchManualEdits::IsPelvisBone(FName Bone)
+{
+	const FString Lower = Bone.ToString().ToLower();
+	if (Lower.Contains(TEXT("twist")) || Lower.Contains(TEXT("ik")) || Lower.Contains(TEXT("corrective"))) { return false; }
+	return Lower.Contains(TEXT("pelvis")) || Lower == TEXT("hips") || Lower == TEXT("hip");
+}
+
 int32 FAnimStitchManualEdits::GetBoneSide(FName Bone)
 {
 	const FString Lower = Bone.ToString().ToLower();
@@ -242,7 +249,7 @@ void FAnimStitchManualEdits::Apply(const FReferenceSkeleton& Ref, const TArray<F
 			bool bMoved = false;
 			for (const TPair<int32, const FAnimStitchTrack*>& Entry : BoneTracks)
 			{
-				if (!Entry.Value->bKeepFeetPlanted || IsIdentityKey(Sample(*Entry.Value, Time))) { continue; }
+				if (!Entry.Value->bKeepFeetPlanted || !IsPelvisBone(Entry.Value->Bone) || IsIdentityKey(Sample(*Entry.Value, Time))) { continue; }
 				const int32 TrackBone = Ref.FindBoneIndex(Entry.Value->Bone);
 				for (int32 B = Chain.Thigh; B != INDEX_NONE; B = Ref.GetParentIndex(B)) { bMoved |= (B == TrackBone); }
 			}

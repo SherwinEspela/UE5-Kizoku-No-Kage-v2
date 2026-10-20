@@ -69,6 +69,24 @@ public:
 	double GetPlayhead() const { return Playhead; }
 	UAnimStitchTimelineAsset* GetAsset() const { return Asset; }
 
+	// ---- Adding bone tracks (shared by the lane right-click menu and the main toolbar) ----
+	void BuildCoreBoneMenu(class FMenuBuilder& Menu);
+	void BuildLimbMenu(class FMenuBuilder& Menu);
+	/** Opens the bone picker window (bones already on the track list are not offered; hands and feet offer FK / IK). */
+	void PickOtherBone();
+	int32 GetSelectedTrack() const { return SelectedTrack; }
+	/** Bumped every time a track is selected (clicked, added, jumped to), even when it is the same track again. */
+	uint32 GetTrackSelectionSerial() const { return TrackSelectionSerial; }
+	static bool HasKeyClipboard();
+	/** Paste is only offered when the clipboard holds keys for a track that exists in this timeline. */
+	bool CanPasteKeys() const;
+	/** Copy + paste in one step; needs selected keys and a playhead that is not already on them. */
+	bool CanDuplicateKeysToPlayhead() const;
+	void DuplicateKeysToPlayhead() { CopySelectedKeys(); PasteKeys(); }
+	/** Selecting a control in the viewport selects its track here (no key / control reselect loop). */
+	void SelectTrackFromViewport(int32 Track);
+	bool IsDraggingFootLock() const { return bDragStarted && (DragMode == EDrag::FootHandle || DragMode == EDrag::FootRegion); }
+
 	// ---- Key value expander (numeric entry under a track lane) ----
 	/** Width of the track column on the left (Sequencer style); the time area starts to its right. */
 	float GetLabelWidth() const { return LabelWidth; }
@@ -122,7 +140,7 @@ public:
 	virtual void PostRedo(bool bSuccess) override { ClampSelection(); }
 
 private:
-	enum class EHit : uint8 { None, Ruler, Body, TrimLeft, TrimRight, Overlap, MarkerStart, MarkerEnd, FootLane, TrackLane, TrackKey, TrackPrev, TrackNext, TrackExpand, TrackAddKey, Splitter };
+	enum class EHit : uint8 { None, Ruler, Body, TrimLeft, TrimRight, Overlap, MarkerStart, MarkerEnd, FootLane, TrackLane, TrackKey, TrackPrev, TrackNext, TrackExpand, TrackAddKey, Splitter, FootHandle, FootRegion };
 	struct FHit
 	{
 		EHit Type = EHit::None;
@@ -130,7 +148,7 @@ private:
 		/** Track keys: the key index. */
 		int32 Sub = INDEX_NONE;
 	};
-	enum class EDrag : uint8 { None, Scrub, Move, TrimLeft, TrimRight, Overlap, Pan, MarkerStart, MarkerEnd, FootLane, KeyMove, Marquee, Splitter };
+	enum class EDrag : uint8 { None, Scrub, Move, TrimLeft, TrimRight, Overlap, Pan, MarkerStart, MarkerEnd, FootLane, KeyMove, Marquee, Splitter, FootHandle, FootRegion };
 
 	void AddSequencesAt(const TArray<UAnimSequence*>& Sequences, int32 Index);
 	bool bPendingZoomFit = false;
@@ -145,8 +163,11 @@ private:
 	float GetTrackLaneTop(int32 Track) const { return GetTracksTop() + Track * (TrackLaneHeight + 2.f) + (IsExpanderOpen() && Track > ExpandedTrack ? ExpanderHeight : 0.f) - VScroll; }
 	int32 ExpandedTrack = INDEX_NONE;
 	float LabelWidth = 290.f;
+	uint32 TrackSelectionSerial = 0;
 	float VScroll = 0.f;
-	bool WarnIfTrackExists(FName Bone, EAnimStitchTrackKind Kind);
+	bool HasTrackFor(FName Bone, EAnimStitchTrackKind Kind) const;
+	bool LimbTrackExists(bool bLeft, bool bLeg, bool bIK) const;
+	void AddLimbForEffector(FName Effector, bool bIK);
 	bool bShowFrames = false;
 	void PaintLeftColumn(FSlateWindowElementList& Out, int32 Layer, const FGeometry& G) const;
 	mutable float CachedWidth = 600.f;
@@ -155,8 +176,8 @@ private:
 	void OpenAddTrackMenu(const FPointerEvent& Event);
 	void OpenTrackMenu(const FPointerEvent& Event, int32 Track, int32 Key, double Time);
 	void AddBoneTrack(FName Bone, bool bRotationOnly, int32 GroupId);
+	bool HasSelectedKeys() const { return SelectedKeys.Num() > 0 || (Asset->Timeline.Tracks.IsValidIndex(SelectedTrack) && Asset->Timeline.Tracks[SelectedTrack].Keys.IsValidIndex(SelectedKey)); }
 	void AddLimb(bool bLeft, bool bLeg, bool bIK);
-	void PickOtherBone();
 	int32 SelectedTrack = INDEX_NONE;
 	int32 SelectedKey = INDEX_NONE;
 
@@ -165,6 +186,10 @@ private:
 	/** Every selected key (the primary SelectedTrack / SelectedKey is one of them). */
 	TArray<FKeyRef> SelectedKeys;
 	TArray<FKeyRef> MarqueeInitial;
+	double FootRegionStart = 0.0, FootRegionEnd = 0.0, FootRegionMin = 0.0, FootRegionMax = 0.0, FootAnchor = 0.0;
+	bool bFootRegionHasEnd = false;
+	double FootHandleTime = 0.0;
+	double FootHandleMin = 0.0, FootHandleMax = 0.0;
 	FVector2f MarqueeStart = FVector2f::ZeroVector;
 	FVector2f MarqueeCurrent = FVector2f::ZeroVector;
 	bool IsKeySelected(int32 Track, int32 Key) const { return SelectedKeys.Contains(FKeyRef{ Track, Key }) || (Track == SelectedTrack && Key == SelectedKey); }

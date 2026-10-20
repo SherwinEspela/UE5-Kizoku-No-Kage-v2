@@ -123,7 +123,7 @@ void SAnimStitchKeyPanel::Construct(const FArguments& InArgs)
 	LiveIK = InArgs._LiveIK;
 
 	auto IsIK = [this]() { const FAnimStitchTrack* T = GetTrack(); return T && T->Kind == EAnimStitchTrackKind::IKLimb; };
-	auto IsBone = [this]() { const FAnimStitchTrack* T = GetTrack(); return T && T->Kind == EAnimStitchTrackKind::Bone; };
+	auto IsBone = [this]() { const FAnimStitchTrack* T = GetTrack(); return T && T->Kind == EAnimStitchTrackKind::Bone && FAnimStitchManualEdits::IsPelvisBone(T->Bone); }; // Keep feet planted: pelvis only
 	auto ShowTranslate = [this]() { const FAnimStitchTrack* T = GetTrack(); return T && !(T->Kind == EAnimStitchTrackKind::Bone && T->bRotationOnly); };
 
 	ChildSlot

@@ -118,7 +118,7 @@ UAnimSequence* FAnimStitchBaker::Bake(const FAnimStitchTimeline& Timeline, const
 	// Pelvis-style corrections re-plant the feet with leg IK, so the legs need tracks too.
 	FName PlantFeet[2];
 	bool bPlantFeet = false;
-	for (const FAnimStitchTrack& Track : Timeline.Tracks) { bPlantFeet |= Track.Kind == EAnimStitchTrackKind::Bone && Track.bKeepFeetPlanted; }
+	for (const FAnimStitchTrack& Track : Timeline.Tracks) { bPlantFeet |= Track.Kind == EAnimStitchTrackKind::Bone && Track.bKeepFeetPlanted && FAnimStitchManualEdits::IsPelvisBone(Track.Bone); }
 	if (bPlantFeet)
 	{
 		FAnimStitchFootLock::ResolveFootBones(Evaluator.GetSkeleton(), Timeline.FootLock, PlantFeet[0], PlantFeet[1]);

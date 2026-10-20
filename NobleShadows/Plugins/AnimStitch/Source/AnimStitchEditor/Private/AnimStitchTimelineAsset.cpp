@@ -14,8 +14,80 @@ UAnimStitchTimelineAsset::UAnimStitchTimelineAsset()
 void UAnimStitchTimelineAsset::PostTransacted(const FTransactionObjectEvent& TransactionEvent)
 {
 	Super::PostTransacted(TransactionEvent);
+	bUnsavedChanges = true;
 	++EditCounter;
 	++ManualCounter;
+}
+
+UAnimStitchTimelineAsset::FKeyFollowScope::FKeyFollowScope(UAnimStitchTimelineAsset& InAsset)
+	: Asset(InAsset)
+{
+	FAnimStitchTimeline& TL = Asset.Timeline;
+	TSet<FGuid> Seen;
+	for (FAnimStitchClip& Clip : TL.Clips)
+	{
+		if (!Clip.ClipId.IsValid() || Seen.Contains(Clip.ClipId)) { Clip.ClipId = FGuid::NewGuid(); }
+		Seen.Add(Clip.ClipId);
+	}
+	constexpr double Eps = 1e-6;
+	for (int32 t = 0; t < TL.Tracks.Num(); ++t)
+	{
+		for (int32 k = 0; k < TL.Tracks[t].Keys.Num(); ++k)
+		{
+			const double Time = TL.Tracks[t].Keys[k].Time;
+			FOwner Owner;
+			Owner.Track = t;
+			Owner.Key = k;
+			for (int32 c = TL.Clips.Num() - 1; c >= 0; --c) // topmost clip wins inside a crossfade
+			{
+				const FAnimStitchClip& Clip = TL.Clips[c];
+				if (Time >= Clip.StartTime - Eps && Time <= Clip.GetEndTime() + Eps)
+				{
+					Owner.Clip = Clip.ClipId;
+					Owner.SourceTime = Clip.TrimIn + (Time - Clip.StartTime);
+					break;
+				}
+			}
+			Owners.Add(Owner);
+		}
+	}
+}
+
+void UAnimStitchTimelineAsset::FKeyFollowScope::Apply()
+{
+	if (bApplied) { return; }
+	bApplied = true;
+	FAnimStitchTimeline& TL = Asset.Timeline;
+	bool bChanged = false;
+	for (int32 t = 0; t < TL.Tracks.Num(); ++t)
+	{
+		FAnimStitchTrack& Track = TL.Tracks[t];
+		TArray<TPair<double, FAnimStitchTrackKey>> Moved;
+		for (const FOwner& Owner : Owners)
+		{
+			if (Owner.Track != t || !Track.Keys.IsValidIndex(Owner.Key)) { continue; }
+			FAnimStitchTrackKey Key = Track.Keys[Owner.Key];
+			if (Owner.Clip.IsValid())
+			{
+				if (const FAnimStitchClip* Clip = TL.Clips.FindByPredicate([&Owner](const FAnimStitchClip& C) { return C.ClipId == Owner.Clip; }))
+				{
+					const double NewTime = FMath::Clamp(Clip->StartTime + (Owner.SourceTime - Clip->TrimIn), Clip->StartTime, Clip->GetEndTime());
+					if (!FMath::IsNearlyEqual(NewTime, Key.Time, 1e-9)) { bChanged = true; }
+					Key.Time = NewTime;
+				}
+			}
+			Moved.Add({ Key.Time, Key });
+		}
+		if (Moved.Num() != Track.Keys.Num()) { continue; } // the key list changed under us: leave it alone
+		Moved.StableSort([](const TPair<double, FAnimStitchTrackKey>& A, const TPair<double, FAnimStitchTrackKey>& B) { return A.Key < B.Key; });
+		Track.Keys.Reset();
+		for (const TPair<double, FAnimStitchTrackKey>& Entry : Moved)
+		{
+			if (Track.Keys.Num() > 0 && FMath::Abs(Track.Keys.Last().Time - Entry.Key) < 1e-4) { Track.Keys.Last() = Entry.Value; continue; } // two keys landed on the same moment
+			Track.Keys.Add(Entry.Value);
+		}
+	}
+	if (bChanged) { Asset.TouchManual(); }
 }
 
 void UAnimStitchTimelineAsset::GetPlaybackRange(double& OutStart, double& OutEnd) const
@@ -43,6 +115,7 @@ USkeleton* UAnimStitchTimelineAsset::GetSkeleton() const
 int32 UAnimStitchTimelineAsset::AddSequences(const TArray<UAnimSequence*>& Sequences, int32 InsertIndex, TArray<FText>& OutWarnings)
 {
 	Touch();
+	FKeyFollowScope KeyFollow(*this); // correction keys follow their clip
 	USkeleton* Skeleton = GetSkeleton();
 	int32 Index = (InsertIndex == INDEX_NONE) ? Timeline.Clips.Num() : FMath::Clamp(InsertIndex, 0, Timeline.Clips.Num());
 	int32 Added = 0;
@@ -66,6 +139,7 @@ int32 UAnimStitchTimelineAsset::AddSequences(const TArray<UAnimSequence*>& Seque
 		}
 		FAnimStitchClip Clip;
 		Clip.Sequence = Seq;
+		Clip.ClipId = FGuid::NewGuid();
 		Clip.TrimIn = 0.0;
 		Clip.TrimOut = Seq->GetPlayLength();
 		Clip.BlendIn = GetDefault<UAnimStitchSettings>()->DefaultCrossfadeCurve;
@@ -73,6 +147,7 @@ int32 UAnimStitchTimelineAsset::AddSequences(const TArray<UAnimSequence*>& Seque
 		++Added;
 	}
 	Timeline.Relayout();
+	KeyFollow.Apply(); // existing keys first, then the new clips get their end keys
 	if (Added > 0 && Timeline.Tracks.Num() > 0)
 	{
 		// Auto-key: every correction lane gets a key at the end of each new clip (holding its value there).
@@ -99,6 +174,7 @@ void UAnimStitchTimelineAsset::RemoveClip(int32 Index)
 		return;
 	}
 	Touch();
+	FKeyFollowScope KeyFollow(*this); // correction keys follow their clip
 	Timeline.Clips.RemoveAt(Index);
 	if (Timeline.RootAuthorityIndex > Index || Timeline.RootAuthorityIndex >= Timeline.Clips.Num())
 	{
@@ -118,7 +194,9 @@ int32 UAnimStitchTimelineAsset::DuplicateClip(int32 Index)
 		return INDEX_NONE;
 	}
 	Touch();
+	FKeyFollowScope KeyFollow(*this); // correction keys follow their clip
 	FAnimStitchClip Copy = Timeline.Clips[Index];
+	Copy.ClipId = FGuid::NewGuid();
 	Copy.OverlapIn = 0.0;
 	Timeline.Clips.Insert(Copy, Index + 1);
 	if (Timeline.RootAuthorityIndex > Index)
@@ -140,6 +218,7 @@ void UAnimStitchTimelineAsset::MoveClip(int32 From, int32 To)
 		return;
 	}
 	Touch();
+	FKeyFollowScope KeyFollow(*this); // correction keys follow their clip
 	const int32 Lo = FMath::Min(From, To);
 	const int32 Hi = FMath::Max(From, To);
 	int32& Auth = Timeline.RootAuthorityIndex;
@@ -172,6 +251,7 @@ void UAnimStitchTimelineAsset::SetOverlap(int32 Index, double NewOverlap)
 		return;
 	}
 	Touch();
+	FKeyFollowScope KeyFollow(*this); // correction keys follow their clip
 	Timeline.Clips[Index].OverlapIn = NewOverlap;
 	Timeline.Relayout();
 }
@@ -183,6 +263,7 @@ void UAnimStitchTimelineAsset::SetTrim(int32 Index, double NewTrimIn, double New
 		return;
 	}
 	Touch();
+	FKeyFollowScope KeyFollow(*this); // correction keys follow their clip
 	FAnimStitchClip& Clip = Timeline.Clips[Index];
 	const double Length = Clip.Sequence->GetPlayLength();
 	NewTrimIn = FMath::Clamp(NewTrimIn, 0.0, Length - FAnimStitchTimeline::MinClipDuration);
@@ -223,11 +304,11 @@ namespace
 		}
 	}
 
-	void StoreFootEvent(FAnimStitchTimeline& Timeline, int32 Foot, double Time, EAnimStitchFootAction Action)
+	FAnimStitchFootEvent* StoreFootEvent(FAnimStitchTimeline& Timeline, int32 Foot, double Time, EAnimStitchFootAction Action)
 	{
 		if (Timeline.Clips.Num() == 0)
 		{
-			return;
+			return nullptr;
 		}
 		// The topmost clip containing the time owns the event; outside every clip, the nearest end clip does.
 		int32 Owner = Time < Timeline.Clips[0].StartTime ? 0 : Timeline.Clips.Num() - 1;
@@ -243,7 +324,8 @@ namespace
 		Event.Foot = Foot;
 		Event.SrcTime = Timeline.Clips[Owner].TrimIn + (Time - Timeline.Clips[Owner].StartTime);
 		Event.Action = Action;
-		Timeline.Clips[Owner].FootEvents.Add(Event);
+		const int32 Added = Timeline.Clips[Owner].FootEvents.Add(Event);
+		return &Timeline.Clips[Owner].FootEvents[Added];
 	}
 }
 
@@ -253,6 +335,23 @@ void UAnimStitchTimelineAsset::AddFootEvent(int32 Foot, double TimelineTime, EAn
 	constexpr double SameMoment = 1.0 / 120.0;
 	RemoveFootEventsIn(Timeline, Foot, TimelineTime - SameMoment, TimelineTime + SameMoment);
 	StoreFootEvent(Timeline, Foot, TimelineTime, Action);
+}
+
+void UAnimStitchTimelineAsset::MoveFootEvent(int32 Foot, double FromTime, double ToTime)
+{
+	constexpr double SameMoment = 1.0 / 120.0;
+	for (FAnimStitchClip& Clip : Timeline.Clips)
+	{
+		for (int32 i = 0; i < Clip.FootEvents.Num(); ++i)
+		{
+			const FAnimStitchFootEvent Event = Clip.FootEvents[i];
+			if (Event.Foot != Foot || FMath::Abs(FootEventTime(Clip, Event) - FromTime) > SameMoment) { continue; }
+			Touch();
+			Clip.FootEvents.RemoveAt(i);
+			if (FAnimStitchFootEvent* Stored = StoreFootEvent(Timeline, Foot, ToTime, Event.Action)) { Stored->PinOffset = Event.PinOffset; }
+			return;
+		}
+	}
 }
 
 void UAnimStitchTimelineAsset::PaintFootLock(int32 Foot, double TimelineStart, double TimelineEnd)
@@ -286,6 +385,7 @@ int32 UAnimStitchTimelineAsset::AddTrack(const FAnimStitchTrack& Track)
 	}
 	TouchManual();
 	FAnimStitchTrack NewTrack = Track;
+	NewTrack.bKeepFeetPlanted = Track.Kind == EAnimStitchTrackKind::Bone && FAnimStitchManualEdits::IsPelvisBone(Track.Bone) && Track.bKeepFeetPlanted;
 	if (NewTrack.Keys.Num() == 0)
 	{
 		// Like a new Sequencer section: keys at the start and the end of the timeline (identity offset / IK off).
@@ -372,6 +472,15 @@ void UAnimStitchTimelineAsset::SetTrackKeyWeight(int32 TrackIndex, int32 KeyInde
 	}
 }
 
+void UAnimStitchTimelineAsset::SetTrackControlStyle(int32 TrackIndex, bool bPole, const FAnimStitchControlStyle& Style)
+{
+	if (Timeline.Tracks.IsValidIndex(TrackIndex))
+	{
+		TouchManual();
+		(bPole ? Timeline.Tracks[TrackIndex].PoleStyle : Timeline.Tracks[TrackIndex].ControlStyle) = Style;
+	}
+}
+
 void UAnimStitchTimelineAsset::SetTrackKeepFeet(int32 TrackIndex, bool bKeep)
 {
 	if (Timeline.Tracks.IsValidIndex(TrackIndex))
@@ -453,6 +562,7 @@ bool UAnimStitchTimelineAsset::SplitClip(int32 Index, double TimelineTime)
 	FAnimStitchClip Second = Timeline.Clips[Index];
 	const double SourceTime = Second.TrimIn + (TimelineTime - Second.StartTime);
 	Second.TrimIn = SourceTime;
+	Second.ClipId = FGuid::NewGuid();
 	Second.OverlapIn = 0.0; // butt-joined to the first half
 	Timeline.Clips[Index].TrimOut = SourceTime;
 	Timeline.Clips.Insert(Second, Index + 1);
