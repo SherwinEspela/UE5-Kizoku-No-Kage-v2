@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Widgets/SCompoundWidget.h"
@@ -20,6 +20,8 @@ public:
 
 	SLATE_BEGIN_ARGS(SAnimStitchKeyPanel) {}
 		SLATE_ARGUMENT(TSharedPtr<SAnimStitchTimeline>, Timeline)
+		/** The track this panel edits (a fixed lane, or follows the selected control in the Details tab). */
+		SLATE_ATTRIBUTE(int32, TrackIndex)
 		SLATE_ARGUMENT(FLiveIKDelegate, LiveIK)
 	SLATE_END_ARGS()
 
@@ -33,5 +35,6 @@ private:
 
 	TSharedPtr<SAnimStitchTimeline> Timeline;
 	FLiveIKDelegate LiveIK;
+	TAttribute<int32> TrackIndexAttr;
 	TSharedPtr<FScopedTransaction> SliderTransaction;
 };

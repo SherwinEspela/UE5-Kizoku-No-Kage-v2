@@ -1,5 +1,8 @@
 ﻿#include "SAnimStitchBoneDetails.h"
 #include "AnimStitchPreview.h"
+#include "SAnimStitchTimeline.h"
+#include "SAnimStitchKeyPanel.h"
+#include "AnimStitchTimelineAsset.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
@@ -52,9 +55,34 @@ FText SAnimStitchBoneDetails::GetSubHeader() const
 	return FText::Format(LOCTEXT("BoneSubHeader", "Bone {0}  |  parent: {1}"), Bone, Parent == INDEX_NONE ? LOCTEXT("NoParent", "(none)") : FText::FromName(Preview->GetMeshBoneName(Parent)));
 }
 
+bool SAnimStitchBoneDetails::GetSelectedControlTrack(int32& OutTrack) const
+{
+	if (!Preview.IsValid() || !Timeline.IsValid() || !Timeline->GetAsset()) { return false; }
+	const FAnimStitchControlId Id = Preview->GetSelectedControl();
+	const bool bTrackControl = Id.Kind == EAnimStitchControlKind::Bone || Id.Kind == EAnimStitchControlKind::IKEffector || Id.Kind == EAnimStitchControlKind::IKPole;
+	OutTrack = Id.A;
+	return bTrackControl && Timeline->GetAsset()->Timeline.Tracks.IsValidIndex(Id.A);
+}
+
+EVisibility SAnimStitchBoneDetails::GetControlVisibility() const
+{
+	int32 Track = INDEX_NONE;
+	return GetSelectedControlTrack(Track) ? EVisibility::Visible : EVisibility::Collapsed;
+}
+
+FText SAnimStitchBoneDetails::GetControlTitle() const
+{
+	int32 Track = INDEX_NONE;
+	if (!GetSelectedControlTrack(Track)) { return FText::GetEmpty(); }
+	const FAnimStitchTrack& T = Timeline->GetAsset()->Timeline.Tracks[Track];
+	const FAnimStitchControlId Id = Preview->GetSelectedControl();
+	return FText::Format(LOCTEXT("ControlDetailsTitle", "Control: {0}{1}"), FText::FromName(T.Bone), Id.Kind == EAnimStitchControlKind::IKPole ? LOCTEXT("CtrlPole", " (pole)") : (T.Kind == EAnimStitchTrackKind::IKLimb ? LOCTEXT("CtrlIK", " (IK)") : FText::GetEmpty()));
+}
+
 EVisibility SAnimStitchBoneDetails::GetNoSelectionVisibility() const
 {
-	return Preview.IsValid() && Preview->GetSelectedBone() != INDEX_NONE ? EVisibility::Collapsed : EVisibility::Visible;
+	int32 Track = INDEX_NONE;
+	return (Preview.IsValid() && Preview->GetSelectedBone() != INDEX_NONE) || GetSelectedControlTrack(Track) ? EVisibility::Collapsed : EVisibility::Visible;
 }
 
 EVisibility SAnimStitchBoneDetails::GetSelectionVisibility() const
@@ -104,6 +132,8 @@ TSharedRef<SWidget> SAnimStitchBoneDetails::MakeGroup(const FText& Title, ESpace
 void SAnimStitchBoneDetails::Construct(const FArguments& InArgs)
 {
 	Preview = InArgs._Preview;
+	Timeline = InArgs._Timeline;
+	const TFunction<bool(int32, FAnimStitchTrackKey&)> LiveIK = InArgs._LiveIK;
 
 	ChildSlot
 	[
@@ -113,6 +143,21 @@ void SAnimStitchBoneDetails::Construct(const FArguments& InArgs)
 			+ SVerticalBox::Slot().AutoHeight()
 			[
 				SNew(STextBlock).Text(LOCTEXT("DetailsTitle", "Details")).Font(FAppStyle::GetFontStyle("BoldFont"))
+			]
+			// The selected control: its transform and, for an IK limb, the weight. Typing writes / adjusts the key at the playhead, like dragging.
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
+			[
+				SNew(SVerticalBox).Visibility(this, &SAnimStitchBoneDetails::GetControlVisibility)
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SNew(STextBlock).Text(this, &SAnimStitchBoneDetails::GetControlTitle).Font(FAppStyle::GetFontStyle("BoldFont")).ColorAndOpacity(FLinearColor(0.5f, 0.85f, 1.f))
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
+				[
+					SNew(SAnimStitchKeyPanel).Timeline(Timeline)
+					.TrackIndex_Lambda([this]() { int32 T = INDEX_NONE; GetSelectedControlTrack(T); return T; })
+					.LiveIK(LiveIK)
+				]
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
 			[

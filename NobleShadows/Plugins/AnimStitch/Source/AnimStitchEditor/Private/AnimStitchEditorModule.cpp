@@ -6,6 +6,7 @@
 #include "WorkspaceMenuStructureModule.h"
 #include "Styling/AppStyle.h"
 #include "SAnimStitchPanel.h"
+#include "AnimStitchContentBrowserBadge.h"
 #include "Editor.h"
 #include "TimerManager.h"
 #include "UObject/StrongObjectPtr.h"
@@ -20,6 +21,7 @@ static TStrongObjectPtr<UAnimStitchTimelineAsset> GCarryOverAsset;
 
 void FAnimStitchEditorModule::StartupModule()
 {
+	FAnimStitchContentBrowserBadge::Register(); // the 'On the AnimStitch timeline' badge in the Content Browser
 	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(AnimStitchTabName, FOnSpawnTab::CreateStatic(&FAnimStitchEditorModule::SpawnTab))
 		.SetDisplayName(LOCTEXT("TabTitle", "AnimStitch"))
 		.SetTooltipText(LOCTEXT("TabTooltip", "Stitch animation clips together on a timeline and bake them to one sequence."))
@@ -29,6 +31,7 @@ void FAnimStitchEditorModule::StartupModule()
 
 void FAnimStitchEditorModule::ShutdownModule()
 {
+	FAnimStitchContentBrowserBadge::Unregister();
 	if (FSlateApplication::IsInitialized())
 	{
 		FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(AnimStitchTabName);

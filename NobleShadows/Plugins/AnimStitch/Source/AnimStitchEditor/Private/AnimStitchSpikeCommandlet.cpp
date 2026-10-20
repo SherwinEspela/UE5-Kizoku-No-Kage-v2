@@ -320,6 +320,23 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 						UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest P13 KEYS FOLLOW CLIP: key 0.50 s into clip 2 sat at %.2f s; after moving that clip to the front it sits at %.2f s (expected %.2f)"), Before, After, TLAsset->Timeline.Clips[0].StartTime + (SecondTrimIn + 0.5 - TLAsset->Timeline.Clips[0].TrimIn));
 					}
 					UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest P13 DIRTY: HasUnsavedChanges=%d after the edits above"), TLAsset->HasUnsavedChanges());
+
+					// ---- Phase 14 checks: IK key weight at its own time, pole lane ----
+					{
+						FAnimStitchTrack IKTrackDef; IKTrackDef.Kind = EAnimStitchTrackKind::IKLimb; IKTrackDef.Bone = TEXT("foot_r");
+						const int32 IKTrack14 = TLAsset->AddTrack(IKTrackDef);
+						FAnimStitchTrack PoleT; PoleT.Kind = EAnimStitchTrackKind::IKPole; PoleT.Bone = TEXT("foot_r"); PoleT.ControlStyle.Shape = EAnimStitchControlShape::Sphere;
+						const int32 PoleTrack14 = TLAsset->AddTrack(PoleT);
+						FAnimStitchTrackKey K; K.Time = 2.0; K.Weight = 1.f; K.Translation = FVector(10.0, 20.0, 5.0);
+						TLAsset->SetTrackKey(IKTrack14, K);
+						const FAnimStitchTrack& TrackRef = TLAsset->Timeline.Tracks[IKTrack14];
+						UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest P14 IK WEIGHT: key written at 2.00 s: weight at 2.00 = %.2f (expected 1.00), at 1.95 = %.2f (ramping in), at 1.85 = %.2f (expected 0.00); pole lane keys=%d (expected 0), pole shape sphere=%d"),
+							FAnimStitchManualEdits::Sample(TrackRef, 2.0).Weight, FAnimStitchManualEdits::Sample(TrackRef, 1.95).Weight, FAnimStitchManualEdits::Sample(TrackRef, 1.85).Weight,
+							TLAsset->Timeline.Tracks[PoleTrack14].Keys.Num(), TLAsset->Timeline.Tracks[PoleTrack14].ControlStyle.Shape == EAnimStitchControlShape::Sphere);
+						const int32 Before14 = TLAsset->Timeline.Tracks.Num();
+						TLAsset->RemoveTrack(IKTrack14);
+						UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest P14 POLE LANE: removing the IK track took %d tracks away (expected 2: the IK track and its pole lane)"), Before14 - TLAsset->Timeline.Tracks.Num());
+					}
 				}
 				}
 			}

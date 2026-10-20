@@ -152,9 +152,8 @@ bool FAnimStitchPreview::GetIKLiveKey(int32 TrackIndex, FAnimStitchTrackKey& Out
 	bool bEffector = false, bPole = false;
 	for (const FAnimStitchControl& C : Controls)
 	{
-		if (C.Id.A != TrackIndex) { continue; }
-		if (C.Id.Kind == EAnimStitchControlKind::IKEffector) { OutKey.Translation = C.Position; OutKey.Rotation = C.Orientation; bEffector = true; }
-		if (C.Id.Kind == EAnimStitchControlKind::IKPole) { OutKey.Pole = C.Position; bPole = true; }
+		if (C.Id.Kind == EAnimStitchControlKind::IKEffector && C.Id.A == TrackIndex) { OutKey.Translation = C.Position; OutKey.Rotation = C.Orientation; bEffector = true; }
+		if (C.Id.Kind == EAnimStitchControlKind::IKPole && (C.ParentTrack == TrackIndex || C.Id.A == TrackIndex)) { OutKey.Pole = C.Position; bPole = true; }
 	}
 	return bEffector && bPole;
 }
@@ -256,8 +255,6 @@ void FAnimStitchPreview::BuildControlsFromPose(TArray<FAnimStitchControl>& Out) 
 		{
 			const FAnimStitchFootChain Chain = FAnimStitchFootLock::BuildChain(Ref, Track.Bone);
 			if (!Chain.IsValid()) { continue; }
-			const FAnimStitchTrackKey Key = FAnimStitchManualEdits::Sample(Track, Playhead);
-			const bool bActive = Track.Keys.Num() > 0 && Key.Weight > 1e-3f;
 
 			// While IK is off the controls sit on the animated limb from BEFORE the manual corrections, so editing the pelvis does not drag them.
 			FTransform RestFoot = Component[Chain.Foot];
@@ -272,33 +269,61 @@ void FAnimStitchPreview::BuildControlsFromPose(TArray<FAnimStitchControl>& Out) 
 					RestPole = FAnimStitchManualEdits::DefaultPoleForPose(SkelRef, SkelChain, BaseComponentPose);
 				}
 			}
+			const float EffectorSize = FMath::Max(GetBoneControlSize(Chain.Foot) * 1.3f, 3.5f);
 
-			FAnimStitchControl Effector;
-			Effector.Id = { EAnimStitchControlKind::IKEffector, TrackIndex, INDEX_NONE };
-			Effector.Position = bActive ? Key.Translation : RestFoot.GetTranslation();
-			Effector.Orientation = bActive ? Key.Rotation : RestFoot.GetRotation();
-			Effector.bScale = false;
-			Effector.Style = Style;
-			Effector.Color = SideColors[Style];
-			Effector.BaseSize = FMath::Max(GetBoneControlSize(Chain.Foot) * 1.3f, 3.5f);
-			Effector.Label = Track.Bone.ToString() + TEXT(" IK");
-			ApplyStyle(Effector, Track.ControlStyle);
-			Out.Add(Effector);
+			if (Track.Kind == EAnimStitchTrackKind::IKLimb)
+			{
+				const FAnimStitchTrackKey Key = FAnimStitchManualEdits::Sample(Track, Playhead);
+				const bool bActive = Track.Keys.Num() > 0 && Key.Weight > 1e-3f;
 
-			FAnimStitchControl Pole;
-			Pole.Id = { EAnimStitchControlKind::IKPole, TrackIndex, INDEX_NONE };
-			Pole.Position = (bActive && !Key.Pole.IsNearlyZero(1e-3)) ? Key.Pole : RestPole;
-			Pole.bRotate = false;
-			Pole.bScale = false;
-			Pole.Style = Style;
-			Pole.Color = SideColors[Style];
-			Pole.BaseSize = Effector.BaseSize * 0.6f;
-			Pole.Label = Track.Bone.ToString() + TEXT(" pole");
-			ApplyStyle(Pole, Track.PoleStyle);
-			Out.Add(Pole);
+				FAnimStitchControl Effector;
+				Effector.Id = { EAnimStitchControlKind::IKEffector, TrackIndex, INDEX_NONE };
+				Effector.Position = bActive ? Key.Translation : RestFoot.GetTranslation();
+				Effector.Orientation = bActive ? Key.Rotation : RestFoot.GetRotation();
+				Effector.bScale = false;
+				Effector.Style = Style;
+				Effector.Color = SideColors[Style];
+				Effector.BaseSize = EffectorSize;
+				Effector.Label = Track.Bone.ToString() + TEXT(" IK");
+				ApplyStyle(Effector, Track.ControlStyle);
+				Out.Add(Effector);
+
+				// Older timelines keep the pole inside the IK key; newer ones give it its own lane (below).
+				const bool bHasPoleTrack = ManualTracks.ContainsByPredicate([&Track](const FAnimStitchTrack& T) { return T.Kind == EAnimStitchTrackKind::IKPole && T.Bone == Track.Bone; });
+				if (!bHasPoleTrack)
+				{
+					FAnimStitchControl Pole;
+					Pole.Id = { EAnimStitchControlKind::IKPole, TrackIndex, INDEX_NONE };
+					Pole.ParentTrack = TrackIndex;
+					Pole.Position = (bActive && !Key.Pole.IsNearlyZero(1e-3)) ? Key.Pole : RestPole;
+					Pole.bRotate = false;
+					Pole.bScale = false;
+					Pole.Style = Style;
+					Pole.Color = SideColors[Style];
+					Pole.BaseSize = EffectorSize * 0.6f;
+					Pole.Label = Track.Bone.ToString() + TEXT(" pole");
+					ApplyStyle(Pole, Track.PoleStyle);
+					Out.Add(Pole);
+				}
+			}
+			else // IKPole lane
+			{
+				const int32 ParentIndex = ManualTracks.IndexOfByPredicate([&Track](const FAnimStitchTrack& T) { return T.Kind == EAnimStitchTrackKind::IKLimb && T.Bone == Track.Bone; });
+				FAnimStitchControl Pole;
+				Pole.Id = { EAnimStitchControlKind::IKPole, TrackIndex, INDEX_NONE };
+				Pole.ParentTrack = ParentIndex;
+				Pole.Position = Track.Keys.Num() > 0 ? FAnimStitchManualEdits::Sample(Track, Playhead).Translation : RestPole;
+				Pole.bRotate = false;
+				Pole.bScale = false;
+				Pole.Style = Style;
+				Pole.Color = SideColors[Style];
+				Pole.BaseSize = EffectorSize * 0.6f;
+				Pole.Label = Track.Bone.ToString() + TEXT(" pole");
+				ApplyStyle(Pole, Track.ControlStyle);
+				Out.Add(Pole);
+			}
 		}
 	}
-
 	if (bHaveLock)
 	{
 		const int32 Frame = FMath::RoundToInt32(Playhead * LockFps);
@@ -662,6 +687,12 @@ bool FAnimStitchPreview::BeginGizmoDrag(const FSceneView& View, const FVector2D&
 				if (C.Id.Kind == EAnimStitchControlKind::IKEffector && !bActive) { Drag.StartKey.Translation = C.Position; Drag.StartKey.Rotation = C.Orientation; }
 				if (C.Id.Kind == EAnimStitchControlKind::IKPole && (!bActive || Drag.StartKey.Pole.IsNearlyZero(1e-3))) { Drag.StartKey.Pole = C.Position; }
 			}
+			if (ManualTracks[Selected->Id.A].Kind == EAnimStitchTrackKind::IKPole)
+			{
+				Drag.StartKey = FAnimStitchTrackKey();
+				Drag.StartKey.Time = Playhead;
+				Drag.StartKey.Translation = Selected->Position; // the pole lane stores the absolute pole position
+			}
 			Drag.StartKey.Weight = 1.f;
 		}
 	}
@@ -816,7 +847,8 @@ void FAnimStitchPreview::ApplyControlEdit(const FVector& Translation, const FQua
 	}
 	else if (Id.Kind == EAnimStitchControlKind::IKPole)
 	{
-		Key.Pole = Drag.StartKey.Pole + Translation;
+		if (AssetPtr->Timeline.Tracks[Id.A].Kind == EAnimStitchTrackKind::IKPole) { Key.Translation = Drag.StartKey.Translation + Translation; }
+		else { Key.Pole = Drag.StartKey.Pole + Translation; }
 	}
 	AssetPtr->SetTrackKey(Id.A, Key);
 	++DragWrites;

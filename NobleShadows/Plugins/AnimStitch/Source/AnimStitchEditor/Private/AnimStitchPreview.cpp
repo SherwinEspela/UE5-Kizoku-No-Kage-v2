@@ -430,7 +430,7 @@ void FAnimStitchPreview::SetPreviewAttachments(const TArray<FAnimStitchPreviewAt
 {
 	auto Same = [](const FAnimStitchPreviewAttachment& A, const FAnimStitchPreviewAttachment& B)
 	{
-		return A.Asset == B.Asset && A.Socket == B.Socket && A.Location.Equals(B.Location) && A.Rotation.Equals(B.Rotation) && A.Scale.Equals(B.Scale);
+		return A.Asset == B.Asset && A.Socket == B.Socket && A.bVisible == B.bVisible && A.Location.Equals(B.Location) && A.Rotation.Equals(B.Rotation) && A.Scale.Equals(B.Scale);
 	};
 	bool bChanged = NewAttachments.Num() != Attachments.Num();
 	for (int32 i = 0; !bChanged && i < NewAttachments.Num(); ++i) { bChanged = !Same(NewAttachments[i], Attachments[i]); }
@@ -466,10 +466,11 @@ void FAnimStitchPreview::RebuildAttachments()
 			SkeletalComponent->SetSkeletalMesh(SkeletalMesh);
 			Component = SkeletalComponent;
 		}
-		if (!Component) { continue; }
+		if (!Component) { AttachmentComponents.Add(nullptr); continue; }
 		Scene->AddComponent(Component, FTransform::Identity);
 		Component->AttachToComponent(MainComponent, FAttachmentTransformRules::SnapToTargetNotIncludingScale, Attachment.Socket);
 		Component->SetRelativeTransform(FTransform(Attachment.Rotation, Attachment.Location, Attachment.Scale));
+		Component->SetVisibility(Attachment.bVisible);
 		AttachmentComponents.Add(Component);
 	}
 	RequestRedraw();
@@ -494,6 +495,11 @@ void FAnimStitchPreview::Draw(const FSceneView* View, FPrimitiveDrawInterface* P
 	if (View)
 	{
 		DrawControls(*View, PDI);
+	}
+	if (bHelpersVisible && AttachmentComponents.IsValidIndex(SelectedAttachment) && AttachmentComponents[SelectedAttachment])
+	{
+		// The prop picked in the Attached Props tab.
+		DrawWireBox(PDI, AttachmentComponents[SelectedAttachment]->Bounds.GetBox(), FLinearColor(1.f, 0.9f, 0.2f), SDPG_Foreground);
 	}
 	if (bShowGrid && bHelpersVisible)
 	{
@@ -599,23 +605,24 @@ void FAnimStitchPreview::Draw(const FSceneView* View, FPrimitiveDrawInterface* P
 				}
 			}
 		}
-	}	if (!bShowRootPath || TrajectoryPoints.Num() < 2)
+	}
+	if (!bShowRootPath || !bHelpersVisible || TrajectoryPoints.Num() < 2)
 	{
 		return;
 	}
 	// Animation Sequence editor style: a dark gray curve, small division points along it and dark dots at the start and end.
-	const FLinearColor CurveColor(0.16f, 0.16f, 0.16f);
-	const FLinearColor DivisionColor(0.04f, 0.04f, 0.04f);
+	const FLinearColor CurveColor(0.2f, 0.2f, 0.2f);
+	const FLinearColor DivisionColor = FLinearColor::Black;
 	auto OnGround = [](const FVector& P) { return FVector(P.X, P.Y, 1.0); };
 	for (int32 i = 1; i < TrajectoryPoints.Num(); ++i)
 	{
-		PDI->DrawLine(OnGround(TrajectoryPoints[i - 1]), OnGround(TrajectoryPoints[i]), CurveColor, SDPG_Foreground, 1.5f);
+		PDI->DrawLine(OnGround(TrajectoryPoints[i - 1]), OnGround(TrajectoryPoints[i]), CurveColor, SDPG_Foreground, 0.f); // hairline (thickness is in world units: a few cm would be a fat ribbon)
 	}
 	// A division point every half second (the trajectory is sampled at TrajectorySampleRate).
 	const int32 DivisionStep = FMath::Max(1, int32(TrajectorySampleRate * 0.5));
 	for (int32 i = DivisionStep; i < TrajectoryPoints.Num() - 1; i += DivisionStep)
 	{
-		PDI->DrawPoint(OnGround(TrajectoryPoints[i]), DivisionColor, 5.f, SDPG_Foreground);
+		PDI->DrawPoint(OnGround(TrajectoryPoints[i]), DivisionColor, 7.f, SDPG_Foreground);
 	}
 	PDI->DrawPoint(OnGround(TrajectoryPoints[0]), FLinearColor::Black, 9.f, SDPG_Foreground);
 	PDI->DrawPoint(OnGround(TrajectoryPoints.Last()), FLinearColor::Black, 9.f, SDPG_Foreground);

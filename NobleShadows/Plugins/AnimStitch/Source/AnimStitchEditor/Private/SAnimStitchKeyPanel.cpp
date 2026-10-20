@@ -28,7 +28,7 @@ namespace
 const FAnimStitchTrack* SAnimStitchKeyPanel::GetTrack() const
 {
 	const UAnimStitchTimelineAsset* Asset = Timeline->GetAsset();
-	const int32 Index = Timeline->GetExpandedTrack();
+	const int32 Index = TrackIndexAttr.Get(INDEX_NONE);
 	return Asset && Asset->Timeline.Tracks.IsValidIndex(Index) ? &Asset->Timeline.Tracks[Index] : nullptr;
 }
 
@@ -37,7 +37,7 @@ FAnimStitchTrackKey SAnimStitchKeyPanel::GetKey() const
 	FAnimStitchTrackKey Key;
 	const FAnimStitchTrack* Track = GetTrack();
 	if (!Track) { return Key; }
-	const int32 KeyIndex = Timeline->GetExpandedKey();
+	const int32 KeyIndex = Timeline->GetSelectedKeyFor(TrackIndexAttr.Get(INDEX_NONE));
 	if (Track->Keys.IsValidIndex(KeyIndex))
 	{
 		Key = Track->Keys[KeyIndex];
@@ -55,7 +55,7 @@ FAnimStitchTrackKey SAnimStitchKeyPanel::GetKey() const
 	{
 		// The key does not hold a target (IK off here): show and start from the limb as it is on screen.
 		FAnimStitchTrackKey Live;
-		if (LiveIK(Timeline->GetExpandedTrack(), Live))
+		if (LiveIK(TrackIndexAttr.Get(INDEX_NONE), Live))
 		{
 			Key.Translation = Live.Translation;
 			Key.Rotation = Live.Rotation;
@@ -68,7 +68,7 @@ FAnimStitchTrackKey SAnimStitchKeyPanel::GetKey() const
 void SAnimStitchKeyPanel::Edit(TFunctionRef<void(FAnimStitchTrackKey&)> Mutator)
 {
 	UAnimStitchTimelineAsset* Asset = Timeline->GetAsset();
-	const int32 TrackIndex = Timeline->GetExpandedTrack();
+	const int32 TrackIndex = TrackIndexAttr.Get(INDEX_NONE);
 	if (!Asset || TrackIndex == INDEX_NONE) { return; }
 	TSharedPtr<FScopedTransaction> Local;
 	if (!SliderTransaction.IsValid())
@@ -121,10 +121,12 @@ void SAnimStitchKeyPanel::Construct(const FArguments& InArgs)
 {
 	Timeline = InArgs._Timeline;
 	LiveIK = InArgs._LiveIK;
+	TrackIndexAttr = InArgs._TrackIndex;
 
 	auto IsIK = [this]() { const FAnimStitchTrack* T = GetTrack(); return T && T->Kind == EAnimStitchTrackKind::IKLimb; };
 	auto IsBone = [this]() { const FAnimStitchTrack* T = GetTrack(); return T && T->Kind == EAnimStitchTrackKind::Bone && FAnimStitchManualEdits::IsPelvisBone(T->Bone); }; // Keep feet planted: pelvis only
 	auto ShowTranslate = [this]() { const FAnimStitchTrack* T = GetTrack(); return T && !(T->Kind == EAnimStitchTrackKind::Bone && T->bRotationOnly); };
+	auto IsPoleLane = [this]() { const FAnimStitchTrack* T = GetTrack(); return T && T->Kind == EAnimStitchTrackKind::IKPole; };
 
 	ChildSlot
 	[
@@ -144,7 +146,7 @@ void SAnimStitchKeyPanel::Construct(const FArguments& InArgs)
 				Vec3Row(LOCTEXT("RowRotate", "Rotate"),
 					[](const FAnimStitchTrackKey& K) { return ToEuler(K.Rotation); },
 					[this](FAnimStitchTrackKey& K, const FVector& V) { K.Rotation = FromEuler(V); if (GetTrack() && GetTrack()->Kind == EAnimStitchTrackKind::IKLimb && K.Weight < 1e-3f) { K.Weight = 1.f; } },
-					EVisibility::Visible, 0.5)
+					TAttribute<EVisibility>::CreateLambda([IsPoleLane]() { return IsPoleLane() ? EVisibility::Collapsed : EVisibility::Visible; }), 0.5)
 			]
 			+ SVerticalBox::Slot().AutoHeight()
 			[
@@ -195,7 +197,7 @@ void SAnimStitchKeyPanel::Construct(const FArguments& InArgs)
 						if (UAnimStitchTimelineAsset* Asset = Timeline->GetAsset())
 						{
 							const FScopedTransaction Tx(LOCTEXT("KeepFeetTx", "Keep Feet Planted"));
-							Asset->SetTrackKeepFeet(Timeline->GetExpandedTrack(), State == ECheckBoxState::Checked);
+							Asset->SetTrackKeepFeet(TrackIndexAttr.Get(INDEX_NONE), State == ECheckBoxState::Checked);
 						}
 					})
 					[

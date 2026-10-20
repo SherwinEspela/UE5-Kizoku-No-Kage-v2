@@ -50,39 +50,58 @@ namespace
 	/** IK keys are events: the weight holds until the next key, then ramps over this long. */
 	constexpr double IKWeightRamp = 0.1;
 
+	/**
+	 * IK keys: a key's weight is reached AT its own time (the ramp comes just before it) and held until the next key's ramp begins.
+	 * So a key written at the playhead is fully in effect on that very frame (what dragging a control needs).
+	 */
 	FAnimStitchTrackKey SampleIK(const FAnimStitchTrack& Track, double Time)
 	{
 		const TArray<FAnimStitchTrackKey>& Keys = Track.Keys;
 		int32 I = INDEX_NONE;
 		for (int32 k = 0; k < Keys.Num() && Keys[k].Time <= Time; ++k) { I = k; }
-		if (I == INDEX_NONE)
+		const FAnimStitchTrackKey* K = Keys.IsValidIndex(I) ? &Keys[I] : nullptr;
+		const FAnimStitchTrackKey* Next = Keys.IsValidIndex(I + 1) ? &Keys[I + 1] : nullptr;
+
+		float Weight = K ? K->Weight : 0.f;
+		if (Next)
 		{
-			FAnimStitchTrackKey Out = Keys[0];
-			Out.Weight = 0.f; // before the first key the animation plays
-			return Out;
+			const double Gap = K ? Next->Time - K->Time : Next->Time;
+			const double Ramp = FMath::Max(FMath::Min(IKWeightRamp, Gap), 1e-6);
+			const double RampStart = Next->Time - Ramp;
+			if (Time > RampStart)
+			{
+				Weight = FMath::Lerp(Weight, Next->Weight, float(FMath::Clamp((Time - RampStart) / Ramp, 0.0, 1.0)));
+			}
 		}
-		const FAnimStitchTrackKey& K = Keys[I];
-		const float PreviousWeight = I > 0 ? Keys[I - 1].Weight : 0.f;
-		const double Alpha = FMath::Clamp((Time - K.Time) / IKWeightRamp, 0.0, 1.0);
-		FAnimStitchTrackKey Out = K;
-		Out.Time = Time;
-		Out.Weight = FMath::Lerp(PreviousWeight, K.Weight, float(Alpha));
-		// Target: between two active keys it interpolates; a key with weight 0 has no target of its own, so it borrows the neighbour's.
-		if (K.Weight > 1e-3f && I + 1 < Keys.Num() && Keys[I + 1].Weight > 1e-3f)
+
+		const bool bActiveK = K && K->Weight > 1e-3f;
+		const bool bActiveNext = Next && Next->Weight > 1e-3f;
+		FAnimStitchTrackKey Out = K ? *K : Keys[0];
+		if (bActiveK && bActiveNext)
 		{
-			const FAnimStitchTrackKey& N = Keys[I + 1];
-			const double Span = N.Time - K.Time;
-			const double T = Span > 1e-9 ? (Time - K.Time) / Span : 0.0;
-			Out.Translation = FMath::Lerp(K.Translation, N.Translation, T);
-			Out.Rotation = FQuat::Slerp(K.Rotation, N.Rotation, T).GetNormalized();
-			Out.Pole = FMath::Lerp(K.Pole, N.Pole, T);
+			// Between two active keys the target interpolates.
+			const double Span = Next->Time - K->Time;
+			const double T = Span > 1e-9 ? (Time - K->Time) / Span : 0.0;
+			Out.Translation = FMath::Lerp(K->Translation, Next->Translation, T);
+			Out.Rotation = FQuat::Slerp(K->Rotation, Next->Rotation, T).GetNormalized();
+			Out.Pole = FMath::Lerp(K->Pole, Next->Pole, T);
 		}
-		else if (K.Weight <= 1e-3f && I > 0 && Keys[I - 1].Weight > 1e-3f)
+		else if (!bActiveK && bActiveNext)
 		{
+			// An inactive key has no target of its own: ease in toward the next key's.
+			Out.Translation = Next->Translation;
+			Out.Rotation = Next->Rotation;
+			Out.Pole = Next->Pole;
+		}
+		else if (!bActiveK && I > 0 && Keys[I - 1].Weight > 1e-3f)
+		{
+			// Released: keep the previous target while the weight eases off.
 			Out.Translation = Keys[I - 1].Translation;
 			Out.Rotation = Keys[I - 1].Rotation;
 			Out.Pole = Keys[I - 1].Pole;
 		}
+		Out.Time = Time;
+		Out.Weight = Weight;
 		return Out;
 	}
 }
@@ -297,7 +316,19 @@ void FAnimStitchManualEdits::Apply(const FReferenceSkeleton& Ref, const TArray<F
 		const FTransform Effector = FAnimStitchFootLock::GetComponentSpace(Ref, Local, Chain.Foot);
 		const FVector Desired = FMath::Lerp(Effector.GetTranslation(), Key.Translation, Weight);
 		const FQuat Rotation = FQuat::Slerp(Effector.GetRotation(), Key.Rotation, Weight).GetNormalized();
-		const FVector* Pole = Key.Pole.IsNearlyZero(1e-3) ? nullptr : &Key.Pole; // no pole stored: let the solver keep the animated bend
+		// The pole target comes from this limb's own pole lane when it has keys, else from the IK key (older timelines); none = keep the animated bend.
+		FVector PoleTarget = Key.Pole;
+		bool bHavePole = !Key.Pole.IsNearlyZero(1e-3);
+		for (const FAnimStitchTrack& PoleTrack : Tracks)
+		{
+			if (PoleTrack.Kind == EAnimStitchTrackKind::IKPole && PoleTrack.Bone == Track.Bone && PoleTrack.Keys.Num() > 0)
+			{
+				PoleTarget = Sample(PoleTrack, Time).Translation;
+				bHavePole = true;
+				break;
+			}
+		}
+		const FVector* Pole = bHavePole ? &PoleTarget : nullptr;
 		FAnimStitchFootLock::SolveLimb(Ref, Local, Chain, Desired, Pole, Pole ? Weight : 0.0, &Rotation);
 	}
 }

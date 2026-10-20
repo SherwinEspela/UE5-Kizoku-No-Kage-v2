@@ -1,4 +1,4 @@
-#include "SAnimStitchControlProperties.h"
+﻿#include "SAnimStitchControlProperties.h"
 #include "SAnimStitchTimeline.h"
 #include "AnimStitchPreview.h"
 #include "AnimStitchTimelineAsset.h"
@@ -17,7 +17,7 @@ bool SAnimStitchControlProperties::GetTarget(UAnimStitchTimelineAsset*& OutAsset
 	const FAnimStitchControlId Id = Preview->GetSelectedControl();
 	OutAsset = Timeline->GetAsset();
 	OutTrack = Id.A;
-	bOutPole = Id.Kind == EAnimStitchControlKind::IKPole;
+	bOutPole = Id.Kind == EAnimStitchControlKind::IKPole && Timeline->GetAsset() && Timeline->GetAsset()->Timeline.Tracks.IsValidIndex(Id.A) && Timeline->GetAsset()->Timeline.Tracks[Id.A].Kind != EAnimStitchTrackKind::IKPole; // a pole lane carries its own look
 	const bool bTrackControl = Id.Kind == EAnimStitchControlKind::Bone || Id.Kind == EAnimStitchControlKind::IKEffector || Id.Kind == EAnimStitchControlKind::IKPole;
 	return bTrackControl && OutAsset && OutAsset->Timeline.Tracks.IsValidIndex(OutTrack);
 }

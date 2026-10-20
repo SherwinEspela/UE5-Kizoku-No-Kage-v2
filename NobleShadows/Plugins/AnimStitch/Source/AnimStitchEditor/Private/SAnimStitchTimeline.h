@@ -83,6 +83,8 @@ public:
 	/** Copy + paste in one step; needs selected keys and a playhead that is not already on them. */
 	bool CanDuplicateKeysToPlayhead() const;
 	void DuplicateKeysToPlayhead() { CopySelectedKeys(); PasteKeys(); }
+	/** Selects the clip that uses this sequence (the next one when the selected clip already does). False if it is not on the timeline. */
+	bool SelectClipForSequence(const FSoftObjectPath& Path);
 	/** Selecting a control in the viewport selects its track here (no key / control reselect loop). */
 	void SelectTrackFromViewport(int32 Track);
 	bool IsDraggingFootLock() const { return bDragStarted && (DragMode == EDrag::FootHandle || DragMode == EDrag::FootRegion); }
@@ -93,7 +95,7 @@ public:
 
 	// ---- Vertical scrolling of the correction lanes ----
 	float GetTrackAreaTop() const { return GetTracksTop(); }
-	float GetTrackContentHeight() const { return Asset ? Asset->Timeline.Tracks.Num() * (TrackLaneHeight + 2.f) + (IsExpanderOpen() ? ExpanderHeight : 0.f) + 8.f : 0.f; }
+	float GetTrackContentHeight() const { return Asset ? Asset->Timeline.Tracks.Num() * (TrackLaneHeight + 2.f) + ExpandedCount() * ExpanderHeight + 8.f : 0.f; }
 	float GetTrackViewHeight() const { return FMath::Max(0.f, GetCachedGeometry().GetLocalSize().Y - GetTracksTop()); }
 	float GetTrackScrollMax() const { return FMath::Max(0.f, GetTrackContentHeight() - GetTrackViewHeight()); }
 	float GetTrackScroll() const { return VScroll; }
@@ -110,12 +112,23 @@ public:
 	double GetDisplayFps() const;
 	/** Jumps to the next (+1) / previous (-1) key of the selected track, or of all tracks when none is selected. Returns false if there is none. */
 	bool JumpToAdjacentKey(int32 Direction);
-	bool IsExpanderOpen() const { return Asset && Asset->Timeline.Tracks.IsValidIndex(ExpandedTrack); }
-	int32 GetExpandedTrack() const { return IsExpanderOpen() ? ExpandedTrack : INDEX_NONE; }
-	/** Top (widget-local) of the area under the expanded lane. */
-	float GetExpanderTop() const { return IsExpanderOpen() ? GetTrackLaneTop(ExpandedTrack) + TrackLaneHeight + 2.f : 0.f; }
-	/** Key shown in the expander: the selected key of the expanded track, else INDEX_NONE (the value at the playhead is shown). */
-	int32 GetExpandedKey() const { return (IsExpanderOpen() && SelectedTrack == ExpandedTrack) ? SelectedKey : INDEX_NONE; }
+	// Every track expands on its own; expanding one never collapses another.
+	bool IsTrackExpanded(int32 Track) const { return Asset && Asset->Timeline.Tracks.IsValidIndex(Track) && ExpandedTracks.Contains(TrackKey(Asset->Timeline.Tracks[Track])); }
+	int32 ExpandedCount() const { int32 N = 0; if (Asset) { for (int32 i = 0; i < Asset->Timeline.Tracks.Num(); ++i) { N += IsTrackExpanded(i) ? 1 : 0; } } return N; }
+	int32 ExpandedAbove(int32 Track) const { int32 N = 0; if (Asset) { for (int32 i = 0; i < Track && i < Asset->Timeline.Tracks.Num(); ++i) { N += IsTrackExpanded(i) ? 1 : 0; } } return N; }
+	void ToggleTrackExpanded(int32 Track);
+	void ExpandAllTracks();
+	void CollapseAllTracks();
+	/** Top (widget-local) of the value area under an expanded lane. */
+	float GetTrackExpanderTop(int32 Track) const { return IsTrackExpanded(Track) ? GetTrackLaneTop(Track) + TrackLaneHeight + 2.f : 0.f; }
+	/** The selected key of that track, or INDEX_NONE (the value panel then shows the value at the playhead). */
+	int32 GetSelectedKeyFor(int32 Track) const { return SelectedTrack == Track ? SelectedKey : INDEX_NONE; }
+	bool HasSelectedTrack() const { return Asset && Asset->Timeline.Tracks.IsValidIndex(SelectedTrack); }
+	/** Enter / A: keys the evaluated value of every selected track at the playhead (undoable). Returns false when nothing is selected. */
+	bool AddKeyAtPlayhead();
+	/** Live value of a track's control (IK targets, pole) for keys written when the limb is not keyed yet; set by the panel. */
+	TFunction<bool(int32 TrackIndex, FAnimStitchTrackKey& OutKey)> LiveKeyProvider;
+	static FString TrackKey(const FAnimStitchTrack& Track) { return FString::Printf(TEXT("%d:%s"), (int32)Track.Kind, *Track.Bone.ToString()); }
 	/** Moves the playhead to the next / previous key of a lane and selects it. */
 	void JumpToKey(int32 Track, int32 Direction);
 	void SetPlayhead(double Time) { Playhead = FMath::Clamp(Time, 0.0, Asset->Timeline.GetTotalLength()); }
@@ -160,8 +173,8 @@ private:
 	// ---- Manual bone correction lanes (Phase 9) ----
 	static constexpr float TrackLaneHeight = 30.f;
 	float GetTracksTop() const { return GetTrackTop() + TrackHeight + 10.f; }
-	float GetTrackLaneTop(int32 Track) const { return GetTracksTop() + Track * (TrackLaneHeight + 2.f) + (IsExpanderOpen() && Track > ExpandedTrack ? ExpanderHeight : 0.f) - VScroll; }
-	int32 ExpandedTrack = INDEX_NONE;
+	float GetTrackLaneTop(int32 Track) const { return GetTracksTop() + Track * (TrackLaneHeight + 2.f) + ExpandedAbove(Track) * ExpanderHeight - VScroll; }
+	TSet<FString> ExpandedTracks;
 	float LabelWidth = 290.f;
 	uint32 TrackSelectionSerial = 0;
 	float VScroll = 0.f;

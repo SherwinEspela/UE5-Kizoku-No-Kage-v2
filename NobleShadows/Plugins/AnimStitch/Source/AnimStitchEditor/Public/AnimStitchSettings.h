@@ -50,6 +50,10 @@ public:
 	UPROPERTY(config, EditAnywhere, Category = "Foot Lock")
 	TMap<FString, FAnimStitchFootBones> FootBonesBySkeleton;
 
+	/** Named panel layouts the user saved (name -> serialized layout). */
+	UPROPERTY(config)
+	TMap<FString, FString> SavedLayouts;
+
 	/** Animation sequences baked by AnimStitch (shown in the Baked Assets tab). */
 	UPROPERTY(config)
 	TArray<FSoftObjectPath> BakedAssets;

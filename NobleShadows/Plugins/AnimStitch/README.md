@@ -151,3 +151,12 @@ Right-click **below the clip lanes** > *Add Bone Track* to add a Sequencer-style
 - Correction keys follow their clip when it moves, is trimmed or reordered (they are glued to the clip's source time).
 - Foot locks: drag the white handles to resize, drag inside a green region to move it; the lane refreshes while you drag.
 - Root path: dark gray curve, small division points every half second, dark dots at start and end.
+
+## Phase 14 additions
+- Right-clicking empty timeline space shows only the add-bone-track commands. Tracks expand independently (Expand All / Collapse All in the track menu). Enter or A keys the selected track(s) at the playhead.
+- Adding an IK limb also adds a **pole lane** (indented under it, sphere control by default). Removing the IK track removes its pole lane. IK key weights now take full effect at the key's own time.
+- Details shows the selected control's transform and IK weight; typing writes the key at the playhead exactly like dragging.
+- **Attached Props** tab: name, socket, visibility toggle, remove; clicking a row highlights the prop. Props and their visibility are saved in the timeline asset.
+- Content Browser: animation sequences on the timeline get an 'On the AnimStitch timeline' badge (with a count for repeats); selecting one in the Content Browser selects its clip. The extender places icons at the thumbnail's top-left.
+- Layout > Save Layout As / Load Layout / Delete Saved Layout (stored in the AnimStitch settings; the current layout still auto-saves).
+- Duplicate, Remove, Split, Trim Start, Trim End and Zoom to Fit are icon buttons. The root path hides with G.

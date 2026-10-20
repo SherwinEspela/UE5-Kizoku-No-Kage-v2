@@ -386,7 +386,7 @@ int32 UAnimStitchTimelineAsset::AddTrack(const FAnimStitchTrack& Track)
 	TouchManual();
 	FAnimStitchTrack NewTrack = Track;
 	NewTrack.bKeepFeetPlanted = Track.Kind == EAnimStitchTrackKind::Bone && FAnimStitchManualEdits::IsPelvisBone(Track.Bone) && Track.bKeepFeetPlanted;
-	if (NewTrack.Keys.Num() == 0)
+	if (NewTrack.Keys.Num() == 0 && NewTrack.Kind != EAnimStitchTrackKind::IKPole)
 	{
 		// Like a new Sequencer section: keys at the start and the end of the timeline (identity offset / IK off).
 		FAnimStitchTrackKey Start;
@@ -409,6 +409,19 @@ void UAnimStitchTimelineAsset::RemoveTrack(int32 Index)
 	if (Timeline.Tracks.IsValidIndex(Index))
 	{
 		TouchManual();
+		// Removing an IK limb takes its pole lane with it.
+		if (Timeline.Tracks[Index].Kind == EAnimStitchTrackKind::IKLimb)
+		{
+			const FName Bone = Timeline.Tracks[Index].Bone;
+			for (int32 i = Timeline.Tracks.Num() - 1; i >= 0; --i)
+			{
+				if (i != Index && Timeline.Tracks[i].Kind == EAnimStitchTrackKind::IKPole && Timeline.Tracks[i].Bone == Bone)
+				{
+					Timeline.Tracks.RemoveAt(i);
+					if (i < Index) { --Index; }
+				}
+			}
+		}
 		Timeline.Tracks.RemoveAt(Index);
 	}
 }
@@ -478,6 +491,15 @@ void UAnimStitchTimelineAsset::SetTrackControlStyle(int32 TrackIndex, bool bPole
 	{
 		TouchManual();
 		(bPole ? Timeline.Tracks[TrackIndex].PoleStyle : Timeline.Tracks[TrackIndex].ControlStyle) = Style;
+	}
+}
+
+void UAnimStitchTimelineAsset::SetPreviewAttachmentVisible(int32 Index, bool bVisible)
+{
+	if (Timeline.PreviewAttachments.IsValidIndex(Index))
+	{
+		TouchManual();
+		Timeline.PreviewAttachments[Index].bVisible = bVisible;
 	}
 }
 

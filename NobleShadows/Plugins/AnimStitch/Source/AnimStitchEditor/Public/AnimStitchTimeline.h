@@ -119,6 +119,10 @@ struct ANIMSTITCHEDITOR_API FAnimStitchPreviewAttachment
 
 	UPROPERTY()
 	FVector Scale = FVector::OneVector;
+
+	/** Preview-only visibility toggle (kept in the timeline asset). */
+	UPROPERTY()
+	bool bVisible = true;
 };
 /** Manual bone correction track kinds. */
 UENUM()
@@ -128,6 +132,8 @@ enum class EAnimStitchTrackKind : uint8
 	Bone,
 	/** Free-IK limb: world-space effector (foot/hand) target, pole-vector target and IK weight. */
 	IKLimb,
+	/** The pole vector of an IK limb: its own lane under the IK track (Bone = the IK effector bone); keys hold the absolute pole position (Translation). */
+	IKPole,
 };
 
 /**

@@ -24,6 +24,7 @@ public:
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
+	virtual ~SAnimStitchPanel() override;
 
 	// FGCObject
 	virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
@@ -52,8 +53,15 @@ private:
 	void FillControlsMenu(class FMenuBuilder& Menu);
 	void FillAttachmentsMenu(class FMenuBuilder& Menu);
 	void FillBonesMenu(class FMenuBuilder& Menu);
-	int32 RightTab = 0; // 0 = Content Browser, 1 = Details, 2 = Baked Assets
+	int32 RightTab = 0; // 0 = Content Browser, 1 = Details, 2 = Baked Assets, 3 = Control Properties, 4 = Attached Props
 	TSharedRef<SWidget> MakeBakedAssetsTab();
+	/** One value panel per bone track, created on demand, so any number of tracks can be expanded at once. */
+	void SyncKeyPanels();
+	TSharedPtr<class SOverlay> KeyPanelOverlay;
+	int32 KeyPanelCount = 0;
+	void SaveLayoutAs();
+	void LoadSavedLayout(const FString& Name);
+	void DeleteSavedLayout(const FString& Name);
 	TSharedRef<FTabManager::FLayout> MakeDefaultLayout() const;
 	TSharedRef<SWidget> MakeLayoutMenu();
 	void ResetLayout();
@@ -65,6 +73,10 @@ private:
 	int32 LastControlKind = 0;
 	int32 LastControlTrack = -1;
 	double LastPlantAnalysis = 0.0;
+	double LastBrowserPoll = 0.0;
+	FString LastBrowserSelection;
+	void PublishClipUsage();
+	void SyncBrowserSelection(double Now);
 	TSharedPtr<FTabManager> TabManager;
 	uint32 LastTrackSerial = 0;
 	void RebuildBakedList();

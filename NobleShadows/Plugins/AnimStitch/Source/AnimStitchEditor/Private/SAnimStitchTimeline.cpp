@@ -502,6 +502,22 @@ bool SAnimStitchTimeline::CanDuplicateKeysToPlayhead() const
 	return Earliest != TNumericLimits<double>::Max() && FMath::Abs(Earliest - Playhead) > 1.0 / 120.0;
 }
 
+bool SAnimStitchTimeline::SelectClipForSequence(const FSoftObjectPath& Path)
+{
+	const FAnimStitchTimeline& TL = Asset->Timeline;
+	int32 First = INDEX_NONE, AfterCurrent = INDEX_NONE;
+	for (int32 i = 0; i < TL.Clips.Num(); ++i)
+	{
+		if (!TL.Clips[i].Sequence || FSoftObjectPath(TL.Clips[i].Sequence) != Path) { continue; }
+		if (First == INDEX_NONE) { First = i; }
+		if (AfterCurrent == INDEX_NONE && i > SelectedClip) { AfterCurrent = i; }
+	}
+	if (First == INDEX_NONE) { return false; }
+	const bool bCurrentUses = TL.Clips.IsValidIndex(SelectedClip) && TL.Clips[SelectedClip].Sequence && FSoftObjectPath(TL.Clips[SelectedClip].Sequence) == Path;
+	SelectClip(bCurrentUses && AfterCurrent != INDEX_NONE ? AfterCurrent : First, false);
+	return true;
+}
+
 void SAnimStitchTimeline::SelectTrackFromViewport(int32 Track)
 {
 	if (!Asset->Timeline.Tracks.IsValidIndex(Track) || Track == SelectedTrack) { return; }
@@ -509,7 +525,7 @@ void SAnimStitchTimeline::SelectTrackFromViewport(int32 Track)
 	SelectedKey = INDEX_NONE;
 	SelectedKeys.Reset();
 	// Scroll the lane into view.
-	const float Top = Track * (TrackLaneHeight + 2.f) + (IsExpanderOpen() && Track > ExpandedTrack ? ExpanderHeight : 0.f);
+	const float Top = Track * (TrackLaneHeight + 2.f) + ExpandedAbove(Track) * ExpanderHeight;
 	const float View = GetTrackViewHeight();
 	if (Top < VScroll) { SetTrackScroll(Top); }
 	else if (Top + TrackLaneHeight > VScroll + View) { SetTrackScroll(Top + TrackLaneHeight - View + 4.f); }
@@ -600,6 +616,51 @@ void SAnimStitchTimeline::SelectClip(int32 Index, bool bOverlap)
 	}
 	bOverlapSelected = bOverlap && Index > 0;
 	OnSelectionChangedDelegate.ExecuteIfBound();
+}
+
+void SAnimStitchTimeline::ToggleTrackExpanded(int32 Track)
+{
+	if (!Asset->Timeline.Tracks.IsValidIndex(Track)) { return; }
+	const FString Key = TrackKey(Asset->Timeline.Tracks[Track]);
+	if (ExpandedTracks.Contains(Key)) { ExpandedTracks.Remove(Key); } else { ExpandedTracks.Add(Key); }
+}
+
+void SAnimStitchTimeline::ExpandAllTracks()
+{
+	for (const FAnimStitchTrack& Track : Asset->Timeline.Tracks) { ExpandedTracks.Add(TrackKey(Track)); }
+}
+
+void SAnimStitchTimeline::CollapseAllTracks()
+{
+	ExpandedTracks.Reset();
+	VScroll = 0.f;
+}
+
+bool SAnimStitchTimeline::AddKeyAtPlayhead()
+{
+	TArray<int32> Targets;
+	if (Asset->Timeline.Tracks.IsValidIndex(SelectedTrack)) { Targets.AddUnique(SelectedTrack); }
+	for (const FKeyRef& Ref : SelectedKeys) { if (Asset->Timeline.Tracks.IsValidIndex(Ref.Track)) { Targets.AddUnique(Ref.Track); } }
+	if (Targets.Num() == 0) { return false; }
+	const FScopedTransaction Tx(LOCTEXT("AddKeyAtPlayheadTx", "Add Key at Playhead"));
+	for (const int32 TrackIndex : Targets)
+	{
+		const FAnimStitchTrack& Track = Asset->Timeline.Tracks[TrackIndex];
+		// The control's current evaluated value: the interpolated key value, or the limb as it is on screen when it has no key yet.
+		FAnimStitchTrackKey Key = Track.Keys.Num() > 0 ? FAnimStitchManualEdits::Sample(Track, Playhead) : FAnimStitchTrackKey();
+		if (LiveKeyProvider && (Track.Kind == EAnimStitchTrackKind::IKLimb || Track.Kind == EAnimStitchTrackKind::IKPole))
+		{
+			FAnimStitchTrackKey Live;
+			if (LiveKeyProvider(TrackIndex, Live))
+			{
+				if (Track.Kind == EAnimStitchTrackKind::IKPole) { Key.Translation = Live.Pole; }
+				else if (Key.Weight < 1e-3f) { Key.Translation = Live.Translation; Key.Rotation = Live.Rotation; Key.Pole = Live.Pole; }
+			}
+		}
+		Key.Time = Playhead;
+		Asset->SetTrackKey(TrackIndex, Key);
+	}
+	return true;
 }
 
 void SAnimStitchTimeline::JumpToKey(int32 Track, int32 Direction)
@@ -694,7 +755,11 @@ bool SAnimStitchTimeline::JumpToAdjacentKey(int32 Direction)
 void SAnimStitchTimeline::ClampSelection()
 {
 	SelectedKeys.Reset(); // key indices may have shifted
-	if (!Asset->Timeline.Tracks.IsValidIndex(ExpandedTrack)) { ExpandedTrack = INDEX_NONE; }
+	{
+		TSet<FString> Valid;
+		for (const FAnimStitchTrack& Track : Asset->Timeline.Tracks) { Valid.Add(TrackKey(Track)); }
+		ExpandedTracks = ExpandedTracks.Intersect(Valid); // tracks that no longer exist drop their expanded state
+	}
 	if (!Asset->Timeline.Tracks.IsValidIndex(SelectedTrack)) { SelectedTrack = INDEX_NONE; SelectedKey = INDEX_NONE; }
 	VScroll = FMath::Clamp(VScroll, 0.f, GetTrackScrollMax());
 	if (!Asset->Timeline.Clips.IsValidIndex(SelectedClip))
@@ -744,7 +809,7 @@ FReply SAnimStitchTimeline::OnMouseButtonDown(const FGeometry& G, const FPointer
 		return FReply::Handled();
 	case EHit::TrackExpand:
 		SelectedTrack = Hit.Index; ++TrackSelectionSerial;
-		ExpandedTrack = (ExpandedTrack == Hit.Index) ? INDEX_NONE : Hit.Index;
+		ToggleTrackExpanded(Hit.Index);
 		return FReply::Handled();
 	case EHit::TrackAddKey:
 	{
@@ -882,9 +947,9 @@ FReply SAnimStitchTimeline::OnMouseButtonUp(const FGeometry& G, const FPointerEv
 			OpenTrackMenu(Event, Hit.Index, SelectedKey, XToTime(LocalPos.X));
 			return FReply::Handled();
 		}
-		if (Hit.Type == EHit::None && LocalPos.Y > GetTrackTop() + TrackHeight)
+		if (Hit.Type == EHit::None)
 		{
-			OpenAddTrackMenu(Event); // right-click below the clip lanes
+			OpenAddTrackMenu(Event); // right-click on empty space: only the add-bone-track commands
 			return FReply::Handled();
 		}
 		if (Hit.Type == EHit::FootLane || Hit.Type == EHit::FootHandle || Hit.Type == EHit::FootRegion)
@@ -1156,6 +1221,7 @@ FCursorReply SAnimStitchTimeline::OnCursorQuery(const FGeometry& G, const FPoint
 
 FReply SAnimStitchTimeline::OnKeyDown(const FGeometry& G, const FKeyEvent& Event)
 {
+	if (!Event.IsControlDown() && !Event.IsAltDown() && !Event.IsShiftDown() && !Event.IsRepeat() && (Event.GetKey() == EKeys::Enter || Event.GetKey() == EKeys::A) && AddKeyAtPlayhead()) { return FReply::Handled(); }
 	if (Event.IsControlDown() && Event.GetKey() == EKeys::C) { CopySelectedKeys(); return FReply::Handled(); }
 	if (Event.IsControlDown() && Event.GetKey() == EKeys::V) { PasteKeys(); return FReply::Handled(); }
 	if (SelectedKeys.Num() > 1 && (Event.GetKey() == EKeys::Delete || Event.GetKey() == EKeys::BackSpace)) { DeleteSelectedKeys(); return FReply::Handled(); }
@@ -1171,7 +1237,6 @@ FReply SAnimStitchTimeline::OnKeyDown(const FGeometry& G, const FKeyEvent& Event
 		// A whole track is selected: delete the track.
 		const FScopedTransaction Tx(LOCTEXT("DeleteTrackTx", "Delete Track"));
 		Asset->RemoveTrack(SelectedTrack);
-		ExpandedTrack = INDEX_NONE;
 		SelectedTrack = INDEX_NONE;
 		SelectedKey = INDEX_NONE;
 		SelectedKeys.Reset();

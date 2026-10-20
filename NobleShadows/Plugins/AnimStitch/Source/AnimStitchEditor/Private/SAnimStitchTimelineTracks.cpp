@@ -42,7 +42,7 @@ void SAnimStitchTimeline::PaintTrackLanes(FSlateWindowElementList& Out, int32 La
 		const FAnimStitchTrack& Track = TL.Tracks[i];
 		const float Top = GetTrackLaneTop(i);
 		const bool bIK = Track.Kind == EAnimStitchTrackKind::IKLimb;
-		const FLinearColor Base = bIK ? FLinearColor(0.95f, 0.5f, 0.15f) : (Track.bRotationOnly ? FLinearColor(0.9f, 0.6f, 0.2f) : FLinearColor(0.35f, 0.85f, 0.5f));
+		const FLinearColor Base = Track.Kind == EAnimStitchTrackKind::IKPole ? FLinearColor(0.7f, 0.4f, 1.f) : bIK ? FLinearColor(0.95f, 0.5f, 0.15f) : (Track.bRotationOnly ? FLinearColor(0.9f, 0.6f, 0.2f) : FLinearColor(0.35f, 0.85f, 0.5f));
 
 		FSlateDrawElement::MakeBox(Out, Layer, G.ToPaintGeometry(FVector2f(Size.X - LabelWidth, TrackLaneHeight), FSlateLayoutTransform(FVector2f(LabelWidth, Top))), White, ESlateDrawEffect::None,
 			i == SelectedTrack ? FLinearColor(0.16f, 0.16f, 0.2f) : FLinearColor(0.09f, 0.09f, 0.1f));
@@ -59,7 +59,7 @@ void SAnimStitchTimeline::PaintTrackLanes(FSlateWindowElementList& Out, int32 La
 			}
 		}
 
-		if (i == ExpandedTrack && IsExpanderOpen())
+		if (IsTrackExpanded(i))
 		{
 			// The area under the lane belongs to the numeric value rows (in the track column); stripe the time side to match.
 			const float PanelTop = Top + TrackLaneHeight + 2.f;
@@ -113,17 +113,20 @@ void SAnimStitchTimeline::PaintLeftColumn(FSlateWindowElementList& Out, int32 La
 		const FAnimStitchTrack& Track = TL.Tracks[i];
 		const float Top = GetTrackLaneTop(i);
 		const bool bIK = Track.Kind == EAnimStitchTrackKind::IKLimb;
-		const bool bOpen = i == ExpandedTrack && IsExpanderOpen();
-		const FLinearColor Base = bIK ? FLinearColor(0.95f, 0.5f, 0.15f) : (Track.bRotationOnly ? FLinearColor(0.9f, 0.6f, 0.2f) : FLinearColor(0.35f, 0.85f, 0.5f));
+		const bool bOpen = IsTrackExpanded(i);
+		const FLinearColor Base = Track.Kind == EAnimStitchTrackKind::IKPole ? FLinearColor(0.7f, 0.4f, 1.f) : bIK ? FLinearColor(0.95f, 0.5f, 0.15f) : (Track.bRotationOnly ? FLinearColor(0.9f, 0.6f, 0.2f) : FLinearColor(0.35f, 0.85f, 0.5f));
 
 		FSlateDrawElement::MakeBox(Out, Layer + 3, G.ToPaintGeometry(FVector2f(LabelWidth - 1.f, TrackLaneHeight), FSlateLayoutTransform(FVector2f(0.f, Top))), White, ESlateDrawEffect::None,
 			i == SelectedTrack ? FLinearColor(0.17f, 0.2f, 0.27f) : FLinearColor(0.11f, 0.11f, 0.125f));
 		FSlateDrawElement::MakeBox(Out, Layer + 4, G.ToPaintGeometry(FVector2f(3.f, TrackLaneHeight), FSlateLayoutTransform(FVector2f(LabelWidth - 4.f, Top))), White, ESlateDrawEffect::None, Base);
-		FSlateDrawElement::MakeText(Out, Layer + 5, G.ToPaintGeometry(Size, FSlateLayoutTransform(FVector2f(7.f, Top + 7.f))), FString(bOpen ? TEXT("v") : TEXT(">")), Font, ESlateDrawEffect::None, FLinearColor(1.f, 1.f, 1.f, 0.8f));
+		const float Indent = Track.Kind == EAnimStitchTrackKind::IKPole ? 18.f : 0.f; // the pole lane sits indented under its IK track
+		if (Indent > 0.f) { FSlateDrawElement::MakeBox(Out, Layer + 4, G.ToPaintGeometry(FVector2f(1.f, TrackLaneHeight), FSlateLayoutTransform(FVector2f(12.f, Top))), White, ESlateDrawEffect::None, FLinearColor(1.f, 1.f, 1.f, 0.25f)); }
+		FSlateDrawElement::MakeText(Out, Layer + 5, G.ToPaintGeometry(Size, FSlateLayoutTransform(FVector2f(7.f + Indent, Top + 7.f))), FString(bOpen ? TEXT("v") : TEXT(">")), Font, ESlateDrawEffect::None, FLinearColor(1.f, 1.f, 1.f, 0.8f));
 		FString Label = Track.Bone.ToString();
+		if (Track.Kind == EAnimStitchTrackKind::IKPole) { Label += TEXT("  pole"); }
 		if (bIK) { Label += TEXT("  (IK)"); }
 		else if (Track.bRotationOnly) { Label += TEXT("  (FK)"); }
-		FSlateDrawElement::MakeText(Out, Layer + 5, G.ToPaintGeometry(Size, FSlateLayoutTransform(FVector2f(24.f, Top + 7.f))), Label, BoldFont, ESlateDrawEffect::None, FLinearColor(1.f, 1.f, 1.f, 0.9f));
+		FSlateDrawElement::MakeText(Out, Layer + 5, G.ToPaintGeometry(Size, FSlateLayoutTransform(FVector2f(24.f + Indent, Top + 7.f))), Label, BoldFont, ESlateDrawEffect::None, FLinearColor(1.f, 1.f, 1.f, 0.9f));
 
 		// Previous key, add key at the playhead, next key.
 		const TCHAR* Glyphs[3] = { TEXT("<"), TEXT("+"), TEXT(">") };
@@ -200,7 +203,16 @@ void SAnimStitchTimeline::AddLimbForEffector(FName Effector, bool bIK)
 		Track.Kind = EAnimStitchTrackKind::IKLimb;
 		Track.Bone = Effector;
 		SelectedTrack = Asset->AddTrack(Track);
-	++TrackSelectionSerial;
+		++TrackSelectionSerial;
+		// The pole vector gets its own lane right under the IK track; its control defaults to a sphere.
+		if (!HasTrackFor(Effector, EAnimStitchTrackKind::IKPole))
+		{
+			FAnimStitchTrack PoleTrack;
+			PoleTrack.Kind = EAnimStitchTrackKind::IKPole;
+			PoleTrack.Bone = Effector;
+			PoleTrack.ControlStyle.Shape = EAnimStitchControlShape::Sphere;
+			Asset->AddTrack(PoleTrack);
+		}
 	}
 	else
 	{
@@ -364,12 +376,6 @@ void SAnimStitchTimeline::OpenAddTrackMenu(const FPointerEvent& Event)
 	Menu.AddSubMenu(LOCTEXT("CoreBoneMenu", "Core Bone"), LOCTEXT("CoreBoneMenuTip", "Pelvis, spine, head...: one control per bone, additive offsets"), FNewMenuDelegate::CreateSP(this, &SAnimStitchTimeline::BuildCoreBoneMenu));
 	Menu.AddSubMenu(LOCTEXT("LimbMenu", "Limb"), LOCTEXT("LimbMenuTip", "Arms and legs, FK (rotate each joint) or IK (effector + pole vector)"), FNewMenuDelegate::CreateSP(this, &SAnimStitchTimeline::BuildLimbMenu));
 	Menu.EndSection();
-	Menu.BeginSection("KeyClipboardLane", LOCTEXT("KeysSection", "Keys"));
-	Menu.AddMenuEntry(LOCTEXT("DuplicateKeysMenu2", "Copy Keys and Paste at Playhead"), LOCTEXT("DuplicateKeysTip2", "Duplicate the selected keys to the playhead in one step"), FSlateIcon(),
-		FUIAction(FExecuteAction::CreateLambda([this]() { DuplicateKeysToPlayhead(); }), FCanExecuteAction::CreateLambda([this]() { return CanDuplicateKeysToPlayhead(); })));
-	Menu.AddMenuEntry(LOCTEXT("PasteKeysMenu", "Paste Keys (Ctrl+V)"), LOCTEXT("PasteKeysTip", "Paste the copied keys onto their bone tracks at the playhead"), FSlateIcon(),
-		FUIAction(FExecuteAction::CreateLambda([this]() { PasteKeys(); }), FCanExecuteAction::CreateLambda([this]() { return CanPasteKeys(); })));
-	Menu.EndSection();
 	const FWidgetPath Path = Event.GetEventPath() != nullptr ? *Event.GetEventPath() : FWidgetPath();
 	FSlateApplication::Get().PushMenu(AsShared(), Path, Menu.MakeWidget(), Event.GetScreenSpacePosition(), FPopupTransitionEffect(FPopupTransitionEffect::ContextMenu));
 }
@@ -379,6 +385,12 @@ void SAnimStitchTimeline::OpenTrackMenu(const FPointerEvent& Event, int32 TrackI
 	const FAnimStitchTrack& Track = Asset->Timeline.Tracks[TrackIndex];
 	const bool bIK = Track.Kind == EAnimStitchTrackKind::IKLimb;
 
+	Menu.BeginSection("TrackExpansion", LOCTEXT("TrackExpansionSection", "Tracks"));
+	Menu.AddMenuEntry(LOCTEXT("ExpandAllTracks", "Expand All"), LOCTEXT("ExpandAllTip", "Open the value panel of every bone track"), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateLambda([this]() { ExpandAllTracks(); }), FCanExecuteAction::CreateLambda([this]() { return Asset->Timeline.Tracks.Num() > 0; })));
+	Menu.AddMenuEntry(LOCTEXT("CollapseAllTracks", "Collapse All"), LOCTEXT("CollapseAllTip", "Close the value panel of every bone track"), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateLambda([this]() { CollapseAllTracks(); }), FCanExecuteAction::CreateLambda([this]() { return ExpandedCount() > 0; })));
+	Menu.EndSection();
 	Menu.BeginSection("KeyClipboard", LOCTEXT("KeysSection2", "Keys"));
 	Menu.AddMenuEntry(LOCTEXT("CopyKeysMenu", "Copy Keys (Ctrl+C)"), LOCTEXT("CopyKeysTip", "Copy the selected keys (drag a rectangle over the lanes to select several)"), FSlateIcon(),
 		FUIAction(FExecuteAction::CreateLambda([this]() { CopySelectedKeys(); }), FCanExecuteAction::CreateLambda([this]() { return HasSelectedKeys(); })));
@@ -401,14 +413,18 @@ void SAnimStitchTimeline::OpenTrackMenu(const FPointerEvent& Event, int32 TrackI
 	}
 	if (bIK && Track.Keys.Num() > 0)
 	{
-		Menu.AddMenuEntry(LOCTEXT("ReleaseIK", "Release IK Here"), LOCTEXT("ReleaseIKTip", "Key weight 0 at the playhead: the IK eases off over 0.1 s and the limb returns to the animation"), FSlateIcon(),
+		Menu.AddMenuEntry(LOCTEXT("ReleaseIK", "Release IK Here"), LOCTEXT("ReleaseIKTip", "Hold the target here, then ease the IK off over the next 0.1 s so the limb returns to the animation"), FSlateIcon(),
 			FUIAction(FExecuteAction::CreateLambda([this, TrackIndex]()
 			{
 				const FScopedTransaction Tx(LOCTEXT("ReleaseIKTx", "Release IK"));
-				FAnimStitchTrackKey Key = FAnimStitchManualEdits::Sample(Asset->Timeline.Tracks[TrackIndex], Playhead);
-				Key.Time = Playhead;
-				Key.Weight = 0.f;
-				Asset->SetTrackKey(TrackIndex, Key);
+				// Hold the current target here, then ease the weight to 0 over the next 0.1 s.
+				FAnimStitchTrackKey Hold = FAnimStitchManualEdits::Sample(Asset->Timeline.Tracks[TrackIndex], Playhead);
+				Hold.Time = Playhead;
+				Asset->SetTrackKey(TrackIndex, Hold);
+				FAnimStitchTrackKey Off = Hold;
+				Off.Time = Playhead + 0.1;
+				Off.Weight = 0.f;
+				Asset->SetTrackKey(TrackIndex, Off);
 			})));
 	}
 	if (KeyIndex != INDEX_NONE)
@@ -439,7 +455,6 @@ void SAnimStitchTimeline::OpenTrackMenu(const FPointerEvent& Event, int32 TrackI
 	{
 		const FScopedTransaction Tx(LOCTEXT("RemoveTrackTx", "Remove Track"));
 		Asset->RemoveTrack(TrackIndex);
-		ExpandedTrack = INDEX_NONE;
 		SelectedTrack = INDEX_NONE;
 		SelectedKey = INDEX_NONE;
 	})));

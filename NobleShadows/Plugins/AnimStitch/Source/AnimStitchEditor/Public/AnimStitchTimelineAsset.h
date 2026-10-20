@@ -80,6 +80,7 @@ public:
 	void SetPinOffset(int32 ClipIndex, int32 EventIndex, const FVector& Offset);
 	void AddPreviewAttachment(const FAnimStitchPreviewAttachment& Attachment);
 	void RemovePreviewAttachment(int32 Index);
+	void SetPreviewAttachmentVisible(int32 Index, bool bVisible);
 	/** Bumped by every track/key edit (and undo/redo): the preview re-applies the manual corrections. */
 	uint32 GetManualCounter() const { return ManualCounter; }
 

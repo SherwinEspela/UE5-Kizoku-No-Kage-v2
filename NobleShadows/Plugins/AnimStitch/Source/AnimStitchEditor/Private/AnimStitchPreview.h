@@ -43,6 +43,8 @@ struct FAnimStitchControl
 	bool bSphere = false;
 	/** Display offset (cm): moves the drawn control and its manipulator, not the value it edits. */
 	FVector Offset = FVector::ZeroVector;
+	/** Pole controls: the IK limb track they belong to (the control's own track is the pole lane). */
+	int32 ParentTrack = INDEX_NONE;
 	FString Label;
 };
 
@@ -171,6 +173,10 @@ public:
 	bool GetFocusBox(FBox& OutBox) const;
 	bool GetShowControls() const { return bShowControls; }
 
+	/** Attached Props tab: the prop highlighted in the viewport (INDEX_NONE = none). */
+	void SelectAttachment(int32 Index) { SelectedAttachment = Index; RequestRedraw(); }
+	int32 GetSelectedAttachment() const { return SelectedAttachment; }
+
 	/** Props shown on the preview character (from the timeline asset). */
 	void SetPreviewAttachments(const TArray<FAnimStitchPreviewAttachment>& Attachments);
 
@@ -237,7 +243,8 @@ private:
 	bool bShowControls = true;
 	bool bHelpersVisible = true;
 	TArray<FAnimStitchPreviewAttachment> Attachments;
-	TArray<TObjectPtr<class UPrimitiveComponent>> AttachmentComponents;
+	TArray<TObjectPtr<class UPrimitiveComponent>> AttachmentComponents; // aligned with Attachments (null where an asset failed to load)
+	int32 SelectedAttachment = INDEX_NONE;
 	void RebuildAttachments();
 	EAnimStitchBoneDrawMode BoneDrawMode = EAnimStitchBoneDrawMode::None;
 	bool bShowBoneNames = false;
