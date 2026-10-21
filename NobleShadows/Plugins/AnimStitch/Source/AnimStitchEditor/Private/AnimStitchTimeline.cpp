@@ -1,6 +1,7 @@
-﻿#include "AnimStitchTimeline.h"
+#include "AnimStitchTimeline.h"
 #include "Animation/AnimData/IAnimationDataModel.h"
 #include "ReferenceSkeleton.h"
+#include "AnimStitchManualEdits.h"
 
 #define LOCTEXT_NAMESPACE "AnimStitch"
 
@@ -116,6 +117,8 @@ bool FAnimStitchEvaluator::Initialize(const FAnimStitchTimeline& InTimeline, FSt
 	const FReferenceSkeleton& RefSkel = Skeleton->GetReferenceSkeleton();
 	NumBones = RefSkel.GetNum();
 
+	RootOffsetTrack = Timeline.Tracks.IndexOfByPredicate([](const FAnimStitchTrack& T) { return T.Kind == EAnimStitchTrackKind::RootOffset && T.Keys.Num() > 0; });
+
 	HasTrack.SetNum(Num);
 	for (int32 i = 0; i < Num; ++i)
 	{
@@ -187,6 +190,21 @@ void FAnimStitchEvaluator::SampleClipRaw(int32 ClipIndex, double TimelineTime, T
 			: RefSkel.GetRefBonePose()[b];
 	}
 	OutPose[0] = EvaluateClipRoot(ClipIndex, TimelineTime);
+	// The Root offset track is part of the blend input: both crossfaded clips carry the same offset, so the blend result carries it exactly.
+	ApplyRootOffset(TimelineTime, OutPose[0]);
+}
+
+void FAnimStitchEvaluator::ApplyRootOffset(double TimelineTime, FTransform& Root) const
+{
+	if (!Timeline.Tracks.IsValidIndex(RootOffsetTrack)) { return; }
+	const FAnimStitchTrackKey Key = FAnimStitchManualEdits::Sample(Timeline.Tracks[RootOffsetTrack], TimelineTime);
+	// Translation + yaw (about Z) only.
+	const double Yaw = Key.Rotation.Rotator().Yaw;
+	Root.SetTranslation(Root.GetTranslation() + Key.Translation);
+	if (!FMath::IsNearlyZero(Yaw, 1e-6))
+	{
+		Root.SetRotation((FQuat(FVector::UpVector, FMath::DegreesToRadians(Yaw)) * Root.GetRotation()).GetNormalized());
+	}
 }
 
 float FAnimStitchEvaluator::ApplyCurve(EAnimStitchBlendCurve Curve, float Alpha)
@@ -253,6 +271,7 @@ FTransform FAnimStitchEvaluator::EvaluateRoot(double T) const
 		Root = FTransform(FQuat::Slerp(Out.GetRotation(), Root.GetRotation(), Alpha).GetNormalized(),
 			FMath::Lerp(Out.GetTranslation(), Root.GetTranslation(), Alpha), FMath::Lerp(Out.GetScale3D(), Root.GetScale3D(), Alpha));
 	}
+	ApplyRootOffset(T, Root);
 	return Root;
 }
 

@@ -1,4 +1,4 @@
-﻿#include "SAnimStitchTimeline.h"
+#include "SAnimStitchTimeline.h"
 #include "Editor.h"
 #include "ScopedTransaction.h"
 #include "DragAndDrop/AssetDragDropOp.h"
@@ -645,20 +645,7 @@ bool SAnimStitchTimeline::AddKeyAtPlayhead()
 	const FScopedTransaction Tx(LOCTEXT("AddKeyAtPlayheadTx", "Add Key at Playhead"));
 	for (const int32 TrackIndex : Targets)
 	{
-		const FAnimStitchTrack& Track = Asset->Timeline.Tracks[TrackIndex];
-		// The control's current evaluated value: the interpolated key value, or the limb as it is on screen when it has no key yet.
-		FAnimStitchTrackKey Key = Track.Keys.Num() > 0 ? FAnimStitchManualEdits::Sample(Track, Playhead) : FAnimStitchTrackKey();
-		if (LiveKeyProvider && (Track.Kind == EAnimStitchTrackKind::IKLimb || Track.Kind == EAnimStitchTrackKind::IKPole))
-		{
-			FAnimStitchTrackKey Live;
-			if (LiveKeyProvider(TrackIndex, Live))
-			{
-				if (Track.Kind == EAnimStitchTrackKind::IKPole) { Key.Translation = Live.Pole; }
-				else if (Key.Weight < 1e-3f) { Key.Translation = Live.Translation; Key.Rotation = Live.Rotation; Key.Pole = Live.Pole; }
-			}
-		}
-		Key.Time = Playhead;
-		Asset->SetTrackKey(TrackIndex, Key);
+		Asset->SetTrackKey(TrackIndex, MakeKeyAtPlayhead(TrackIndex));
 	}
 	return true;
 }
@@ -814,11 +801,8 @@ FReply SAnimStitchTimeline::OnMouseButtonDown(const FGeometry& G, const FPointer
 	case EHit::TrackAddKey:
 	{
 		SelectedTrack = Hit.Index; ++TrackSelectionSerial;
-		const FAnimStitchTrack& Track = Asset->Timeline.Tracks[Hit.Index];
 		const FScopedTransaction Tx(LOCTEXT("AddKeyTx", "Add Key"));
-		FAnimStitchTrackKey Key = Track.Keys.Num() > 0 ? FAnimStitchManualEdits::Sample(Track, Playhead) : FAnimStitchTrackKey();
-		Key.Time = Playhead;
-		Asset->SetTrackKey(Hit.Index, Key);
+		Asset->SetTrackKey(Hit.Index, MakeKeyAtPlayhead(Hit.Index));
 		SelectedKey = FAnimStitchManualEdits::FindKey(Asset->Timeline.Tracks[Hit.Index], Playhead);
 		return FReply::Handled();
 	}

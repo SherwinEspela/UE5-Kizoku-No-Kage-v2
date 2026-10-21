@@ -1,4 +1,4 @@
-﻿#include "AnimStitchTimelineAsset.h"
+#include "AnimStitchTimelineAsset.h"
 #include "AnimStitchSettings.h"
 #include "AnimStitchManualEdits.h"
 #include "Animation/AnimData/IAnimationDataModel.h"
@@ -87,7 +87,11 @@ void UAnimStitchTimelineAsset::FKeyFollowScope::Apply()
 			Track.Keys.Add(Entry.Value);
 		}
 	}
-	if (bChanged) { Asset.TouchManual(); }
+	if (bChanged)
+	{
+		if (Asset.Timeline.Tracks.ContainsByPredicate([](const FAnimStitchTrack& T) { return T.Kind == EAnimStitchTrackKind::RootOffset; })) { Asset.Touch(); ++Asset.ManualCounter; }
+		else { Asset.TouchManual(); }
+	}
 }
 
 void UAnimStitchTimelineAsset::GetPlaybackRange(double& OutStart, double& OutEnd) const
@@ -374,17 +378,42 @@ void UAnimStitchTimelineAsset::ClearFootEvents(int32 Foot)
 		Clip.FootEvents.RemoveAll([Foot](const FAnimStitchFootEvent& E) { return Foot == INDEX_NONE || E.Foot == Foot; });
 	}
 }
+bool UAnimStitchTimelineAsset::CaptureBlendedBoneTransform(FName Bone, double Time, FAnimStitchTrackKey& InOutKey) const
+{
+	FAnimStitchEvaluator Evaluator;
+	FString Error;
+	if (!Evaluator.Initialize(Timeline, Error)) { return false; }
+	const FReferenceSkeleton& Ref = Evaluator.GetSkeleton()->GetReferenceSkeleton();
+	const int32 BoneIndex = Ref.FindBoneIndex(Bone);
+	if (BoneIndex == INDEX_NONE) { return false; }
+	TArray<FTransform> Pose;
+	Evaluator.EvaluatePose(Time, Pose);
+	// Relative to the root bone: an absolute key travels with the root.
+	const FTransform Component = FAnimStitchFootLock::GetComponentSpace(Ref, Pose, BoneIndex).GetRelativeTransform(FAnimStitchFootLock::GetComponentSpace(Ref, Pose, 0));
+	InOutKey.Translation = Component.GetTranslation();
+	InOutKey.Rotation = Component.GetRotation().GetNormalized();
+	InOutKey.Scale = Component.GetScale3D();
+	return true;
+}
+
 int32 UAnimStitchTimelineAsset::AddTrack(const FAnimStitchTrack& Track)
 {
 	for (int32 i = 0; i < Timeline.Tracks.Num(); ++i)
 	{
-		if (Timeline.Tracks[i].Kind == Track.Kind && Timeline.Tracks[i].Bone == Track.Bone)
+		// One track per bone and kind; there is only ever ONE Root offset track, whichever way it was added.
+		if (Timeline.Tracks[i].Kind == Track.Kind && (Track.Kind == EAnimStitchTrackKind::RootOffset || Timeline.Tracks[i].Bone == Track.Bone))
 		{
 			return i;
 		}
 	}
-	TouchManual();
+	if (Track.Kind == EAnimStitchTrackKind::RootOffset) { Touch(); ++ManualCounter; } else { TouchManual(); }
 	FAnimStitchTrack NewTrack = Track;
+	if (NewTrack.Kind != EAnimStitchTrackKind::Bone) { NewTrack.Mode = EAnimStitchTrackMode::Additive; } // Absolute is for FK / core bone tracks only
+	if (NewTrack.Kind == EAnimStitchTrackKind::RootOffset)
+	{
+		NewTrack.bRotationOnly = false;
+		NewTrack.bKeepFeetPlanted = false;
+	}
 	NewTrack.bKeepFeetPlanted = Track.Kind == EAnimStitchTrackKind::Bone && FAnimStitchManualEdits::IsPelvisBone(Track.Bone) && Track.bKeepFeetPlanted;
 	if (NewTrack.Keys.Num() == 0 && NewTrack.Kind != EAnimStitchTrackKind::IKPole)
 	{
@@ -392,11 +421,26 @@ int32 UAnimStitchTimelineAsset::AddTrack(const FAnimStitchTrack& Track)
 		FAnimStitchTrackKey Start;
 		Start.Time = 0.0;
 		Start.Weight = NewTrack.Kind == EAnimStitchTrackKind::IKLimb ? 0.f : 1.f;
+		FAnimStitchTrackKey End;
+		bool bHaveEndValue = false;
+		if (NewTrack.Kind == EAnimStitchTrackKind::Bone && NewTrack.Mode == EAnimStitchTrackMode::Absolute)
+		{
+			// Absolute: the boundary keys hold the underlying blended value, so the bone eases out of the animation and back instead of snapping.
+			if (CaptureBlendedBoneTransform(NewTrack.Bone, 0.0, Start) )
+			{
+				End = Start;
+				bHaveEndValue = CaptureBlendedBoneTransform(NewTrack.Bone, Timeline.GetTotalLength(), End);
+			}
+			else
+			{
+				return Timeline.Tracks.Add(NewTrack); // could not evaluate the blend: no boundary keys; the first key written starts the track
+			}
+		}
 		FAnimStitchManualEdits::SetKey(NewTrack, Start);
 		const double Total = Timeline.GetTotalLength();
 		if (Total > 0.05)
 		{
-			FAnimStitchTrackKey End = Start;
+			if (!bHaveEndValue) { End = Start; }
 			End.Time = Total;
 			FAnimStitchManualEdits::SetKey(NewTrack, End);
 		}
@@ -408,7 +452,7 @@ void UAnimStitchTimelineAsset::RemoveTrack(int32 Index)
 {
 	if (Timeline.Tracks.IsValidIndex(Index))
 	{
-		TouchManual();
+		TouchTrack(Index);
 		// Removing an IK limb takes its pole lane with it.
 		if (Timeline.Tracks[Index].Kind == EAnimStitchTrackKind::IKLimb)
 		{
@@ -432,13 +476,17 @@ void UAnimStitchTimelineAsset::SetTrackKey(int32 TrackIndex, const FAnimStitchTr
 	{
 		return;
 	}
-	TouchManual();
+	TouchTrack(TrackIndex);
 	FAnimStitchTrack& Track = Timeline.Tracks[TrackIndex];
-	if (Track.Keys.Num() == 0 && Key.Time > 1e-3)
+	if (Track.Keys.Num() == 0 && Key.Time > 1e-3 && Track.Mode == EAnimStitchTrackMode::Absolute && Track.Kind == EAnimStitchTrackKind::Bone)
+	{
+		// Absolute track without boundary keys (the blend could not be evaluated at creation): it simply starts at its first key.
+	}
+	else if (Track.Keys.Num() == 0 && Key.Time > 1e-3)
 	{
 		// Anchor so the correction does not apply to the whole timeline before the first key (Sequencer holds the first value).
 		FAnimStitchTrackKey Anchor;
-		if (Track.Kind == EAnimStitchTrackKind::Bone)
+		if (Track.Kind == EAnimStitchTrackKind::Bone || Track.Kind == EAnimStitchTrackKind::RootOffset)
 		{
 			Anchor.Time = 0.0; // identity offset
 		}
@@ -457,7 +505,7 @@ void UAnimStitchTimelineAsset::RemoveTrackKey(int32 TrackIndex, int32 KeyIndex)
 {
 	if (Timeline.Tracks.IsValidIndex(TrackIndex) && Timeline.Tracks[TrackIndex].Keys.IsValidIndex(KeyIndex))
 	{
-		TouchManual();
+		TouchTrack(TrackIndex);
 		Timeline.Tracks[TrackIndex].Keys.RemoveAt(KeyIndex);
 	}
 }
@@ -466,7 +514,7 @@ int32 UAnimStitchTimelineAsset::MoveTrackKey(int32 TrackIndex, int32 KeyIndex, d
 {
 	if (Timeline.Tracks.IsValidIndex(TrackIndex) && Timeline.Tracks[TrackIndex].Keys.IsValidIndex(KeyIndex))
 	{
-		TouchManual();
+		TouchTrack(TrackIndex);
 		FAnimStitchTrack& Track = Timeline.Tracks[TrackIndex];
 		FAnimStitchTrackKey Moved = Track.Keys[KeyIndex];
 		Track.Keys.RemoveAt(KeyIndex);

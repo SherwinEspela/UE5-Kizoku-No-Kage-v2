@@ -1,4 +1,4 @@
-﻿// Manual correction controls (Phase 9): control shapes in the preview viewport, a translate/rotate/scale gizmo and the
+// Manual correction controls (Phase 9): control shapes in the preview viewport, a translate/rotate/scale gizmo and the
 // key-writing that dragging does. Kept apart from AnimStitchPreview.cpp.
 
 #include "AnimStitchPreview.h"
@@ -145,8 +145,29 @@ void FAnimStitchPreview::SelectControl(const FAnimStitchControlId& Id)
 	}
 }
 
+bool FAnimStitchPreview::GetBoneComponentTransform(FName Bone, FTransform& OutTransform) const
+{
+	if (!MainComponent || !Mesh) { return false; }
+	const int32 Index = Mesh->GetRefSkeleton().FindBoneIndex(Bone);
+	const TArray<FTransform>& Component = MainComponent->GetComponentSpaceTransforms();
+	if (Index == INDEX_NONE || !Component.IsValidIndex(Index)) { return false; }
+	OutTransform = Component[Index];
+	return true;
+}
+
 bool FAnimStitchPreview::GetIKLiveKey(int32 TrackIndex, FAnimStitchTrackKey& OutKey) const
 {
+	if (ManualTracks.IsValidIndex(TrackIndex) && ManualTracks[TrackIndex].Kind == EAnimStitchTrackKind::Bone && ManualTracks[TrackIndex].Mode == EAnimStitchTrackMode::Absolute)
+	{
+		FTransform Bone;
+		if (!GetBoneComponentTransform(ManualTracks[TrackIndex].Bone, Bone)) { return false; }
+		FTransform Root;
+		if (GetBoneComponentTransform(Mesh->GetRefSkeleton().GetBoneName(0), Root)) { Bone = Bone.GetRelativeTransform(Root); } // root-relative, like the key
+		OutKey.Translation = Bone.GetTranslation();
+		OutKey.Rotation = Bone.GetRotation();
+		OutKey.Scale = Bone.GetScale3D();
+		return true;
+	}
 	TArray<FAnimStitchControl> Controls;
 	BuildControls(Controls);
 	bool bEffector = false, bPole = false;
@@ -236,18 +257,18 @@ void FAnimStitchPreview::BuildControlsFromPose(TArray<FAnimStitchControl>& Out) 
 		if (Bone == INDEX_NONE) { continue; }
 		const int32 Style = SideStyle(Track.Bone);
 
-		if (Track.Kind == EAnimStitchTrackKind::Bone)
+		if (Track.Kind == EAnimStitchTrackKind::Bone || Track.Kind == EAnimStitchTrackKind::RootOffset)
 		{
 			FAnimStitchControl C;
 			C.Id = { EAnimStitchControlKind::Bone, TrackIndex, INDEX_NONE };
 			C.Position = Component[Bone].GetTranslation();
 			C.Orientation = Component[Bone].GetRotation(); // the cube starts out aligned with the joint
 			C.bTranslate = !Track.bRotationOnly;
-			C.bScale = !Track.bRotationOnly;
+			C.bScale = !Track.bRotationOnly && Track.Kind != EAnimStitchTrackKind::RootOffset; // the root offset is translation + yaw only
 			C.Style = Style;
 			C.Color = SideColors[Style];
 			C.BaseSize = GetBoneControlSize(Bone);
-			C.Label = Track.Bone.ToString();
+			C.Label = Track.Kind == EAnimStitchTrackKind::RootOffset ? FString(TEXT("Root offset")) : Track.Bone.ToString();
 			ApplyStyle(C, Track.ControlStyle);
 			Out.Add(C);
 		}
@@ -677,6 +698,20 @@ bool FAnimStitchPreview::BeginGizmoDrag(const FSceneView& View, const FVector2D&
 	{
 		Drag.StartKey = FAnimStitchManualEdits::Sample(ManualTracks[Selected->Id.A], Playhead);
 		Drag.StartKey.Time = Playhead;
+		if (Selected->Id.Kind == EAnimStitchControlKind::Bone && ManualTracks[Selected->Id.A].Kind == EAnimStitchTrackKind::Bone && ManualTracks[Selected->Id.A].Mode == EAnimStitchTrackMode::Absolute)
+		{
+			// Absolute: what is on screen (the bone's full transform, relative to the root) is the starting point of the drag.
+			FTransform Bone, Root;
+			if (GetBoneComponentTransform(ManualTracks[Selected->Id.A].Bone, Bone) && GetBoneComponentTransform(Mesh->GetRefSkeleton().GetBoneName(0), Root))
+			{
+				Drag.StartBoneComp = Bone;
+				Drag.StartRootComp = Root;
+				const FTransform Relative = Bone.GetRelativeTransform(Root);
+				Drag.StartKey.Translation = Relative.GetTranslation();
+				Drag.StartKey.Rotation = Relative.GetRotation();
+				Drag.StartKey.Scale = Relative.GetScale3D();
+			}
+		}
 		if (Selected->Id.Kind != EAnimStitchControlKind::Bone)
 		{
 			// IK: what is on screen is the starting point (the key's target when IK is on, the animated limb otherwise).
@@ -838,6 +873,21 @@ void FAnimStitchPreview::ApplyControlEdit(const FVector& Translation, const FQua
 		Key.Translation = Drag.StartKey.Translation + Translation;
 		Key.Rotation = (Rotation * Drag.StartKey.Rotation).GetNormalized();
 		Key.Scale = Drag.StartKey.Scale * Scale;
+		if (AssetPtr->Timeline.Tracks[Id.A].Kind == EAnimStitchTrackKind::Bone && AssetPtr->Timeline.Tracks[Id.A].Mode == EAnimStitchTrackMode::Absolute)
+		{
+			// The gizmo moves the bone in component space; the key stores the result relative to the root.
+			const FTransform NewComponent(Rotation * Drag.StartBoneComp.GetRotation(), Drag.StartBoneComp.GetTranslation() + Translation, Drag.StartBoneComp.GetScale3D() * Scale);
+			const FTransform Relative = NewComponent.GetRelativeTransform(Drag.StartRootComp);
+			Key.Translation = Relative.GetTranslation();
+			Key.Rotation = Relative.GetRotation().GetNormalized();
+			Key.Scale = Relative.GetScale3D();
+		}
+		if (AssetPtr->Timeline.Tracks[Id.A].Kind == EAnimStitchTrackKind::RootOffset)
+		{
+			// Root offset: translation + yaw only.
+			Key.Rotation = FQuat(FVector::UpVector, FMath::DegreesToRadians(Key.Rotation.Rotator().Yaw));
+			Key.Scale = FVector::OneVector;
+		}
 	}
 	else if (Id.Kind == EAnimStitchControlKind::IKEffector)
 	{

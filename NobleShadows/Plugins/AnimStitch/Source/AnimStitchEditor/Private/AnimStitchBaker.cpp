@@ -1,4 +1,4 @@
-﻿#include "AnimStitchBaker.h"
+#include "AnimStitchBaker.h"
 #include "AnimStitchFootLock.h"
 #include "AnimStitchManualEdits.h"
 #include "AnimStitchProvenance.h"
@@ -104,7 +104,7 @@ UAnimSequence* FAnimStitchBaker::Bake(const FAnimStitchTimeline& Timeline, const
 		{
 			TrackBones.AddUnique(Bone);
 		}
-		else
+		else if (Track.Kind == EAnimStitchTrackKind::IKLimb)
 		{
 			const FAnimStitchFootChain Chain = FAnimStitchManualEdits::ChainFor(RefSkel, Track.Bone);
 			if (Chain.IsValid())

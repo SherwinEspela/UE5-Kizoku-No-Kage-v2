@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "UObject/GCObject.h"
@@ -145,7 +145,13 @@ public:
 	FAnimStitchControlId PickControl(const FSceneView& View, const FVector2D& Pixel) const;
 	void SelectControl(const FAnimStitchControlId& Id);
 	/** The IK limb of a track as it is on screen right now (effector + pole). False if the track is not a valid IK limb. */
+	/**
+	 * The control of a track as it is evaluated on screen right now: IK limbs (effector + pole) and ABSOLUTE bone tracks (full component-space
+	 * transform of the bone). Used to key without popping and by the value panel.
+	 */
 	bool GetIKLiveKey(int32 TrackIndex, FAnimStitchTrackKey& OutKey) const;
+	/** Component-space transform of a bone as currently displayed (including every correction). */
+	bool GetBoneComponentTransform(FName Bone, FTransform& OutTransform) const;
 	FAnimStitchControlId GetSelectedControl() const { return SelectedControl; }
 	void SetGizmoMode(EAnimStitchGizmoMode Mode) { GizmoMode = Mode; RequestRedraw(); }
 	/** World / local axes for the manipulator; each tool (move, rotate, scale) remembers its own. Set / Get act on the active tool. */
@@ -274,6 +280,9 @@ private:
 		FAnimStitchControl Control;
 		double Time = 0.0;
 		FAnimStitchTrackKey StartKey;
+		/** Absolute bone tracks: the bone and the root bone in component space when the drag began (keys are root-relative). */
+		FTransform StartBoneComp = FTransform::Identity;
+		FTransform StartRootComp = FTransform::Identity;
 		FVector StartOffset = FVector::ZeroVector; // lock pin: the offset when the drag began
 		FVector StartRayHit = FVector::ZeroVector;
 		double StartAxisT = 0.0;

@@ -1,4 +1,4 @@
-﻿#include "AnimStitchSpikeCommandlet.h"
+#include "AnimStitchSpikeCommandlet.h"
 #include "AnimStitchBaker.h"
 #include "AnimStitchTimelineAsset.h"
 #include "AnimStitchBatch.h"
@@ -35,6 +35,195 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 		return 1;
 	}
 
+	// Phase 16 test: -P16Test with -A=<landing> -B=<run>. Absolute bone tracks (replace the animation across the keyed range, no pops, bake == evaluation)
+	// and the Root offset track (evaluated with the blend before foot lock: planted feet stay glued on the corrected path).
+	if (FParse::Param(*Params, TEXT("P16Test")))
+	{
+		const FString Folder = TEXT("/Game/_AnimStitchSpike");
+		UAnimStitchTimelineAsset* TLAsset = NewObject<UAnimStitchTimelineAsset>(GetTransientPackage());
+		TArray<FText> W;
+		TLAsset->AddSequences({ const_cast<UAnimSequence*>(A), const_cast<UAnimSequence*>(B) }, INDEX_NONE, W);
+		TLAsset->SetTrim(1, 0.0, FMath::Min(3.0, (double)B->GetPlayLength()));
+		TLAsset->SetOverlap(1, 0.2);
+		TLAsset->SetRootAuthority(0);
+		FAnimStitchEvaluator Eval;
+		FString EvalErr;
+		Eval.Initialize(TLAsset->Timeline, EvalErr);
+		const FReferenceSkeleton& Ref = Eval.GetSkeleton()->GetReferenceSkeleton();
+		auto ReadPose = [&Ref](const UAnimSequence* Seq, int32 Frame, TArray<FTransform>& OutPose)
+		{
+			const IAnimationDataModel* Model = Seq->GetDataModel();
+			OutPose = Ref.GetRefBonePose();
+			TArray<FName> Names;
+			Model->GetBoneTrackNames(Names);
+			for (const FName& N : Names)
+			{
+				const int32 b = Ref.FindBoneIndex(N);
+				if (b != INDEX_NONE) { OutPose[b] = Model->GetBoneTrackTransform(N, FFrameNumber(Frame)); }
+			}
+		};
+		auto CS = [&Ref](const TArray<FTransform>& Local, int32 Bone) { return FAnimStitchFootLock::GetComponentSpace(Ref, Local, Bone); };
+		auto BakeAll = [&](const TCHAR* Name, TArray<TArray<FTransform>>& Out) -> bool
+		{
+			FString Err;
+			UAnimSequence* Seq = UAnimStitchBlueprintLibrary::BakeTimeline(TLAsset, Folder / Name, 30, true, Err);
+			if (!Seq) { UE_LOG(LogAnimStitchSpike, Error, TEXT("P16Test bake %s failed: %s"), Name, *Err); return false; }
+			const int32 N = Seq->GetDataModel()->GetNumberOfFrames();
+			Out.SetNum(N + 1);
+			for (int32 f = 0; f <= N; ++f) { ReadPose(Seq, f, Out[f]); }
+			return true;
+		};
+		const int32 Pelvis = Ref.FindBoneIndex(TEXT("pelvis"));
+		const int32 FootL = Ref.FindBoneIndex(TEXT("foot_l"));
+		if (Pelvis == INDEX_NONE || FootL == INDEX_NONE) { UE_LOG(LogAnimStitchSpike, Error, TEXT("P16Test: pelvis/foot_l not found")); return 60; }
+
+		TArray<TArray<FTransform>> Base;
+		if (!BakeAll(TEXT("AS_P16Base"), Base)) { return 61; }
+		const int32 NumFrames = Base.Num() - 1;
+		const double Total = TLAsset->Timeline.GetTotalLength();
+
+		// ---- Absolute pelvis track ----
+		{
+			FAnimStitchTrack Track;
+			Track.Kind = EAnimStitchTrackKind::Bone;
+			Track.Bone = TEXT("pelvis");
+			Track.Mode = EAnimStitchTrackMode::Absolute;
+			Track.bKeepFeetPlanted = false;
+			const int32 TI = TLAsset->AddTrack(Track);
+			const FAnimStitchTrack& T = TLAsset->Timeline.Tracks[TI];
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("P16 ABS: new absolute track has %d boundary keys (times %.2f / %.2f s); mode=%d; default mode of a plain track=%d (Additive=0)"),
+				T.Keys.Num(), T.Keys.Num() > 0 ? T.Keys[0].Time : -1.0, T.Keys.Num() > 1 ? T.Keys.Last().Time : -1.0, (int32)T.Mode, (int32)FAnimStitchTrack().Mode);
+			const FTransform S0 = CS(Base[0], Pelvis).GetRelativeTransform(CS(Base[0], 0)); // keys are relative to the root bone
+			const FTransform SE = CS(Base[NumFrames], Pelvis).GetRelativeTransform(CS(Base[NumFrames], 0));
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("P16 ABS: boundary keys == underlying blended value: start diff %.5f cm, end diff %.5f cm"),
+				(T.Keys[0].Translation - S0.GetTranslation()).Size(), (T.Keys.Last().Translation - SE.GetTranslation()).Size());
+
+			// Two mid poses: the underlying pelvis shifted up 30 cm / sideways 25 cm.
+			const double T1 = 1.5, T2 = 2.5;
+			const int32 F1 = FMath::RoundToInt(T1 * 30.0), F2 = FMath::RoundToInt(T2 * 30.0);
+			FAnimStitchTrackKey K1, K2;
+			FTransform Want1 = CS(Base[F1], Pelvis); Want1.AddToTranslation(FVector(0, 0, 30));
+			FTransform Want2 = CS(Base[F2], Pelvis); Want2.AddToTranslation(FVector(0, 25, 0));
+			const FTransform Rel1 = Want1.GetRelativeTransform(CS(Base[F1], 0)), Rel2 = Want2.GetRelativeTransform(CS(Base[F2], 0));
+			K1.Time = T1; K1.Translation = Rel1.GetTranslation(); K1.Rotation = Rel1.GetRotation(); K1.Scale = Rel1.GetScale3D();
+			K2.Time = T2; K2.Translation = Rel2.GetTranslation(); K2.Rotation = Rel2.GetRotation(); K2.Scale = Rel2.GetScale3D();
+			TLAsset->SetTrackKey(TI, K1);
+			TLAsset->SetTrackKey(TI, K2);
+			TArray<TArray<FTransform>> Abs;
+			if (!BakeAll(TEXT("AS_P16Abs"), Abs)) { return 62; }
+			double DevKey1 = (CS(Abs[F1], Pelvis).GetTranslation() - Want1.GetTranslation()).Size();
+			double DevKey2 = (CS(Abs[F2], Pelvis).GetTranslation() - Want2.GetTranslation()).Size();
+			// The pose must travel with the root: pelvis-to-root distance stays about what the animation has (it used to blow up on a travelling character).
+			double MaxDistAbs = 0.0, MaxDistBase = 0.0;
+			for (int32 f = 0; f <= NumFrames; ++f)
+			{
+				MaxDistAbs = FMath::Max(MaxDistAbs, (CS(Abs[f], Pelvis).GetTranslation() - CS(Abs[f], 0).GetTranslation()).Size());
+				MaxDistBase = FMath::Max(MaxDistBase, (CS(Base[f], Pelvis).GetTranslation() - CS(Base[f], 0).GetTranslation()).Size());
+			}
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("P16 ABS: root travels %.0f cm over the timeline; max pelvis-to-root distance %.1f cm with the absolute track vs %.1f cm in the animation"), (CS(Base[NumFrames], 0).GetTranslation() - CS(Base[0], 0).GetTranslation()).Size(), MaxDistAbs, MaxDistBase);
+			double MaxStep = 0.0; // continuity across the whole timeline (no pops at start, first key, last key, end)
+			for (int32 f = 1; f <= NumFrames; ++f) { MaxStep = FMath::Max(MaxStep, (CS(Abs[f], Pelvis).GetTranslation() - CS(Abs[f - 1], Pelvis).GetTranslation()).Size()); }
+			double MaxBaseStep = 0.0;
+			for (int32 f = 1; f <= NumFrames; ++f) { MaxBaseStep = FMath::Max(MaxBaseStep, (CS(Base[f], Pelvis).GetTranslation() - CS(Base[f - 1], Pelvis).GetTranslation()).Size()); }
+			// Preview parity: the evaluator + Apply path (what the viewport runs) against the bake.
+			double MaxPreviewDiff = 0.0;
+			for (int32 f = 0; f <= NumFrames; ++f)
+			{
+				TArray<FTransform> Pose;
+				Eval.EvaluatePose(f / 30.0, Pose);
+				FAnimStitchManualEdits::Apply(Ref, TLAsset->Timeline.Tracks, f / 30.0, Pose, nullptr);
+				MaxPreviewDiff = FMath::Max(MaxPreviewDiff, (CS(Pose, Pelvis).GetTranslation() - CS(Abs[f], Pelvis).GetTranslation()).Size());
+			}
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("P16 ABS: keyed 30 cm up at %.1f s and 25 cm sideways at %.1f s: bake hits the keys within %.5f / %.5f cm | max frame step %.2f cm (animation alone: %.2f) | preview evaluation vs bake: %.5f cm"),
+				T1, T2, DevKey1, DevKey2, MaxStep, MaxBaseStep, MaxPreviewDiff);
+			double MidReplaced = 0.0;
+			for (int32 f = F1; f <= F2; ++f) { MidReplaced = FMath::Max(MidReplaced, (CS(Abs[f], Pelvis).GetTranslation() - CS(Base[f], Pelvis).GetTranslation()).Size()); }
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("P16 ABS: between the keys the animation is replaced (max difference to the animation %.2f cm)"), MidReplaced);
+
+			// Without boundary keys the animation plays untouched outside the keyed range.
+			TLAsset->RemoveTrackKey(TI, 0);
+			TLAsset->RemoveTrackKey(TI, TLAsset->Timeline.Tracks[TI].Keys.Num() - 1);
+			TArray<TArray<FTransform>> Open;
+			if (!BakeAll(TEXT("AS_P16AbsOpen"), Open)) { return 63; }
+			double Outside = 0.0, Inside = 0.0;
+			for (int32 f = 0; f <= NumFrames; ++f)
+			{
+				const double Diff = (CS(Open[f], Pelvis).GetTranslation() - CS(Base[f], Pelvis).GetTranslation()).Size();
+				if (f < F1 - 1 || f > F2 + 1) { Outside = FMath::Max(Outside, Diff); } else if (f >= F1 && f <= F2) { Inside = FMath::Max(Inside, Diff); }
+			}
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("P16 ABS: boundary keys removed: outside the keyed range max difference to the animation %.5f cm (expected 0), inside %.2f cm"), Outside, Inside);
+			TLAsset->RemoveTrack(TI);
+		}
+
+		// ---- Root offset track ----
+		{
+			TLAsset->Timeline.FootLock.bEnabled = true;
+			TArray<TArray<FTransform>> LockBase;
+			if (!BakeAll(TEXT("AS_P16LockBase"), LockBase)) { return 64; }
+			FAnimStitchTrack Root;
+			Root.Kind = EAnimStitchTrackKind::RootOffset;
+			Root.Bone = Ref.GetBoneName(0);
+			const int32 RI = TLAsset->AddTrack(Root);
+			const int32 RI2 = TLAsset->AddTrack(Root); // a second one is refused
+			FAnimStitchTrackKey End;
+			End.Time = Total; End.Translation = FVector(0, 40, 0); End.Rotation = FQuat(FVector::UpVector, FMath::DegreesToRadians(25.0));
+			TLAsset->SetTrackKey(RI, End);
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("P16 ROOT: root track index %d, second add returns %d (same track), %d tracks in total, %d keys (zero at 0, 40 cm sideways + 25 deg yaw at %.2f s)"),
+				RI, RI2, TLAsset->Timeline.Tracks.Num(), TLAsset->Timeline.Tracks[RI].Keys.Num(), Total);
+			TArray<TArray<FTransform>> RootBake;
+			if (!BakeAll(TEXT("AS_P16Root"), RootBake)) { return 65; }
+			const FTransform R0 = CS(LockBase[NumFrames], 0), R1 = CS(RootBake[NumFrames], 0);
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("P16 ROOT: last-frame root moved by (%s) cm and %.1f deg yaw compared with no offset"), *(R1.GetTranslation() - R0.GetTranslation()).ToCompactString(),
+				FMath::RadiansToDegrees((R1.GetRotation() * R0.GetRotation().Inverse()).GetTwistAngle(FVector::UpVector)));
+
+			// Plants on the CORRECTED path: detect on the evaluated poses, then measure foot slide inside every planted run of a baked result.
+			auto MeasureSlide = [&](const TCHAR* Label, const FAnimStitchTimeline& Timeline, const TArray<TArray<FTransform>>& Baked)
+			{
+				FAnimStitchEvaluator EvalX;
+				FString E2;
+				EvalX.Initialize(Timeline, E2);
+				TArray<TArray<FTransform>> Poses; Poses.SetNum(NumFrames + 1);
+				for (int32 f = 0; f <= NumFrames; ++f) { EvalX.EvaluatePose(f / 30.0, Poses[f]); }
+				const FAnimStitchFootLockResult Det = FAnimStitchFootLock::Detect(EvalX, Poses, 30.0);
+				for (int32 Foot = 0; Foot < 2 && Det.bValid; ++Foot)
+				{
+					const int32 Bone = Det.Chains[Foot].Foot;
+					double WorstLocked = 0.0, WorstUnlocked = 0.0;
+					int32 Runs = 0, Frames = 0;
+					for (int32 f = 0; f <= NumFrames;)
+					{
+						if (!AnimStitchPlant::IsPlanted(Det.Mask[Foot][f])) { ++f; continue; }
+						int32 e = f;
+						while (e + 1 <= NumFrames && AnimStitchPlant::IsPlanted(Det.Mask[Foot][e + 1])) { ++e; }
+						if (e - f >= 12) // interior of the run: the first / last 4 frames are the 0.1 s blend in / out of the pin
+						{
+							++Runs; const int32 f0 = f + 4, e0 = e - 4;
+							FVector MeanLocked = FVector::ZeroVector, MeanUnlocked = FVector::ZeroVector;
+							for (int32 k = f0; k <= e0; ++k) { MeanLocked += CS(Baked[k], Bone).GetTranslation(); MeanUnlocked += CS(Poses[k], Bone).GetTranslation(); }
+							MeanLocked /= double(e0 - f0 + 1); MeanUnlocked /= double(e0 - f0 + 1);
+							for (int32 k = f0; k <= e0; ++k)
+							{
+								++Frames;
+								WorstLocked = FMath::Max(WorstLocked, FVector::Dist2D(CS(Baked[k], Bone).GetTranslation(), MeanLocked));
+								WorstUnlocked = FMath::Max(WorstUnlocked, FVector::Dist2D(CS(Poses[k], Bone).GetTranslation(), MeanUnlocked));
+							}
+						}
+						f = e + 1;
+					}
+					UE_LOG(LogAnimStitchSpike, Display, TEXT("P16 ROOT [%s]: foot %d: %d planted runs (%d frames): horizontal slide inside a run %.4f cm with foot lock (%.4f cm without it)"), Label, Foot, Runs, Frames, WorstLocked, WorstUnlocked);
+				}
+				return Det.bValid;
+			};
+			FAnimStitchTimeline NoRoot = TLAsset->Timeline;
+			NoRoot.Tracks.Reset();
+			MeasureSlide(TEXT("baseline, no root offset"), NoRoot, LockBase);
+			const bool bDetValid = MeasureSlide(TEXT("with root offset"), TLAsset->Timeline, RootBake);
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("P16 ROOT: detection valid=%d"), bDetValid);
+			TLAsset->RemoveTrack(RI);
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("P16 ROOT: track removed -> %d tracks"), TLAsset->Timeline.Tracks.Num());
+		}
+		return 0;
+	}
 	// Phase 9 test: -ManualTest with -A=<landing> -B=<run>. Additive pelvis offset bakes; free foot IK stays planted under root motion;
 	// manual wins over foot lock; lock pin offset; control picking.
 	if (FParse::Param(*Params, TEXT("ManualTest")))

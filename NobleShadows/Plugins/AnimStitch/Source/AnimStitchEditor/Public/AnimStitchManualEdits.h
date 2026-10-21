@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "AnimStitchTimeline.h"
@@ -15,6 +15,9 @@ class ANIMSTITCHEDITOR_API FAnimStitchManualEdits
 public:
 	/** Interpolated track values at a timeline time (constant before the first and after the last key). */
 	static FAnimStitchTrackKey Sample(const FAnimStitchTrack& Track, double Time);
+
+	/** Does the (bone) track change the pose at this time? Additive: any non-identity offset; absolute: inside the keyed range. */
+	static bool IsActiveAt(const FAnimStitchTrack& Track, double Time);
 
 	/** Index of a key within Tolerance seconds of Time, or INDEX_NONE. */
 	static int32 FindKey(const FAnimStitchTrack& Track, double Time, double Tolerance = 1.0 / 120.0);

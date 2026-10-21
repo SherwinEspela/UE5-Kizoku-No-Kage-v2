@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "Misc/FrameRate.h"
@@ -134,6 +134,18 @@ enum class EAnimStitchTrackKind : uint8
 	IKLimb,
 	/** The pole vector of an IK limb: its own lane under the IK track (Bone = the IK effector bone); keys hold the absolute pole position (Translation). */
 	IKPole,
+	/** The one root-motion offset lane of the timeline: additive translation + yaw on the root, applied WITH the blend and BEFORE foot lock. */
+	RootOffset,
+};
+
+/** How a bone track's keys act. Fixed when the track is created. */
+UENUM()
+enum class EAnimStitchTrackMode : uint8
+{
+	/** Keys are additive offsets on the blended result (the original behaviour; also how older projects load). */
+	Additive,
+	/** Keys hold the bone's full transform relative to the root bone (so the pose travels with root motion) and replace the blended result across the keyed range. */
+	Absolute,
 };
 
 /**
@@ -228,6 +240,10 @@ struct ANIMSTITCHEDITOR_API FAnimStitchTrack
 
 	UPROPERTY()
 	FAnimStitchControlStyle PoleStyle;
+
+	/** Bone tracks: Additive offsets (default; older projects) or Absolute full transforms. Chosen at creation, never changed afterwards. */
+	UPROPERTY()
+	EAnimStitchTrackMode Mode = EAnimStitchTrackMode::Additive;
 
 	/** Tracks created together as the FK joints of one limb share a group (0 = none). */
 	UPROPERTY()
@@ -370,8 +386,11 @@ private:
 	void SampleClipRaw(int32 ClipIndex, double TimelineTime, TArray<FTransform>& OutPose) const;
 	FTransform SampleClipRawRoot(int32 ClipIndex, double SourceTime) const;
 	static float ApplyCurve(EAnimStitchBlendCurve Curve, float Alpha);
+	/** Adds the Root offset track's value at a timeline time to a root transform (no-op without that track). */
+	void ApplyRootOffset(double TimelineTime, FTransform& Root) const;
 
 	FAnimStitchTimeline Timeline;
+	int32 RootOffsetTrack = INDEX_NONE;
 	USkeleton* Skeleton = nullptr;
 	int32 NumBones = 0;
 	/** Per clip, per skeleton bone: does the source have a track for it. */

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
@@ -107,9 +107,17 @@ public:
 	virtual void PostTransacted(const FTransactionObjectEvent& TransactionEvent) override;
 
 private:
+	/** Component-space transform of a bone as the BLEND alone produces it (no manual tracks) at a timeline time; fills Translation / Rotation / Scale of the key. */
+	bool CaptureBlendedBoneTransform(FName Bone, double Time, FAnimStitchTrackKey& InOutKey) const;
 	void Touch() { Modify(); ++EditCounter; bUnsavedChanges = true; }
 	/** Manual track edits don't change what the automatic passes see, so they only bump this counter. */
 	void TouchManual() { Modify(); ++ManualCounter; bUnsavedChanges = true; }
+	/** Track edits: the Root offset track feeds the blend itself (and so foot lock), so it needs the full re-evaluation (Touch); others only the manual pass. */
+	void TouchTrack(int32 TrackIndex)
+	{
+		if (Timeline.Tracks.IsValidIndex(TrackIndex) && Timeline.Tracks[TrackIndex].Kind == EAnimStitchTrackKind::RootOffset) { Touch(); ++ManualCounter; }
+		else { TouchManual(); }
+	}
 
 	/** While alive, remembers which clip owns every correction key and, when applied (or destroyed), re-places the keys so they follow their clip. */
 	struct FKeyFollowScope

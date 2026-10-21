@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "Widgets/SLeafWidget.h"
@@ -188,7 +188,7 @@ private:
 	float VScroll = 0.f;
 	bool HasTrackFor(FName Bone, EAnimStitchTrackKind Kind) const;
 	bool LimbTrackExists(bool bLeft, bool bLeg, bool bIK) const;
-	void AddLimbForEffector(FName Effector, bool bIK);
+	void AddLimbForEffector(FName Effector, bool bIK, EAnimStitchTrackMode Mode = EAnimStitchTrackMode::Additive);
 	bool bShowFrames = false;
 	void PaintLeftColumn(FSlateWindowElementList& Out, int32 Layer, const FGeometry& G) const;
 	mutable float CachedWidth = 600.f;
@@ -196,7 +196,14 @@ private:
 	void PaintTrackLanes(FSlateWindowElementList& Out, int32 Layer, const FGeometry& G) const;
 	void OpenAddTrackMenu(const FPointerEvent& Event);
 	void OpenTrackMenu(const FPointerEvent& Event, int32 Track, int32 Key, double Time);
-	void AddBoneTrack(FName Bone, bool bRotationOnly, int32 GroupId);
+	void AddBoneTrack(FName Bone, bool bRotationOnly, int32 GroupId, EAnimStitchTrackMode Mode = EAnimStitchTrackMode::Additive);
+	/** The single Root offset track (additive translation + yaw on the root). Both entry points (menu entry and bone picker) land here. */
+	void AddRootOffsetTrack();
+	bool HasRootOffsetTrack() const;
+	/** Name of the skeleton's root bone (bone 0), or None without clips. */
+	FName GetRootBoneName() const;
+	/** The key a new key at the playhead starts from: the interpolated value, or - absolute tracks, limbs without a key - the control as it is evaluated on screen. */
+	FAnimStitchTrackKey MakeKeyAtPlayhead(int32 TrackIndex) const;
 	bool HasSelectedKeys() const { return SelectedKeys.Num() > 0 || (Asset->Timeline.Tracks.IsValidIndex(SelectedTrack) && Asset->Timeline.Tracks[SelectedTrack].Keys.IsValidIndex(SelectedKey)); }
 	void AddLimb(bool bLeft, bool bLeg, bool bIK);
 	int32 SelectedTrack = INDEX_NONE;

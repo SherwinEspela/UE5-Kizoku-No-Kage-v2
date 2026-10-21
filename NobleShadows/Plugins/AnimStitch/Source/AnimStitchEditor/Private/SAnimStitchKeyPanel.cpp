@@ -1,4 +1,4 @@
-﻿#include "SAnimStitchKeyPanel.h"
+#include "SAnimStitchKeyPanel.h"
 #include "SAnimStitchTimeline.h"
 #include "AnimStitchManualEdits.h"
 #include "AnimStitchTimelineAsset.h"
@@ -50,6 +50,17 @@ FAnimStitchTrackKey SAnimStitchKeyPanel::GetKey() const
 	else
 	{
 		Key.Time = Timeline->GetPlayhead();
+	}
+	if (Track->Kind == EAnimStitchTrackKind::Bone && Track->Mode == EAnimStitchTrackMode::Absolute && !Track->Keys.IsValidIndex(KeyIndex) && LiveIK)
+	{
+		// Absolute: with no key selected the panel shows (and starts editing from) the bone's full transform as it is evaluated on screen.
+		FAnimStitchTrackKey Live;
+		if (LiveIK(TrackIndexAttr.Get(INDEX_NONE), Live))
+		{
+			Key.Translation = Live.Translation;
+			Key.Rotation = Live.Rotation;
+			Key.Scale = Live.Scale;
+		}
 	}
 	if (Track->Kind == EAnimStitchTrackKind::IKLimb && Key.Weight < 1e-3f && LiveIK)
 	{
@@ -145,7 +156,7 @@ void SAnimStitchKeyPanel::Construct(const FArguments& InArgs)
 			[
 				Vec3Row(LOCTEXT("RowRotate", "Rotate"),
 					[](const FAnimStitchTrackKey& K) { return ToEuler(K.Rotation); },
-					[this](FAnimStitchTrackKey& K, const FVector& V) { K.Rotation = FromEuler(V); if (GetTrack() && GetTrack()->Kind == EAnimStitchTrackKind::IKLimb && K.Weight < 1e-3f) { K.Weight = 1.f; } },
+					[this](FAnimStitchTrackKey& K, const FVector& V) { K.Rotation = FromEuler(V); if (GetTrack() && GetTrack()->Kind == EAnimStitchTrackKind::RootOffset) { K.Rotation = FQuat(FVector::UpVector, FMath::DegreesToRadians(K.Rotation.Rotator().Yaw)); } if (GetTrack() && GetTrack()->Kind == EAnimStitchTrackKind::IKLimb && K.Weight < 1e-3f) { K.Weight = 1.f; } },
 					TAttribute<EVisibility>::CreateLambda([IsPoleLane]() { return IsPoleLane() ? EVisibility::Collapsed : EVisibility::Visible; }), 0.5)
 			]
 			+ SVerticalBox::Slot().AutoHeight()

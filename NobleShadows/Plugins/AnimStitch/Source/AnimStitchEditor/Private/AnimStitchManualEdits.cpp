@@ -1,4 +1,4 @@
-﻿#include "AnimStitchManualEdits.h"
+#include "AnimStitchManualEdits.h"
 #include "ReferenceSkeleton.h"
 
 namespace
@@ -104,6 +104,18 @@ namespace
 		Out.Weight = Weight;
 		return Out;
 	}
+}
+
+bool FAnimStitchManualEdits::IsActiveAt(const FAnimStitchTrack& Track, double Time)
+{
+	if (Track.Keys.Num() == 0) { return false; }
+	if (Track.Mode == EAnimStitchTrackMode::Absolute)
+	{
+		// An absolute track replaces the animation only across its keyed range; outside it the underlying animation plays untouched.
+		constexpr double Eps = 1e-6;
+		return Time >= Track.Keys[0].Time - Eps && Time <= Track.Keys.Last().Time + Eps;
+	}
+	return !IsIdentityKey(Sample(Track, Time));
 }
 
 FAnimStitchTrackKey FAnimStitchManualEdits::Sample(const FAnimStitchTrack& Track, double Time)
@@ -268,7 +280,7 @@ void FAnimStitchManualEdits::Apply(const FReferenceSkeleton& Ref, const TArray<F
 			bool bMoved = false;
 			for (const TPair<int32, const FAnimStitchTrack*>& Entry : BoneTracks)
 			{
-				if (!Entry.Value->bKeepFeetPlanted || !IsPelvisBone(Entry.Value->Bone) || IsIdentityKey(Sample(*Entry.Value, Time))) { continue; }
+				if (!Entry.Value->bKeepFeetPlanted || !IsPelvisBone(Entry.Value->Bone) || !IsActiveAt(*Entry.Value, Time)) { continue; }
 				const int32 TrackBone = Ref.FindBoneIndex(Entry.Value->Bone);
 				for (int32 B = Chain.Thigh; B != INDEX_NONE; B = Ref.GetParentIndex(B)) { bMoved |= (B == TrackBone); }
 			}
@@ -280,11 +292,25 @@ void FAnimStitchManualEdits::Apply(const FReferenceSkeleton& Ref, const TArray<F
 	{
 		const FAnimStitchTrack& Track = *Entry.Value;
 		const FAnimStitchTrackKey Key = Sample(Track, Time);
-		if (IsIdentityKey(Key)) { continue; }
+		if (!IsActiveAt(Track, Time)) { continue; }
 		const int32 Bone = Ref.FindBoneIndex(Track.Bone);
 		const int32 Parent = Ref.GetParentIndex(Bone);
 		const FTransform ParentCS = Parent != INDEX_NONE ? FAnimStitchFootLock::GetComponentSpace(Ref, Local, Parent) : FTransform::Identity;
 		FTransform& L = Local[Bone];
+		if (Track.Mode == EAnimStitchTrackMode::Absolute)
+		{
+			// Absolute: the key is the bone's full transform RELATIVE TO THE ROOT BONE (so it travels with root motion instead of staying at a world spot).
+			// It replaces the blended result outright; the bone is re-expressed relative to its (already corrected) parent so children simply follow.
+			const FTransform Target = FTransform(Key.Rotation.GetNormalized(), Key.Translation, Key.Scale) * Local[0];
+			const FTransform Relative = Target.GetRelativeTransform(ParentCS);
+			if (!Track.bRotationOnly)
+			{
+				L.SetTranslation(Relative.GetTranslation());
+				L.SetScale3D(Relative.GetScale3D());
+			}
+			L.SetRotation(Relative.GetRotation().GetNormalized());
+			continue;
+		}
 		if (!Track.bRotationOnly)
 		{
 			L.SetTranslation(L.GetTranslation() + ParentCS.InverseTransformVector(Key.Translation));

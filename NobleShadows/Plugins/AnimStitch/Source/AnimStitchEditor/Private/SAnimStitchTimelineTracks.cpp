@@ -1,4 +1,4 @@
-﻿// Manual bone correction lanes of the timeline widget (Phase 9): painting, "Add Bone Track" and lane menus.
+// Manual bone correction lanes of the timeline widget (Phase 9): painting, "Add Bone Track" and lane menus.
 
 #include "SAnimStitchTimeline.h"
 #include "AnimStitchManualEdits.h"
@@ -122,10 +122,11 @@ void SAnimStitchTimeline::PaintLeftColumn(FSlateWindowElementList& Out, int32 La
 		const float Indent = Track.Kind == EAnimStitchTrackKind::IKPole ? 18.f : 0.f; // the pole lane sits indented under its IK track
 		if (Indent > 0.f) { FSlateDrawElement::MakeBox(Out, Layer + 4, G.ToPaintGeometry(FVector2f(1.f, TrackLaneHeight), FSlateLayoutTransform(FVector2f(12.f, Top))), White, ESlateDrawEffect::None, FLinearColor(1.f, 1.f, 1.f, 0.25f)); }
 		FSlateDrawElement::MakeText(Out, Layer + 5, G.ToPaintGeometry(Size, FSlateLayoutTransform(FVector2f(7.f + Indent, Top + 7.f))), FString(bOpen ? TEXT("v") : TEXT(">")), Font, ESlateDrawEffect::None, FLinearColor(1.f, 1.f, 1.f, 0.8f));
-		FString Label = Track.Bone.ToString();
+		FString Label = Track.Kind == EAnimStitchTrackKind::RootOffset ? FString(TEXT("Root - motion offset")) : Track.Bone.ToString();
 		if (Track.Kind == EAnimStitchTrackKind::IKPole) { Label += TEXT("  pole"); }
 		if (bIK) { Label += TEXT("  (IK)"); }
 		else if (Track.bRotationOnly) { Label += TEXT("  (FK)"); }
+		if (Track.Kind == EAnimStitchTrackKind::Bone && Track.Mode == EAnimStitchTrackMode::Absolute) { Label += TEXT("  [ABS]"); } // absolute tracks are tagged so they stand out from additive ones
 		FSlateDrawElement::MakeText(Out, Layer + 5, G.ToPaintGeometry(Size, FSlateLayoutTransform(FVector2f(24.f + Indent, Top + 7.f))), Label, BoldFont, ESlateDrawEffect::None, FLinearColor(1.f, 1.f, 1.f, 0.9f));
 
 		// Previous key, add key at the playhead, next key.
@@ -155,14 +156,66 @@ bool SAnimStitchTimeline::HasTrackFor(FName Bone, EAnimStitchTrackKind Kind) con
 	return false;
 }
 
-void SAnimStitchTimeline::AddBoneTrack(FName Bone, bool bRotationOnly, int32 GroupId)
+FName SAnimStitchTimeline::GetRootBoneName() const
 {
+	const USkeleton* Skeleton = Asset->GetSkeleton();
+	return Skeleton && Skeleton->GetReferenceSkeleton().GetNum() > 0 ? Skeleton->GetReferenceSkeleton().GetBoneName(0) : FName();
+}
+
+bool SAnimStitchTimeline::HasRootOffsetTrack() const
+{
+	return Asset->Timeline.Tracks.ContainsByPredicate([](const FAnimStitchTrack& T) { return T.Kind == EAnimStitchTrackKind::RootOffset; });
+}
+
+void SAnimStitchTimeline::AddRootOffsetTrack()
+{
+	const FName Root = GetRootBoneName();
+	if (Root.IsNone() || HasRootOffsetTrack()) { return; } // never a second root track
+	FAnimStitchTrack Track;
+	Track.Kind = EAnimStitchTrackKind::RootOffset;
+	Track.Bone = Root;
+	const FScopedTransaction Tx(LOCTEXT("AddRootTrackTx", "Add Root Offset Track"));
+	SelectedTrack = Asset->AddTrack(Track);
+	++TrackSelectionSerial;
+	SelectedKey = INDEX_NONE;
+	SelectedKeys.Reset();
+}
+
+FAnimStitchTrackKey SAnimStitchTimeline::MakeKeyAtPlayhead(int32 TrackIndex) const
+{
+	const FAnimStitchTrack& Track = Asset->Timeline.Tracks[TrackIndex];
+	FAnimStitchTrackKey Key = Track.Keys.Num() > 0 ? FAnimStitchManualEdits::Sample(Track, Playhead) : FAnimStitchTrackKey();
+	if (LiveKeyProvider)
+	{
+		FAnimStitchTrackKey Live;
+		if (Track.Kind == EAnimStitchTrackKind::Bone && Track.Mode == EAnimStitchTrackMode::Absolute)
+		{
+			// Absolute: key what the bone currently evaluates to (full transform), so keying never pops.
+			if (LiveKeyProvider(TrackIndex, Live)) { Key.Translation = Live.Translation; Key.Rotation = Live.Rotation; Key.Scale = Live.Scale; }
+		}
+		else if (Track.Kind == EAnimStitchTrackKind::IKLimb || Track.Kind == EAnimStitchTrackKind::IKPole)
+		{
+			if (LiveKeyProvider(TrackIndex, Live))
+			{
+				if (Track.Kind == EAnimStitchTrackKind::IKPole) { Key.Translation = Live.Pole; }
+				else if (Key.Weight < 1e-3f) { Key.Translation = Live.Translation; Key.Rotation = Live.Rotation; Key.Pole = Live.Pole; }
+			}
+		}
+	}
+	Key.Time = Playhead;
+	return Key;
+}
+
+void SAnimStitchTimeline::AddBoneTrack(FName Bone, bool bRotationOnly, int32 GroupId, EAnimStitchTrackMode Mode)
+{
+	if (!Bone.IsNone() && Bone == GetRootBoneName()) { AddRootOffsetTrack(); return; } // the root has its own behaviour; no FK / IK / mode choice
 	if (HasTrackFor(Bone, EAnimStitchTrackKind::Bone)) { return; } // the pickers do not offer these; nothing to add
 	FAnimStitchTrack Track;
 	Track.Kind = EAnimStitchTrackKind::Bone;
 	Track.Bone = Bone;
 	Track.bRotationOnly = bRotationOnly;
 	Track.GroupId = GroupId;
+	Track.Mode = Mode;
 	const FScopedTransaction Tx(LOCTEXT("AddBoneTrackTx", "Add Bone Track"));
 	SelectedTrack = Asset->AddTrack(Track);
 	++TrackSelectionSerial;
@@ -182,7 +235,7 @@ bool SAnimStitchTimeline::LimbTrackExists(bool bLeft, bool bLeg, bool bIK) const
 	return HasTrackFor(Ref.GetBoneName(Chain.Thigh), EAnimStitchTrackKind::Bone) || HasTrackFor(Ref.GetBoneName(Chain.Calf), EAnimStitchTrackKind::Bone) || HasTrackFor(Ref.GetBoneName(Chain.Foot), EAnimStitchTrackKind::Bone);
 }
 
-void SAnimStitchTimeline::AddLimbForEffector(FName Effector, bool bIK)
+void SAnimStitchTimeline::AddLimbForEffector(FName Effector, bool bIK, EAnimStitchTrackMode Mode)
 {
 	const USkeleton* Skeleton = Asset->GetSkeleton();
 	if (!Skeleton) { return; }
@@ -227,6 +280,7 @@ void SAnimStitchTimeline::AddLimbForEffector(FName Effector, bool bIK)
 			Track.bRotationOnly = true;
 			Track.bKeepFeetPlanted = false;
 			Track.GroupId = Group;
+			Track.Mode = Mode;
 			SelectedTrack = Asset->AddTrack(Track);
 	++TrackSelectionSerial;
 		}
@@ -261,10 +315,14 @@ void SAnimStitchTimeline::PickOtherBone()
 	TSharedRef<TArray<TSharedPtr<FString>>> Items = MakeShared<TArray<TSharedPtr<FString>>>();
 	for (int32 b = 0; b < Ref.GetNum(); ++b)
 	{
+		if (b == 0 && HasRootOffsetTrack()) { continue; } // the root track exists: the root is no longer offered
 		if (!HasTrackFor(Ref.GetBoneName(b), EAnimStitchTrackKind::Bone)) { Items->Add(MakeShared<FString>(Ref.GetBoneName(b).ToString())); }
 	}
 	TSharedRef<TSharedPtr<FString>> Chosen = MakeShared<TSharedPtr<FString>>();
 	TSharedRef<int32> Mode = MakeShared<int32>(0); // 0 = single bone, 1 = FK limb, 2 = IK limb
+	TSharedRef<int32> TrackMode = MakeShared<int32>(0); // 0 = additive offsets, 1 = absolute transforms
+	const FName RootBone = GetRootBoneName();
+	auto IsRoot = [RootBone](const FString& Name) { return !RootBone.IsNone() && FName(*Name) == RootBone; };
 
 	// Hands and feet can become a whole limb (FK joints or IK), the same choice as the Limb menu.
 	auto IsEffector = [Skeleton](const FString& Name)
@@ -272,6 +330,16 @@ void SAnimStitchTimeline::PickOtherBone()
 		const FString Lower = Name.ToLower();
 		if (Lower.Contains(TEXT("twist")) || Lower.Contains(TEXT("ik")) || Lower.Contains(TEXT("corrective")) || Lower.Contains(TEXT("helper"))) { return false; }
 		return (Lower.Contains(TEXT("foot")) || Lower.Contains(TEXT("hand"))) && FAnimStitchManualEdits::ChainFor(Skeleton->GetReferenceSkeleton(), FName(*Name)).IsValid();
+	};
+	auto TrackModeButton = [TrackMode](const FText& Label, const FText& Tip, int32 Value)
+	{
+		return SNew(SCheckBox).Style(FAppStyle::Get(), "RadioButton")
+			.ToolTipText(Tip)
+			.IsChecked_Lambda([TrackMode, Value]() { return *TrackMode == Value ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+			.OnCheckStateChanged_Lambda([TrackMode, Value](ECheckBoxState State) { if (State == ECheckBoxState::Checked) { *TrackMode = Value; } })
+			[
+				SNew(STextBlock).Text(Label)
+			];
 	};
 	auto ModeButton = [Mode](const FText& Label, int32 Value)
 	{
@@ -283,7 +351,7 @@ void SAnimStitchTimeline::PickOtherBone()
 			];
 	};
 
-	TSharedRef<SWindow> Window = SNew(SWindow).Title(LOCTEXT("PickBoneTitle", "Add Bone Track")).ClientSize(FVector2D(400.0, 220.0)).SupportsMinimize(false).SupportsMaximize(false);
+	TSharedRef<SWindow> Window = SNew(SWindow).Title(LOCTEXT("PickBoneTitle", "Add Bone Track")).ClientSize(FVector2D(420.0, 300.0)).SupportsMinimize(false).SupportsMaximize(false);
 	Window->SetContent(
 		SNew(SBox).Padding(12.f)
 		[
@@ -302,6 +370,20 @@ void SAnimStitchTimeline::PickOtherBone()
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 10)
 			[
 				SNew(SVerticalBox)
+				.Visibility_Lambda([Chosen, IsRoot]() { return Chosen->IsValid() && IsRoot(**Chosen) ? EVisibility::Visible : EVisibility::Collapsed; })
+				+ SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).AutoWrapText(true).Text(LOCTEXT("RootPickedHint", "The root is added as the Root - motion offset track: additive translation + yaw, applied with the blend before foot lock. There is no FK / IK or Additive / Absolute choice for it."))]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 10)
+			[
+				SNew(SVerticalBox)
+				.Visibility_Lambda([Chosen, Mode, IsRoot]() { return Chosen->IsValid() && !IsRoot(**Chosen) && *Mode != 2 ? EVisibility::Visible : EVisibility::Collapsed; })
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 3)[SNew(STextBlock).Text(LOCTEXT("TrackModeHint", "Track mode (fixed for the life of the track):"))]
+				+ SVerticalBox::Slot().AutoHeight()[TrackModeButton(LOCTEXT("ModeAdditive", "Additive: keys are offsets on the animation"), LOCTEXT("ModeAdditiveTip", "The animation keeps playing; keys add offsets to it (default)"), 0)]
+				+ SVerticalBox::Slot().AutoHeight()[TrackModeButton(LOCTEXT("ModeAbsolute", "Absolute: keys are full transforms"), LOCTEXT("ModeAbsoluteTip", "Keys hold the bone's full transform and replace the animation between the first and last key"), 1)]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 10)
+			[
+				SNew(SVerticalBox)
 				.Visibility_Lambda([Chosen, IsEffector]() { return Chosen->IsValid() && IsEffector(**Chosen) ? EVisibility::Visible : EVisibility::Collapsed; })
 				+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 3)[SNew(STextBlock).Text(LOCTEXT("PickLimbHint", "This is a hand / foot. Add it as:"))]
 				+ SVerticalBox::Slot().AutoHeight()[ModeButton(LOCTEXT("ModeSingle", "Single bone (additive offsets)"), 0)]
@@ -313,13 +395,15 @@ void SAnimStitchTimeline::PickOtherBone()
 			[
 				SNew(SButton).Text(LOCTEXT("AddTrackOk", "Add Track"))
 				.IsEnabled_Lambda([Chosen]() { return Chosen->IsValid(); })
-				.OnClicked_Lambda([this, Chosen, Mode, IsEffector, WeakWindow = TWeakPtr<SWindow>(Window)]()
+				.OnClicked_Lambda([this, Chosen, Mode, TrackMode, IsEffector, IsRoot, WeakWindow = TWeakPtr<SWindow>(Window)]()
 				{
 					if (Chosen->IsValid())
 					{
 						const FName Bone(**Chosen);
-						if (*Mode == 0 || !IsEffector(**Chosen)) { AddBoneTrack(Bone, false, 0); }
-						else { AddLimbForEffector(Bone, *Mode == 2); }
+						const EAnimStitchTrackMode TrackModeValue = *TrackMode == 1 ? EAnimStitchTrackMode::Absolute : EAnimStitchTrackMode::Additive;
+							if (IsRoot(**Chosen)) { AddRootOffsetTrack(); }
+							else if (*Mode == 0 || !IsEffector(**Chosen)) { AddBoneTrack(Bone, false, 0, TrackModeValue); }
+						else { AddLimbForEffector(Bone, *Mode == 2, TrackModeValue); }
 					}
 					if (TSharedPtr<SWindow> W = WeakWindow.Pin()) { W->RequestDestroyWindow(); }
 					return FReply::Handled();
@@ -340,7 +424,11 @@ void SAnimStitchTimeline::BuildCoreBoneMenu(FMenuBuilder& Menu)
 	for (const FName& Name : FAnimStitchManualEdits::GetCoreBoneSuggestions(Skeleton->GetReferenceSkeleton()))
 	{
 		if (HasTrackFor(Name, EAnimStitchTrackKind::Bone)) { continue; } // already on the list
-		Menu.AddMenuEntry(FText::FromName(Name), FText::GetEmpty(), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, Name]() { AddBoneTrack(Name, false, 0); })));
+		Menu.AddSubMenu(FText::FromName(Name), FText::GetEmpty(), FNewMenuDelegate::CreateLambda([this, Name](FMenuBuilder& Choice)
+		{
+			Choice.AddMenuEntry(LOCTEXT("CoreModeAdditive", "Additive: keys are offsets on the animation"), FText::GetEmpty(), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, Name]() { AddBoneTrack(Name, false, 0, EAnimStitchTrackMode::Additive); })));
+			Choice.AddMenuEntry(LOCTEXT("CoreModeAbsolute", "Absolute: keys are full transforms"), FText::GetEmpty(), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, Name]() { AddBoneTrack(Name, false, 0, EAnimStitchTrackMode::Absolute); })));
+		}));
 	}
 	Menu.AddSeparator();
 	Menu.AddMenuEntry(LOCTEXT("OtherBone", "Other Bone..."), LOCTEXT("OtherBoneTip", "Pick any bone of the skeleton (hands and feet can be added as FK or IK limbs)"), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this]() { PickOtherBone(); })));
@@ -375,6 +463,8 @@ void SAnimStitchTimeline::OpenAddTrackMenu(const FPointerEvent& Event)
 	Menu.BeginSection("BoneTracks", LOCTEXT("AddBoneTrackSection", "Add Bone Track"));
 	Menu.AddSubMenu(LOCTEXT("CoreBoneMenu", "Core Bone"), LOCTEXT("CoreBoneMenuTip", "Pelvis, spine, head...: one control per bone, additive offsets"), FNewMenuDelegate::CreateSP(this, &SAnimStitchTimeline::BuildCoreBoneMenu));
 	Menu.AddSubMenu(LOCTEXT("LimbMenu", "Limb"), LOCTEXT("LimbMenuTip", "Arms and legs, FK (rotate each joint) or IK (effector + pole vector)"), FNewMenuDelegate::CreateSP(this, &SAnimStitchTimeline::BuildLimbMenu));
+	Menu.AddMenuEntry(LOCTEXT("RootOffsetEntry", "Root - motion offset"), LOCTEXT("RootOffsetEntryTip", "One keyframe lane of additive translation + yaw on the root, applied with the blend before foot lock (planted feet follow the corrected path)"), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateLambda([this]() { AddRootOffsetTrack(); }), FCanExecuteAction::CreateLambda([this]() { return Asset->GetSkeleton() != nullptr && !HasRootOffsetTrack(); })));
 	Menu.EndSection();
 	const FWidgetPath Path = Event.GetEventPath() != nullptr ? *Event.GetEventPath() : FWidgetPath();
 	FSlateApplication::Get().PushMenu(AsShared(), Path, Menu.MakeWidget(), Event.GetScreenSpacePosition(), FPopupTransitionEffect(FPopupTransitionEffect::ContextMenu));
@@ -406,12 +496,10 @@ void SAnimStitchTimeline::OpenTrackMenu(const FPointerEvent& Event, int32 TrackI
 			FUIAction(FExecuteAction::CreateLambda([this, TrackIndex]()
 			{
 				const FScopedTransaction Tx(LOCTEXT("AddKeyTx", "Add Key"));
-				FAnimStitchTrackKey Key = FAnimStitchManualEdits::Sample(Asset->Timeline.Tracks[TrackIndex], Playhead);
-				Key.Time = Playhead;
-				Asset->SetTrackKey(TrackIndex, Key);
-			})));
-	}
-	if (bIK && Track.Keys.Num() > 0)
+				Asset->SetTrackKey(TrackIndex, MakeKeyAtPlayhead(TrackIndex));
+				})));
+		}
+		if (bIK && Track.Keys.Num() > 0)
 	{
 		Menu.AddMenuEntry(LOCTEXT("ReleaseIK", "Release IK Here"), LOCTEXT("ReleaseIKTip", "Hold the target here, then ease the IK off over the next 0.1 s so the limb returns to the animation"), FSlateIcon(),
 			FUIAction(FExecuteAction::CreateLambda([this, TrackIndex]()
