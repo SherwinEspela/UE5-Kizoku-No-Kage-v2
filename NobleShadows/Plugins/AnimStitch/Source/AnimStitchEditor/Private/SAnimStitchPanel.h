@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Widgets/SCompoundWidget.h"
@@ -53,9 +53,12 @@ private:
 	void FillControlsMenu(class FMenuBuilder& Menu);
 	void FillAttachmentsMenu(class FMenuBuilder& Menu);
 	void FillBonesMenu(class FMenuBuilder& Menu);
+	TSharedPtr<class FScopedTransaction> RateSliderTx;
 	int32 InspectorTab = 0; // 0 = Details, 1 = Control Properties, 2 = Attached Props
 	int32 LibraryTab = 0; // Asset Library: 0 = Content Browser, 1 = Baked Assets
 	TSharedRef<SWidget> MakeBakedAssetsTab();
+	TSharedRef<SWidget> MakeOpenRecentMenu();
+	static void AddRecentTimeline(const class UAnimStitchTimelineAsset* Saved);
 	/** One value panel per bone track, created on demand, so any number of tracks can be expanded at once. */
 	void SyncKeyPanels();
 	TSharedPtr<class SOverlay> KeyPanelOverlay;

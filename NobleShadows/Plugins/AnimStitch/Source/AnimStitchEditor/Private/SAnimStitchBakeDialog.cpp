@@ -1,4 +1,5 @@
-#include "SAnimStitchBakeDialog.h"
+﻿#include "SAnimStitchBakeDialog.h"
+#include "Dialogs/Dialogs.h"
 #include "AnimStitchTimelineAsset.h"
 #include "AnimStitchBaker.h"
 #include "AnimStitchFootLock.h"
@@ -223,8 +224,43 @@ FReply SAnimStitchBakeDialog::OnBake()
 		bAllowOverwrite = true;
 	}
 
-	FAnimStitchBakeOptions Options;
+FAnimStitchBakeOptions Options;
 	Options.FrameRate = FrameRate > 0 ? FFrameRate(FrameRate, 1) : FFrameRate(0, 1);
+
+	// Only the region between the timeline's range flags is baked. A partial range needs the user's confirmation.
+	{
+		double RangeStart, RangeEnd;
+		Timeline->GetPlaybackRange(RangeStart, RangeEnd);
+		const double Total = Timeline->Timeline.GetTotalLength();
+		constexpr double Eps = 1e-4;
+		if (RangeStart > Eps || RangeEnd < Total - Eps)
+		{
+			double Fps = FrameRate;
+			if (!(Fps > 0.0) && Timeline->Timeline.Clips.Num() > 0 && Timeline->Timeline.Clips[0].Sequence)
+			{
+				Fps = Timeline->Timeline.Clips[0].Sequence->GetDataModel()->GetFrameRate().AsDecimal();
+			}
+			if (!(Fps >= 1.0 && Fps <= 120.0)) { Fps = 30.0; }
+			const int32 FullFrames = FMath::Max(1, FMath::RoundToInt(Total * Fps));
+			const int32 First = FMath::Clamp(FMath::RoundToInt(RangeStart * Fps), 0, FullFrames - 1);
+			const int32 Last = FMath::Clamp(FMath::RoundToInt(RangeEnd * Fps), First + 1, FullFrames);
+
+			FSuppressableWarningDialog::FSetupInfo Setup(
+				FText::Format(LOCTEXT("PartialBakeBody", "The timeline range flags do not cover the whole timeline.\n\nOnly the flagged section (frames {0} - {1} of {2}) will be baked, not the whole timeline. The baked sequence starts at frame {0}."), First, Last, FullFrames),
+				LOCTEXT("PartialBakeTitle", "Bake Flagged Section Only"), TEXT("AnimStitchPartialBake"));
+			Setup.ConfirmText = LOCTEXT("BakeAnyway", "Bake Anyway");
+			Setup.CancelText = LOCTEXT("BakeCancel", "Cancel");
+			Setup.bDefaultToSuppressInTheFuture = false;
+			FSuppressableWarningDialog Dialog(Setup);
+			if (Dialog.ShowModal() == FSuppressableWarningDialog::Cancel)
+			{
+				return FReply::Handled();
+			}
+			Options.bPartialRange = true;
+			Options.RangeStart = RangeStart;
+			Options.RangeEnd = RangeEnd;
+		}
+	}
 	Options.bOverwriteExisting = bAllowOverwrite;
 	Options.bShowProgress = true;
 	Options.SourceTimeline = Timeline->GetOutermost() != GetTransientPackage() ? FSoftObjectPath(Timeline) : FSoftObjectPath();

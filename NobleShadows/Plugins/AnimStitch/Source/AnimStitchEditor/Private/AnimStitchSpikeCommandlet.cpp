@@ -36,6 +36,61 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 		return 1;
 	}
 
+	// Phase 18 test: -P18Test with -A=<landing> -B=<run>. Two-way trim, per-clip play rate, partial-range bake.
+	if (FParse::Param(*Params, TEXT("P18Test")))
+	{
+		const FString Folder = TEXT("/Game/_AnimStitchSpike");
+		UAnimStitchTimelineAsset* TLAsset = NewObject<UAnimStitchTimelineAsset>(GetTransientPackage());
+		TArray<FText> W;
+		TLAsset->AddSequences({ const_cast<UAnimSequence*>(A), const_cast<UAnimSequence*>(B) }, INDEX_NONE, W);
+		TLAsset->SetTrim(1, 0.0, FMath::Min(3.0, (double)B->GetPlayLength()));
+		TLAsset->SetOverlap(1, 0.2);
+		const double Full = B->GetPlayLength();
+
+		// 1) trim down, then back out to the source's limits
+		TLAsset->SetTrim(1, 0.5, 1.5);
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("P18 TRIM: shrunk to %.2f..%.2f"), TLAsset->Timeline.Clips[1].TrimIn, TLAsset->Timeline.Clips[1].TrimOut);
+		TLAsset->SetTrim(1, 0.0, Full + 5.0);
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("P18 TRIM: dragged back out -> %.2f..%.2f (source %.2f s; expected 0..source)"), TLAsset->Timeline.Clips[1].TrimIn, TLAsset->Timeline.Clips[1].TrimOut, Full);
+		TLAsset->SetTrim(1, 0.0, 3.0);
+
+		// 2) play rate
+		const double W0 = TLAsset->Timeline.Clips[1].GetDuration();
+		FAnimStitchEvaluator E1; FString Er;
+		E1.Initialize(TLAsset->Timeline, Er);
+		const FTransform R0 = E1.EvaluateClipRoot(1, TLAsset->Timeline.Clips[1].StartTime), R1 = E1.EvaluateClipRoot(1, TLAsset->Timeline.Clips[1].GetEndTime());
+		const double Disp1 = (R1.GetTranslation() - R0.GetTranslation()).Size();
+		TLAsset->SetClipRate(1, 0.5);
+		const FAnimStitchClip& C1 = TLAsset->Timeline.Clips[1];
+		FAnimStitchEvaluator E2; E2.Initialize(TLAsset->Timeline, Er);
+		const FTransform S0 = E2.EvaluateClipRoot(1, C1.StartTime), S1 = E2.EvaluateClipRoot(1, C1.GetEndTime());
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("P18 RATE: 0.5x: width %.3f s -> %.3f s (x%.2f); source in/out unchanged %.2f..%.2f; root displacement %.2f -> %.2f cm (same distance over twice the time)"),
+			W0, C1.GetDuration(), C1.GetDuration() / W0, C1.TrimIn, C1.TrimOut, Disp1, (S1.GetTranslation() - S0.GetTranslation()).Size());
+		TLAsset->SetClipRate(1, 99.0);
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("P18 RATE: 99 clamps to %.2f; "), TLAsset->Timeline.Clips[1].PlayRate);
+		TLAsset->SetClipRate(1, 0.0);
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("P18 RATE: 0 clamps to %.2f"), TLAsset->Timeline.Clips[1].PlayRate);
+		TLAsset->SetClipRate(1, 0.5);
+
+		// 3) partial-range bake
+		FAnimStitchBakeOptions Full_Opt; Full_Opt.bSavePackage = false; Full_Opt.bOverwriteExisting = true; Full_Opt.FrameRate = FFrameRate(30, 1);
+		FString BakeErr;
+		UAnimSequence* FullSeq = FAnimStitchBaker::Bake(TLAsset->Timeline, Folder / TEXT("AS_P18Full"), Full_Opt, BakeErr);
+		FAnimStitchBakeOptions Part_Opt = Full_Opt; Part_Opt.bPartialRange = true; Part_Opt.RangeStart = 1.0; Part_Opt.RangeEnd = 2.0;
+		UAnimSequence* PartSeq = FAnimStitchBaker::Bake(TLAsset->Timeline, Folder / TEXT("AS_P18Part"), Part_Opt, BakeErr);
+		if (!FullSeq || !PartSeq) { UE_LOG(LogAnimStitchSpike, Error, TEXT("P18 BAKE failed: %s"), *BakeErr); return 90; }
+		const FReferenceSkeleton& Ref = FullSeq->GetSkeleton()->GetReferenceSkeleton();
+		auto ReadBone = [&](const UAnimSequence* Seq, int32 Frame, FName Bone) { return Seq->GetDataModel()->GetBoneTrackTransform(Bone, FFrameNumber(Frame)); };
+		const FName Foot = TEXT("foot_l");
+		double Worst = 0.0;
+		for (int32 f = 0; f <= PartSeq->GetDataModel()->GetNumberOfFrames(); ++f)
+		{
+			Worst = FMath::Max(Worst, (ReadBone(PartSeq, f, Foot).GetTranslation() - ReadBone(FullSeq, 30 + f, Foot).GetTranslation()).Size());
+		}
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("P18 BAKE: full %d frames; flagged 1.0-2.0 s -> %d frames (expected 30); partial frame k vs full frame 30+k (foot_l) max diff %.5f cm (starts at the range start)"),
+			FullSeq->GetDataModel()->GetNumberOfFrames(), PartSeq->GetDataModel()->GetNumberOfFrames(), Worst);
+		return 0;
+	}
 	// Phase 17 test: -P17Test with -A=<landing> -B=<run>. (1) Absolute track creation bakes a key on every frame and reproduces the animation; edits change only the touched frames.
 	// (2) Gap crossfade: spacing continuum (overlap / cut / gap), evaluation at the span ends, bake == preview evaluation.
 	if (FParse::Param(*Params, TEXT("P17Test")))

@@ -185,7 +185,12 @@ int32 SAnimStitchTimeline::OnPaint(const FPaintArgs& Args, const FGeometry& G, c
 		const FGeometry Child = G.MakeChild(BoxSize, FSlateLayoutTransform(Pos));
 		Out.PushClip(FSlateClippingZone(Child));
 		PaintLabel(Out, Layer + 6, G, Pos + FVector2f(HandleWidth + 3.f, 3.f), Clip.Sequence ? Clip.Sequence->GetName() : FString(TEXT("<missing>")), FLinearColor::White);
-		PaintLabel(Out, Layer + 6, G, Pos + FVector2f(HandleWidth + 3.f, 17.f), FString::Printf(TEXT("%.2fs"), Clip.GetDuration()), FLinearColor(1, 1, 1, 0.75f));
+PaintLabel(Out, Layer + 6, G, Pos + FVector2f(HandleWidth + 3.f, 17.f), FString::Printf(TEXT("%.2fs"), Clip.GetDuration()), FLinearColor(1, 1, 1, 0.75f));
+		if (!FMath::IsNearlyEqual(Clip.PlayRate, 1.0, 1e-4))
+		{
+			// Small rate tag, top right of the clip: shown whenever the clip does not play at 1x.
+			PaintLabel(Out, Layer + 6, G, Pos + FVector2f(FMath::Max(HandleWidth + 3.f, BoxSize.X - 52.f), 3.f), FString::Printf(TEXT("%.2f\u00d7"), Clip.PlayRate), FLinearColor(1.f, 0.85f, 0.4f));
+		}
 		if (bAuthority)
 		{
 			PaintLabel(Out, Layer + 6, G, Pos + FVector2f(HandleWidth + 3.f, 31.f), LOCTEXT("AuthorityLabel", "Root Motion Authority").ToString(), FLinearColor(1.f, 0.9f, 0.4f));
@@ -912,7 +917,15 @@ FReply SAnimStitchTimeline::OnMouseButtonDown(const FGeometry& G, const FPointer
 		InitialTrimOut = Clip.TrimOut;
 		InitialOverlap = Clip.OverlapIn;
 		InitialStart = Clip.StartTime;
+InitialRate = Clip.PlayRate;
+		InitialWidth = Clip.GetDuration();
 		DragMode = Hit.Type == EHit::Body ? EDrag::Move : Hit.Type == EHit::TrimLeft ? EDrag::TrimLeft : Hit.Type == EHit::TrimRight ? EDrag::TrimRight : EDrag::Overlap;
+		// Alt + edge drag stretches the clip (changes its play rate) instead of trimming it.
+		if (Event.IsAltDown())
+		{
+			if (DragMode == EDrag::TrimLeft) { DragMode = EDrag::RateLeft; }
+			else if (DragMode == EDrag::TrimRight) { DragMode = EDrag::RateRight; }
+		}
 		break;
 	}
 	default:
@@ -1120,14 +1133,34 @@ void SAnimStitchTimeline::OnDragMove(float LocalX)
 
 	switch (DragMode)
 	{
-	case EDrag::TrimRight:
-		Asset->SetTrim(DragIndex, InitialTrimIn, InitialTrimOut + Dt);
-		break;
+case EDrag::TrimRight:
+	// Trim is a pure in/out point at the original rate; the handle moves Dt of timeline time = Dt * rate of source, both directions.
+	Asset->SetTrim(DragIndex, InitialTrimIn, InitialTrimOut + Dt * InitialRate);
+	break;
+case EDrag::RateRight:
+{
+	// Same content, new width: the rate follows the dragged edge.
+	const double Width = FMath::Max(InitialWidth + Dt, 1e-3);
+	Asset->SetClipRate(DragIndex, (InitialTrimOut - InitialTrimIn) / Width);
+	break;
+}
+case EDrag::RateLeft:
+{
+	const double Width = FMath::Max(InitialWidth - Dt, 1e-3);
+	Asset->SetClipRate(DragIndex, (InitialTrimOut - InitialTrimIn) / Width);
+	if (DragIndex > 0)
+	{
+		// Keep the clip's end where it was: the dragged start edge follows the cursor (as far as the rate limits allow).
+		const double NewWidth = TL.Clips[DragIndex].GetDuration();
+		Asset->SetOverlap(DragIndex, TL.Clips[DragIndex - 1].GetEndTime() - (InitialStart + InitialWidth - NewWidth));
+	}
+	break;
+}
 	case EDrag::TrimLeft:
 	{
-		Asset->SetTrim(DragIndex, InitialTrimIn + Dt, InitialTrimOut);
+Asset->SetTrim(DragIndex, InitialTrimIn + Dt * InitialRate, InitialTrimOut);
 		// Keep the dragged edge under the cursor where an overlap allows it; otherwise the clip ripples.
-		const double Applied = TL.Clips[DragIndex].TrimIn - InitialTrimIn;
+const double Applied = (TL.Clips[DragIndex].TrimIn - InitialTrimIn) / InitialRate;
 		if (DragIndex > 0)
 		{
 			Asset->SetOverlap(DragIndex, InitialOverlap - Applied);

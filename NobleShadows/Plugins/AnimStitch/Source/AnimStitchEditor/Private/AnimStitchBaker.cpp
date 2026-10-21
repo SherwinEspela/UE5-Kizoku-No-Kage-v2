@@ -1,4 +1,4 @@
-#include "AnimStitchBaker.h"
+﻿#include "AnimStitchBaker.h"
 #include "AnimStitchFootLock.h"
 #include "AnimStitchManualEdits.h"
 #include "AnimStitchProvenance.h"
@@ -75,8 +75,16 @@ UAnimSequence* FAnimStitchBaker::Bake(const FAnimStitchTimeline& Timeline, const
 		FrameRate = FFrameRate(30, 1);
 	}
 
-	const double Length = Timeline.GetTotalLength();
-	const int32 NumFrames = FMath::Max(1, FMath::RoundToInt(Length * FrameRate.AsDecimal()));
+const double Length = Timeline.GetTotalLength();
+	// The whole timeline is always evaluated (foot lock, prediction and manual edits work on absolute frames); a partial range only picks which frames are written.
+	const int32 FullFrames = FMath::Max(1, FMath::RoundToInt(Length * FrameRate.AsDecimal()));
+	int32 FirstFrame = 0, LastFrame = FullFrames;
+	if (Options.bPartialRange)
+	{
+		FirstFrame = FMath::Clamp(FMath::RoundToInt(Options.RangeStart * FrameRate.AsDecimal()), 0, FullFrames - 1);
+		LastFrame = FMath::Clamp(FMath::RoundToInt(Options.RangeEnd * FrameRate.AsDecimal()), FirstFrame + 1, FullFrames);
+	}
+	const int32 NumFrames = LastFrame - FirstFrame;
 	const int32 NumKeys = NumFrames + 1;
 	const int32 NumBones = Evaluator.GetNumBones();
 	const FReferenceSkeleton& RefSkel = Evaluator.GetSkeleton()->GetReferenceSkeleton();
@@ -158,7 +166,7 @@ UAnimSequence* FAnimStitchBaker::Bake(const FAnimStitchTimeline& Timeline, const
 		return nullptr;
 	}
 
-	FScopedSlowTask Task(NumKeys + 2, LOCTEXT("BakeProgress", "Baking AnimStitch timeline..."));
+FScopedSlowTask Task(FullFrames + 3, LOCTEXT("BakeProgress", "Baking AnimStitch timeline..."));
 	if (Options.bShowProgress)
 	{
 		Task.MakeDialog(true);
@@ -173,7 +181,8 @@ UAnimSequence* FAnimStitchBaker::Bake(const FAnimStitchTimeline& Timeline, const
 	Scl.SetNum(NumBones);
 	TArray<FTransform> Pose;
 	TArray<TArray<FTransform>> FramePoses;
-	for (int32 Key = 0; Key < NumKeys; ++Key)
+// Without the whole-hierarchy passes only the range itself needs evaluating.
+	for (int32 Key = bKeepPoses ? 0 : FirstFrame; Key <= (bKeepPoses ? FullFrames : LastFrame); ++Key)
 	{
 		if (Options.bShowProgress)
 		{
@@ -231,10 +240,11 @@ UAnimSequence* FAnimStitchBaker::Bake(const FAnimStitchTimeline& Timeline, const
 				FAnimStitchManualEdits::Apply(RefSkel, Timeline.Tracks, f / FrameRate.AsDecimal(), FramePoses[f], bPlantFeet ? PlantFeet : nullptr);
 			}
 		}
-		for (const TArray<FTransform>& Frame : FramePoses)
-		{
-			for (const int32 b : TrackBones)
-			{
+for (int32 FrameIndex = FirstFrame; FrameIndex <= LastFrame; ++FrameIndex)
+{
+const TArray<FTransform>& Frame = FramePoses[FrameIndex];
+for (const int32 b : TrackBones)
+{
 				Pos[b].Add(FVector3f(Frame[b].GetTranslation()));
 				Rot[b].Add(FQuat4f(Frame[b].GetRotation().GetNormalized()));
 				Scl[b].Add(FVector3f(Frame[b].GetScale3D()));

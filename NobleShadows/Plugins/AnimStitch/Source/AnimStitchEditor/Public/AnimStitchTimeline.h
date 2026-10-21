@@ -297,9 +297,22 @@ struct ANIMSTITCHEDITOR_API FAnimStitchClip
 	UPROPERTY()
 	TArray<FAnimStitchFootEvent> FootEvents;
 
+	/** Playback speed of this clip (1 = original). Timeline width = trimmed content duration / PlayRate. */
+	UPROPERTY()
+	double PlayRate = 1.0;
+
+	static constexpr double MinPlayRate = 0.1;
+	static constexpr double MaxPlayRate = 4.0;
+
 	double GetOverlap() const { return FMath::Max(OverlapIn, 0.0); }
 	double GetGap() const { return FMath::Max(-OverlapIn, 0.0); }
-	double GetDuration() const { return TrimOut - TrimIn; }
+	/** Seconds of source content between the trim points. */
+	double GetSourceDuration() const { return TrimOut - TrimIn; }
+	/** Width on the timeline (seconds). */
+	double GetDuration() const { return GetSourceDuration() / FMath::Max(PlayRate, 1e-3); }
+	/** Source time shown at a timeline time / timeline time of a source time. */
+	double SourceTimeAt(double TimelineTime) const { return TrimIn + (TimelineTime - StartTime) * PlayRate; }
+	double TimelineTimeAt(double SourceTime) const { return StartTime + (SourceTime - TrimIn) / FMath::Max(PlayRate, 1e-3); }
 	double GetEndTime() const { return StartTime + GetDuration(); }
 };
 

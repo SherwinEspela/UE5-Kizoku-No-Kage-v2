@@ -235,7 +235,20 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 			]
 			+ SWrapBox::Slot().Padding(0, 0, 6, 3)
 			[
-				IconButton(TAttribute<const FSlateBrush*>(FAppStyle::GetBrush("Icons.FolderOpen")), LOCTEXT("OpenTimelineTip", "Open a saved AnimStitch timeline asset"), [this]() { OpenFromDisk(); })
+				SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().AutoWidth()
+					[
+						IconButton(TAttribute<const FSlateBrush*>(FAppStyle::GetBrush("Icons.FolderOpen")), LOCTEXT("OpenTimelineTip", "Open a saved AnimStitch timeline asset"), [this]() { OpenFromDisk(); })
+					]
+					+ SHorizontalBox::Slot().AutoWidth()
+					[
+						// Split button: the chevron segment on the Open button's edge lists the 5 most recent projects.
+						SNew(SComboButton).HasDownArrow(true)
+						.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+						.ContentPadding(FMargin(0.f, 4.f))
+						.ToolTipText(LOCTEXT("OpenRecentTip", "Open Recent: the last timeline projects opened or saved"))
+						.OnGetMenuContent(this, &SAnimStitchPanel::MakeOpenRecentMenu)
+					]
 			]
 			+ SWrapBox::Slot().Padding(0, 0, 6, 3)
 			[
@@ -498,9 +511,50 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 			SNew(SWidgetSwitcher).WidgetIndex_Lambda([this]() { return InspectorTab; })
 			+ SWidgetSwitcher::Slot()
 			[
-				SNew(SAnimStitchBoneDetails).Preview(Preview).Timeline(Timeline)
-				.LiveIK([this](int32 Track, FAnimStitchTrackKey& OutKey) { return Preview->GetIKLiveKey(Track, OutKey); })
+SNew(SVerticalBox)
++ SVerticalBox::Slot().AutoHeight()
+[
+	// Clip properties (when a clip is selected): the play rate.
+	SNew(SBorder).BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder")).Padding(6.f)
+	.Visibility_Lambda([this]() { return Asset->Timeline.Clips.IsValidIndex(Timeline->GetSelectedClip()) ? EVisibility::Visible : EVisibility::Collapsed; })
+	[
+		SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+		[
+			SNew(STextBlock).Text(LOCTEXT("ClipRateLabel", "Play Rate"))
+		]
+		+ SHorizontalBox::Slot().AutoWidth()
+		[
+			SNew(SBox).WidthOverride(100.f)
+			[
+				SNew(SSpinBox<float>).MinValue(0.1f).MaxValue(4.f).MinSliderValue(0.1f).MaxSliderValue(4.f).Delta(0.05f)
+				.ToolTipText(LOCTEXT("ClipRateTip", "Play rate of the selected clip (0.1x - 4x). The timeline width becomes the trimmed content duration divided by the rate. Alt+drag a clip edge stretches it by changing this."))
+				.Value_Lambda([this]() { const int32 I = Timeline->GetSelectedClip(); return Asset->Timeline.Clips.IsValidIndex(I) ? (float)Asset->Timeline.Clips[I].PlayRate : 1.f; })
+				.OnBeginSliderMovement_Lambda([this]() { RateSliderTx = MakeShared<FScopedTransaction>(LOCTEXT("ClipRateTx", "Change Clip Play Rate")); })
+				.OnEndSliderMovement_Lambda([this](float) { RateSliderTx.Reset(); })
+				.OnValueChanged_Lambda([this](float V)
+				{
+					const int32 I = Timeline->GetSelectedClip();
+					if (RateSliderTx.IsValid()) { Asset->SetClipRate(I, V); } // while dragging the slider; typed values arrive through Committed
+				})
+				.OnValueCommitted_Lambda([this](float V, ETextCommit::Type)
+				{
+					const int32 I = Timeline->GetSelectedClip();
+					if (!RateSliderTx.IsValid() && Asset->Timeline.Clips.IsValidIndex(I) && !FMath::IsNearlyEqual(Asset->Timeline.Clips[I].PlayRate, (double)V, 1e-6))
+					{
+						const FScopedTransaction Tx(LOCTEXT("ClipRateTx", "Change Clip Play Rate"));
+						Asset->SetClipRate(I, V);
+					}
+				})
 			]
+		]
+	]
+]
++ SVerticalBox::Slot().FillHeight(1.f)
+[				SNew(SAnimStitchBoneDetails).Preview(Preview).Timeline(Timeline)
+				.LiveIK([this](int32 Track, FAnimStitchTrackKey& OutKey) { return Preview->GetIKLiveKey(Track, OutKey); })
+]
+]
 			+ SWidgetSwitcher::Slot()
 			[
 				SNew(SAnimStitchControlProperties).Preview(Preview).Timeline(Timeline)
@@ -805,6 +859,7 @@ void SAnimStitchPanel::SetAsset(UAnimStitchTimelineAsset* NewAsset)
 	}
 	bPlaying = false;
 	Asset = NewAsset;
+	AddRecentTimeline(NewAsset);
 	Preview->SetAsset(NewAsset);
 	LastManualCounter = MAX_uint32;
 	Timeline->SetTimelineAsset(NewAsset);
@@ -1190,6 +1245,41 @@ void SAnimStitchPanel::OnTimelineScrubbed()
 	Preview->SetPlayhead(LastPlayhead);
 }
 
+void SAnimStitchPanel::AddRecentTimeline(const UAnimStitchTimelineAsset* Saved)
+{
+	if (!Saved || Saved->GetOutermost() == GetTransientPackage()) { return; }
+	UAnimStitchSettings* Settings = GetMutableDefault<UAnimStitchSettings>();
+	const FSoftObjectPath Path(Saved);
+	Settings->RecentTimelines.Remove(Path);
+	Settings->RecentTimelines.Insert(Path, 0);
+	if (Settings->RecentTimelines.Num() > 5) { Settings->RecentTimelines.SetNum(5); }
+	Settings->SaveConfig();
+}
+
+TSharedRef<SWidget> SAnimStitchPanel::MakeOpenRecentMenu()
+{
+	UAnimStitchSettings* Settings = GetMutableDefault<UAnimStitchSettings>();
+	// Entries whose file is gone are dropped.
+	const int32 Before = Settings->RecentTimelines.Num();
+	Settings->RecentTimelines.RemoveAll([](const FSoftObjectPath& P) { return !FPackageName::DoesPackageExist(P.GetLongPackageName()); });
+	if (Settings->RecentTimelines.Num() != Before) { Settings->SaveConfig(); }
+
+	FMenuBuilder Menu(true, nullptr);
+	if (Settings->RecentTimelines.Num() == 0)
+	{
+		Menu.AddMenuEntry(LOCTEXT("NoRecent", "No recent projects"), FText::GetEmpty(), FSlateIcon(), FUIAction(FExecuteAction(), FCanExecuteAction::CreateLambda([]() { return false; })));
+	}
+	for (const FSoftObjectPath& Path : Settings->RecentTimelines)
+	{
+		Menu.AddMenuEntry(FText::FromString(Path.GetAssetName()), FText::FromString(Path.GetLongPackageName()), FSlateIcon(),
+			FUIAction(FExecuteAction::CreateLambda([this, Path]()
+			{
+				if (!ConfirmDiscardChanges()) { return; }
+				if (UAnimStitchTimelineAsset* Loaded = Cast<UAnimStitchTimelineAsset>(Path.TryLoad())) { SetAsset(Loaded); }
+			})));
+	}
+	return Menu.MakeWidget();
+}
 void SAnimStitchPanel::OpenFromDisk()
 {
 	FContentBrowserModule& ContentBrowser = FModuleManager::LoadModuleChecked<FContentBrowserModule>("ContentBrowser");
@@ -1598,6 +1688,7 @@ void SAnimStitchPanel::Save()
 	}
 	FEditorFileUtils::PromptForCheckoutAndSave({ Asset->GetOutermost() }, false, false);
 	if (!Asset->GetOutermost()->IsDirty()) { Asset->ClearUnsavedChanges(); }
+	AddRecentTimeline(Asset);
 }
 
 void SAnimStitchPanel::SaveAs()
@@ -1699,7 +1790,7 @@ void SAnimStitchPanel::RebuildSequenceBrowser()
 	Config.AssetShowWarningText =LOCTEXT("BrowserEmpty", "No animation sequences use this skeleton.");
 
 	FContentBrowserModule& ContentBrowser = FModuleManager::LoadModuleChecked<FContentBrowserModule>("ContentBrowser");
-	BrowserBox->SetContent(ContentBrowser.Get().CreateAssetPicker(Config));
+	BrowserBox->SetContent(SNew(SBox).AddMetaData<FTagMetaData>(FAnimStitchContentBrowserBadge::ScopeTag)[ContentBrowser.Get().CreateAssetPicker(Config)]); // the tag scopes the in-timeline badge to this browser
 }
 
 void SAnimStitchPanel::AutoSelectPreviewMesh()

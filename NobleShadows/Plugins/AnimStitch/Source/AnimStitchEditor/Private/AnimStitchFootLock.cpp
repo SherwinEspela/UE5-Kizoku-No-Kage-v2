@@ -179,7 +179,7 @@ FAnimStitchFootLockResult FAnimStitchFootLock::Detect(const FAnimStitchEvaluator
 			{
 				const FAnimStitchFootEvent& Event = Clip.FootEvents[EventIndex];
 				if (Event.Foot != Foot) { continue; }
-				const double Time = Clip.StartTime + (Event.SrcTime - Clip.TrimIn);
+const double Time = Clip.TimelineTimeAt(Event.SrcTime);
 				FMappedEvent Mapped;
 				Mapped.Frame = FMath::Max<int32>(0, FMath::RoundToInt32(Time * Fps));
 				Mapped.Time = Time;

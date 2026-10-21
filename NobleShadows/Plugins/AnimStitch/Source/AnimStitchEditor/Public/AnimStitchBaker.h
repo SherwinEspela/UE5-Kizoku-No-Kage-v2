@@ -16,6 +16,10 @@ struct ANIMSTITCHEDITOR_API FAnimStitchBakeOptions
 	bool bShowProgress = false;
 	/** The timeline project asset being baked (stamped into the baked asset's provenance record); empty for an unsaved timeline. */
 	FSoftObjectPath SourceTimeline;
+	/** Bake only the timeline region [RangeStart, RangeEnd] (seconds): the baked sequence starts at the range start. Off = the whole timeline. */
+	bool bPartialRange = false;
+	double RangeStart = 0.0;
+	double RangeEnd = 0.0;
 };
 
 /** Bakes a timeline into a single new UAnimSequence (bone transforms only in v1; notifies and curves are not carried over). */

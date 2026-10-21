@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Widgets/SLeafWidget.h"
@@ -168,7 +168,7 @@ private:
 		/** Track keys: the key index. */
 		int32 Sub = INDEX_NONE;
 	};
-	enum class EDrag : uint8 { None, Scrub, Move, TrimLeft, TrimRight, Overlap, Pan, MarkerStart, MarkerEnd, FootLane, KeyMove, Marquee, Splitter, FootHandle, FootRegion };
+enum class EDrag : uint8 { None, Scrub, Move, TrimLeft, TrimRight, RateLeft, RateRight, Overlap, Pan, MarkerStart, MarkerEnd, FootLane, KeyMove, Marquee, Splitter, FootHandle, FootRegion };
 
 	void AddSequencesAt(const TArray<UAnimSequence*>& Sequences, int32 Index);
 	bool bPendingZoomFit = false;
@@ -263,7 +263,9 @@ private:
 	int32 DragIndex = INDEX_NONE;
 	float DragStartX = 0.f;
 	bool bDragStarted = false;
-	double InitialTrimIn = 0.0;
+double InitialTrimIn = 0.0;
+	double InitialRate = 1.0;
+	double InitialWidth = 0.0;
 	double InitialTrimOut = 0.0;
 	double InitialOverlap = 0.0;
 	double InitialStart = 0.0;

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
@@ -48,7 +48,9 @@ public:
 	void MoveClip(int32 From, int32 To);
 
 	void SetOverlap(int32 Index, double NewOverlap);
-	void SetTrim(int32 Index, double NewTrimIn, double NewTrimOut);
+void SetTrim(int32 Index, double NewTrimIn, double NewTrimOut);
+	/** Per-clip play rate (clamped 0.1..4). The trimmed content is unchanged; the clip's width on the timeline becomes content / rate. */
+	void SetClipRate(int32 Index, double NewRate);
 	void SetBlendCurve(int32 Index, EAnimStitchBlendCurve Curve);
 	void SetBatchSlot(int32 Index, bool bBatchSlot);
 

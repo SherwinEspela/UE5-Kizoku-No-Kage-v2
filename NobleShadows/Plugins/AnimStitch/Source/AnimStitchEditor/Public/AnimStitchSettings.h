@@ -58,5 +58,9 @@ public:
 	UPROPERTY(config)
 	TArray<FSoftObjectPath> BakedAssets;
 
+	/** Timeline projects opened or saved most recently, newest first (Open Recent keeps 5). */
+	UPROPERTY(config)
+	TArray<FSoftObjectPath> RecentTimelines;
+
 	virtual FName GetCategoryName() const override { return TEXT("Plugins"); }
 };

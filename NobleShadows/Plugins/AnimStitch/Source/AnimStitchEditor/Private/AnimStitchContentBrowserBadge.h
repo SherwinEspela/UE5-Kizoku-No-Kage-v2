@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 
@@ -17,6 +17,9 @@ public:
 	static void SetClipUsage(const TMap<FSoftObjectPath, int32>& Usage);
 	static void ClearClipUsage();
 	static int32 GetClipUsage(const FSoftObjectPath& Path);
+
+	/** Widget tag the Asset Library browser carries; the badge only shows beneath a widget with this tag. */
+	static const FName ScopeTag;
 
 private:
 	static FDelegateHandle GeneratorHandle;

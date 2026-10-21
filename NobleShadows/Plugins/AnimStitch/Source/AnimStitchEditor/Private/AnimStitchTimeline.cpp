@@ -156,7 +156,7 @@ FTransform FAnimStitchEvaluator::EvaluateClipRoot(int32 ClipIndex, double Timeli
 {
 	const FAnimStitchClip& Clip = Timeline.Clips[ClipIndex];
 	// Held on the first/last trimmed frame outside the clip (gap crossfades).
-	const double SrcTime = FMath::Clamp(Clip.TrimIn + (TimelineTime - Clip.StartTime), Clip.TrimIn, Clip.TrimOut);
+const double SrcTime = FMath::Clamp(Clip.SourceTimeAt(TimelineTime), Clip.TrimIn, Clip.TrimOut);
 	const FTransform Raw = SampleClipRawRoot(ClipIndex, SrcTime);
 	const int32 Auth = Timeline.RootAuthorityIndex;
 	if (ClipIndex == Auth)
@@ -175,7 +175,7 @@ void FAnimStitchEvaluator::SampleClipRaw(int32 ClipIndex, double TimelineTime, T
 	const FAnimStitchClip& Clip = Timeline.Clips[ClipIndex];
 	const IAnimationDataModel* Model = Clip.Sequence->GetDataModel();
 	const FReferenceSkeleton& RefSkel = Skeleton->GetReferenceSkeleton();
-	const double SrcTime = FMath::Clamp(Clip.TrimIn + (TimelineTime - Clip.StartTime), FMath::Max(Clip.TrimIn, 0.0), FMath::Min(Clip.TrimOut, Model->GetPlayLength()));
+const double SrcTime = FMath::Clamp(Clip.SourceTimeAt(TimelineTime), FMath::Max(Clip.TrimIn, 0.0), FMath::Min(Clip.TrimOut, Model->GetPlayLength()));
 	const FFrameTime FrameTime = Model->GetFrameRate().AsFrameTime(SrcTime);
 
 	OutPose.SetNumUninitialized(NumBones);
