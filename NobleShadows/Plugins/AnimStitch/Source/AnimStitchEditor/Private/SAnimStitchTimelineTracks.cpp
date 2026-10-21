@@ -69,6 +69,38 @@ void SAnimStitchTimeline::PaintTrackLanes(FSlateWindowElementList& Out, int32 La
 				FSlateDrawElement::MakeBox(Out, Layer, G.ToPaintGeometry(FVector2f(Size.X - LabelWidth, RowH), FSlateLayoutTransform(FVector2f(LabelWidth, PanelTop + r * RowH))), White, ESlateDrawEffect::None,
 					(r & 1) ? FLinearColor(0.075f, 0.075f, 0.085f) : FLinearColor(0.06f, 0.06f, 0.07f));
 			}
+			if (Track.Kind == EAnimStitchTrackKind::Bone)
+			{
+				// One sub-lane per channel (Translation, Rotation, Scale): each holds only its own keys. A locked lane is dimmed (keys visible, not editable).
+				const uint8 Applicable = FAnimStitchManualEdits::GetApplicableChannels(Track);
+				const uint8 Editable = FAnimStitchManualEdits::GetEditableChannels(Track);
+				for (int32 Row = 0; Row < 3; ++Row)
+				{
+					const uint8 Bit = ChannelBitForRow(Row);
+					const float RowTop = PanelTop + Row * RowH;
+					const bool bLocked = (Editable & Bit) == 0;
+					if (!(Applicable & Bit))
+					{
+						FSlateDrawElement::MakeBox(Out, Layer + 1, G.ToPaintGeometry(FVector2f(Size.X - LabelWidth, RowH), FSlateLayoutTransform(FVector2f(LabelWidth, RowTop))), White, ESlateDrawEffect::None, FLinearColor(0.f, 0.f, 0.f, 0.55f));
+						continue;
+					}
+					if (bLocked)
+					{
+						FSlateDrawElement::MakeBox(Out, Layer + 1, G.ToPaintGeometry(FVector2f(Size.X - LabelWidth, RowH), FSlateLayoutTransform(FVector2f(LabelWidth, RowTop))), White, ESlateDrawEffect::None, FLinearColor(0.f, 0.f, 0.f, 0.28f));
+					}
+					for (int32 k = 0; k < Track.Keys.Num(); ++k)
+					{
+						if (!(Track.Keys[k].Channels & Bit)) { continue; }
+						const float KX = TimeToX(Track.Keys[k].Time);
+						const float KY = RowTop + RowH * 0.5f;
+						const bool bKeySelected = IsKeySelected(i, k, Bit);
+						const float KD = bKeySelected ? 11.f : 9.f;
+						FLinearColor KColor = bKeySelected ? FLinearColor(0.2f, 0.5f, 1.f) : FLinearColor(0.9f, 0.15f, 0.12f);
+						if (bLocked) { KColor = KColor * 0.55f; KColor.A = 1.f; }
+						FSlateDrawElement::MakeBox(Out, Layer + 3, G.ToPaintGeometry(FVector2f(KD, KD), FSlateLayoutTransform(FVector2f(KX - KD * 0.5f, KY - KD * 0.5f))), Circle ? Circle : White, ESlateDrawEffect::None, KColor);
+					}
+				}
+			}
 		}
 
 		// Keys: solid red circles, solid blue when selected (Sequencer style).
@@ -469,7 +501,7 @@ void SAnimStitchTimeline::OpenAddTrackMenu(const FPointerEvent& Event)
 	const FWidgetPath Path = Event.GetEventPath() != nullptr ? *Event.GetEventPath() : FWidgetPath();
 	FSlateApplication::Get().PushMenu(AsShared(), Path, Menu.MakeWidget(), Event.GetScreenSpacePosition(), FPopupTransitionEffect(FPopupTransitionEffect::ContextMenu));
 }
-void SAnimStitchTimeline::OpenTrackMenu(const FPointerEvent& Event, int32 TrackIndex, int32 KeyIndex, double Time)
+void SAnimStitchTimeline::OpenTrackMenu(const FPointerEvent& Event, int32 TrackIndex, int32 KeyIndex, double Time, uint8 Channel)
 {
 	FMenuBuilder Menu(true, nullptr);
 	const FAnimStitchTrack& Track = Asset->Timeline.Tracks[TrackIndex];
@@ -490,13 +522,39 @@ void SAnimStitchTimeline::OpenTrackMenu(const FPointerEvent& Event, int32 TrackI
 		FUIAction(FExecuteAction::CreateLambda([this]() { PasteKeys(); }), FCanExecuteAction::CreateLambda([this]() { return CanPasteKeys(); })));
 	Menu.EndSection();
 
+	if (Track.Kind == EAnimStitchTrackKind::Bone)
+	{
+		// Per-channel commands: key one channel at the playhead, lock or unlock its lane.
+		Menu.BeginSection("TrackChannels", LOCTEXT("ChannelsSection", "Channels"));
+		static const uint8 Bits[3] = { AnimStitchChannel::Translation, AnimStitchChannel::Rotation, AnimStitchChannel::Scale };
+		const FText Names[3] = { LOCTEXT("ChannelTranslation", "Translation"), LOCTEXT("ChannelRotation", "Rotation"), LOCTEXT("ChannelScale", "Scale") };
+		for (int32 c = 0; c < 3; ++c)
+		{
+			const uint8 Bit = Bits[c];
+			if (!(FAnimStitchManualEdits::GetApplicableChannels(Track) & Bit)) { continue; }
+			Menu.AddMenuEntry(FText::Format(LOCTEXT("AddChannelKey", "Add {0} Key at Playhead"), Names[c]), LOCTEXT("AddChannelKeyTip", "Key just this channel at the playhead (the other channels get no key)"), FSlateIcon(),
+				FUIAction(FExecuteAction::CreateLambda([this, TrackIndex, Bit]()
+				{
+					const FScopedTransaction Tx(LOCTEXT("AddChannelKeyTx", "Add Channel Key"));
+					Asset->SetTrackChannelKey(TrackIndex, MakeKeyAtPlayhead(TrackIndex), Bit);
+				}), FCanExecuteAction::CreateLambda([this, TrackIndex, Bit]() { return IsChannelEditable(TrackIndex, Bit); })));
+			const bool bLockedNow = (Track.UnlockedChannels & Bit) == 0;
+			Menu.AddMenuEntry(FText::Format(bLockedNow ? LOCTEXT("UnlockChannel", "Unlock {0} Lane") : LOCTEXT("LockChannel", "Lock {0} Lane"), Names[c]), LOCTEXT("LockChannelTip", "A locked lane keeps its keys visible but they cannot be moved or edited"), FSlateIcon(),
+				FUIAction(FExecuteAction::CreateLambda([this, TrackIndex, Bit, bLockedNow]()
+				{
+					const FScopedTransaction Tx(LOCTEXT("ToggleChannelLockTx", "Lock / Unlock Channel"));
+					Asset->SetTrackChannelUnlocked(TrackIndex, Bit, bLockedNow);
+				})));
+		}
+		Menu.EndSection();
+	}
 	if (Track.Keys.Num() > 0)
 	{
 		Menu.AddMenuEntry(LOCTEXT("KeyAtPlayhead", "Add Key at Playhead"), LOCTEXT("KeyAtPlayheadTip", "Key the current interpolated value"), FSlateIcon(),
 			FUIAction(FExecuteAction::CreateLambda([this, TrackIndex]()
 			{
 				const FScopedTransaction Tx(LOCTEXT("AddKeyTx", "Add Key"));
-				Asset->SetTrackKey(TrackIndex, MakeKeyAtPlayhead(TrackIndex));
+				Asset->SetTrackChannelKey(TrackIndex, MakeKeyAtPlayhead(TrackIndex), FAnimStitchManualEdits::GetEditableChannels(Asset->Timeline.Tracks[TrackIndex]));
 				})));
 		}
 		if (bIK && Track.Keys.Num() > 0)
@@ -531,11 +589,12 @@ void SAnimStitchTimeline::OpenTrackMenu(const FPointerEvent& Event, int32 TrackI
 				Asset->SetTrackKeyWeight(TrackIndex, KeyIndex, 0.f);
 			})));
 		}
-		Menu.AddMenuEntry(LOCTEXT("DeleteKey", "Delete Key"), FText::GetEmpty(), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, TrackIndex, KeyIndex]()
+		Menu.AddMenuEntry(LOCTEXT("DeleteKey", "Delete Key"), FText::GetEmpty(), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, TrackIndex, KeyIndex, Channel]()
 		{
 			const FScopedTransaction Tx(LOCTEXT("DeleteKeyTx", "Delete Key"));
-			Asset->RemoveTrackKey(TrackIndex, KeyIndex);
+			Asset->RemoveTrackChannelKey(TrackIndex, KeyIndex, Channel ? Channel : AnimStitchChannel::All);
 			SelectedKey = INDEX_NONE;
+			SelectedChannel = 0;
 		})));
 	}
 	Menu.AddSeparator();

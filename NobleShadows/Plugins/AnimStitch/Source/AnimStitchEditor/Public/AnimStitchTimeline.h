@@ -148,6 +148,15 @@ enum class EAnimStitchTrackMode : uint8
 	Absolute,
 };
 
+/** Channels of a bone-track key / lane (bit mask). Older data has no mask and loads as All. */
+namespace AnimStitchChannel
+{
+	constexpr uint8 Translation = 1;
+	constexpr uint8 Rotation = 2;
+	constexpr uint8 Scale = 4;
+	constexpr uint8 All = Translation | Rotation | Scale;
+}
+
 /**
  * One keyframe of a manual correction track (timeline time).
  * Bone tracks: Translation / Rotation / Scale are ADDITIVE offsets (component space; scale is a factor, 1 = unchanged).
@@ -176,6 +185,10 @@ struct ANIMSTITCHEDITOR_API FAnimStitchTrackKey
 
 	UPROPERTY()
 	float Weight = 1.f;
+
+	/** Bone tracks: which channels (AnimStitchChannel bits) this key holds. Channels without the bit are not keyed here and their values are fillers. */
+	UPROPERTY()
+	uint8 Channels = AnimStitchChannel::All;
 };
 
 /** Shape of a control in the viewport. */
@@ -248,6 +261,10 @@ struct ANIMSTITCHEDITOR_API FAnimStitchTrack
 	/** Tracks created together as the FK joints of one limb share a group (0 = none). */
 	UPROPERTY()
 	int32 GroupId = 0;
+
+	/** Bone tracks: channels (AnimStitchChannel bits) whose lane is unlocked for editing. Translation and Scale start locked. */
+	UPROPERTY()
+	uint8 UnlockedChannels = AnimStitchChannel::Rotation;
 
 	/** Sorted by time. */
 	UPROPERTY()

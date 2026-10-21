@@ -233,6 +233,48 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 	}
 	// Phase 16 test: -P16Test with -A=<landing> -B=<run>. Absolute bone tracks (replace the animation across the keyed range, no pops, bake == evaluation)
 	// and the Root offset track (evaluated with the blend before foot lock: planted feet stay glued on the corrected path).
+	// Hotfix Set 2 test: per-channel keys and channel locks on a bone track (data level, no editor UI).
+	if (FParse::Param(*Params, TEXT("S2Test")))
+	{
+		UAnimStitchTimelineAsset* TLAsset = NewObject<UAnimStitchTimelineAsset>(GetTransientPackage());
+		TArray<FText> W;
+		TLAsset->AddSequences({ const_cast<UAnimSequence*>(A), const_cast<UAnimSequence*>(B) }, INDEX_NONE, W);
+		FAnimStitchTrack Track;
+		Track.Kind = EAnimStitchTrackKind::Bone;
+		Track.Bone = TEXT("spine_01");
+		const int32 TI = TLAsset->AddTrack(Track);
+		auto Count = [&](uint8 Bit) { int32 N = 0; for (const FAnimStitchTrackKey& K : TLAsset->Timeline.Tracks[TI].Keys) { N += (K.Channels & Bit) ? 1 : 0; } return N; };
+		int32 Fails = 0;
+		auto Check = [&Fails](bool b, const TCHAR* What) { UE_LOG(LogAnimStitchSpike, Display, TEXT("S2 %s: %s"), b ? TEXT("PASS") : TEXT("FAIL"), What); if (!b) { ++Fails; } };
+		Check(TLAsset->Timeline.Tracks[TI].UnlockedChannels == AnimStitchChannel::Rotation, TEXT("new track: only Rotation unlocked (Translation + Scale locked)"));
+		const int32 T0 = Count(AnimStitchChannel::Translation), R0 = Count(AnimStitchChannel::Rotation);
+		FAnimStitchTrackKey Key;
+		Key.Time = 0.5;
+		Key.Rotation = FQuat(FVector::UpVector, 0.3);
+		Key.Translation = FVector(5, 0, 0);
+		TLAsset->SetTrackChannelKey(TI, Key, AnimStitchChannel::Rotation);
+		Check(Count(AnimStitchChannel::Rotation) == R0 + 1 && Count(AnimStitchChannel::Translation) == T0 && Count(AnimStitchChannel::Scale) == T0, TEXT("rotation key adds no translation / scale keys"));
+		TLAsset->SetTrackChannelKey(TI, Key, AnimStitchChannel::Translation | AnimStitchChannel::Scale);
+		Check(Count(AnimStitchChannel::Translation) == T0, TEXT("locked translation / scale refuse the write"));
+		const FAnimStitchTrackKey S = FAnimStitchManualEdits::Sample(TLAsset->Timeline.Tracks[TI], 0.5);
+		Check(S.Rotation.Equals(Key.Rotation, 1e-5) && S.Translation.IsNearlyZero(1e-4), TEXT("sample: rotation keyed, translation stays identity"));
+		TLAsset->SetTrackChannelUnlocked(TI, AnimStitchChannel::Translation, true);
+		TLAsset->SetTrackChannelKey(TI, Key, AnimStitchChannel::Translation);
+		const int32 KI = FAnimStitchManualEdits::FindKey(TLAsset->Timeline.Tracks[TI], 0.5);
+		Check(Count(AnimStitchChannel::Translation) == T0 + 1 && KI != INDEX_NONE && TLAsset->Timeline.Tracks[TI].Keys[KI].Channels == (AnimStitchChannel::Translation | AnimStitchChannel::Rotation), TEXT("unlocked translation keys into the same key, scale untouched"));
+		const int32 NI = TLAsset->MoveTrackChannelKey(TI, KI, AnimStitchChannel::Rotation, 0.8);
+		Check(NI != INDEX_NONE && FMath::IsNearlyEqual(TLAsset->Timeline.Tracks[TI].Keys[NI].Time, 0.8) && TLAsset->Timeline.Tracks[TI].Keys[NI].Channels == AnimStitchChannel::Rotation && FAnimStitchManualEdits::FindKey(TLAsset->Timeline.Tracks[TI], 0.5) != INDEX_NONE, TEXT("moving the rotation key leaves the translation key behind"));
+		TLAsset->SetTrackChannelUnlocked(TI, AnimStitchChannel::Rotation, false);
+		const double Before = TLAsset->Timeline.Tracks[TI].Keys[NI].Time;
+		TLAsset->MoveTrackChannelKey(TI, NI, AnimStitchChannel::Rotation, 1.0);
+		TLAsset->RemoveTrackChannelKey(TI, NI, AnimStitchChannel::Rotation);
+		Check(Count(AnimStitchChannel::Rotation) == R0 + 1 && FMath::IsNearlyEqual(TLAsset->Timeline.Tracks[TI].Keys[NI].Time, Before), TEXT("locked rotation key cannot be moved or deleted"));
+		TLAsset->SetTrackChannelUnlocked(TI, AnimStitchChannel::Rotation, true);
+		TLAsset->RemoveTrackChannelKey(TI, NI, AnimStitchChannel::Rotation);
+		Check(Count(AnimStitchChannel::Rotation) == R0, TEXT("unlocked rotation key deletes"));
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("S2 RESULT: %d failures"), Fails);
+		return Fails;
+	}
 	if (FParse::Param(*Params, TEXT("P16Test")))
 	{
 		const FString Folder = TEXT("/Game/_AnimStitchSpike");

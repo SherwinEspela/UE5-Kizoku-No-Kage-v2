@@ -106,9 +106,72 @@ namespace
 	}
 }
 
+uint8 FAnimStitchManualEdits::GetApplicableChannels(const FAnimStitchTrack& Track)
+{
+	return Track.Kind == EAnimStitchTrackKind::Bone && Track.bRotationOnly ? AnimStitchChannel::Rotation : AnimStitchChannel::All;
+}
+
+uint8 FAnimStitchManualEdits::GetEditableChannels(const FAnimStitchTrack& Track)
+{
+	if (Track.Kind != EAnimStitchTrackKind::Bone) { return AnimStitchChannel::All; }
+	return Track.UnlockedChannels & GetApplicableChannels(Track);
+}
+
+uint8 FAnimStitchManualEdits::GetActiveChannels(const FAnimStitchTrack& Track, double Time)
+{
+	constexpr double Eps = 1e-6;
+	uint8 Mask = 0;
+	for (const uint8 Bit : { AnimStitchChannel::Translation, AnimStitchChannel::Rotation, AnimStitchChannel::Scale })
+	{
+		double First = TNumericLimits<double>::Max(), Last = -TNumericLimits<double>::Max();
+		for (const FAnimStitchTrackKey& K : Track.Keys)
+		{
+			if (!(K.Channels & Bit)) { continue; }
+			First = FMath::Min(First, K.Time);
+			Last = FMath::Max(Last, K.Time);
+		}
+		if (First > Last) { continue; } // this channel has no keys
+		if (Track.Mode != EAnimStitchTrackMode::Absolute || (Time >= First - Eps && Time <= Last + Eps)) { Mask |= Bit; }
+	}
+	return Mask;
+}
+
+int32 FAnimStitchManualEdits::SetChannelKey(FAnimStitchTrack& Track, const FAnimStitchTrackKey& Key, uint8 Channels)
+{
+	Channels &= AnimStitchChannel::All;
+	if (Channels == 0) { return INDEX_NONE; }
+	auto CopyChannels = [&](FAnimStitchTrackKey& Dst)
+	{
+		if (Channels & AnimStitchChannel::Translation) { Dst.Translation = Key.Translation; }
+		if (Channels & AnimStitchChannel::Rotation) { Dst.Rotation = Key.Rotation; }
+		if (Channels & AnimStitchChannel::Scale) { Dst.Scale = Key.Scale; }
+		Dst.Channels |= Channels;
+	};
+	const int32 Existing = FindKey(Track, Key.Time);
+	if (Existing != INDEX_NONE)
+	{
+		CopyChannels(Track.Keys[Existing]);
+		return Existing;
+	}
+	FAnimStitchTrackKey NewKey;
+	NewKey.Time = Key.Time;
+	NewKey.Pole = Key.Pole;
+	NewKey.Weight = Key.Weight;
+	NewKey.Channels = 0;
+	CopyChannels(NewKey);
+	int32 Index = 0;
+	while (Index < Track.Keys.Num() && Track.Keys[Index].Time < Key.Time) { ++Index; }
+	Track.Keys.Insert(NewKey, Index);
+	return Index;
+}
+
 bool FAnimStitchManualEdits::IsActiveAt(const FAnimStitchTrack& Track, double Time)
 {
 	if (Track.Keys.Num() == 0) { return false; }
+	if (Track.Mode == EAnimStitchTrackMode::Absolute && Track.Kind == EAnimStitchTrackKind::Bone)
+	{
+		return GetActiveChannels(Track, Time) != 0;
+	}
 	if (Track.Mode == EAnimStitchTrackMode::Absolute)
 	{
 		// An absolute track replaces the animation only across its keyed range; outside it the underlying animation plays untouched.
@@ -127,6 +190,31 @@ FAnimStitchTrackKey FAnimStitchManualEdits::Sample(const FAnimStitchTrack& Track
 	if (Track.Kind == EAnimStitchTrackKind::IKLimb)
 	{
 		return SampleIK(Track, Time);
+	}
+	if (Track.Kind == EAnimStitchTrackKind::Bone)
+	{
+		// Each channel interpolates between its own keys; a channel without keys stays at identity.
+		FAnimStitchTrackKey Out;
+		Out.Time = Time;
+		for (const uint8 Bit : { AnimStitchChannel::Translation, AnimStitchChannel::Rotation, AnimStitchChannel::Scale })
+		{
+			const FAnimStitchTrackKey* Prev = nullptr;
+			const FAnimStitchTrackKey* Next = nullptr;
+			for (const FAnimStitchTrackKey& K : Track.Keys)
+			{
+				if (!(K.Channels & Bit)) { continue; }
+				if (K.Time <= Time) { Prev = &K; } else { Next = &K; break; }
+			}
+			const FAnimStitchTrackKey* A = Prev ? Prev : Next;
+			const FAnimStitchTrackKey* B = Next ? Next : Prev;
+			if (!A) { continue; }
+			const double Span = B->Time - A->Time;
+			const double Alpha = (A != B && Span > 1e-9) ? FMath::Clamp((Time - A->Time) / Span, 0.0, 1.0) : 0.0;
+			if (Bit == AnimStitchChannel::Translation) { Out.Translation = FMath::Lerp(A->Translation, B->Translation, Alpha); }
+			else if (Bit == AnimStitchChannel::Rotation) { Out.Rotation = FQuat::Slerp(A->Rotation, B->Rotation, Alpha).GetNormalized(); }
+			else { Out.Scale = FMath::Lerp(A->Scale, B->Scale, Alpha); }
+		}
+		return Out;
 	}
 	if (Time <= Track.Keys[0].Time) { return Track.Keys[0]; }
 	if (Time >= Track.Keys.Last().Time) { return Track.Keys.Last(); }
@@ -301,7 +389,17 @@ void FAnimStitchManualEdits::Apply(const FReferenceSkeleton& Ref, const TArray<F
 		{
 			// Absolute: the key is the bone's full transform RELATIVE TO THE ROOT BONE (so it travels with root motion instead of staying at a world spot).
 			// It replaces the blended result outright; the bone is re-expressed relative to its (already corrected) parent so children simply follow.
-			const FTransform Target = FTransform(Key.Rotation.GetNormalized(), Key.Translation, Key.Scale) * Local[0];
+			// Per channel: only the channels keyed here replace the blend, the others keep what the animation produces.
+			const uint8 Active = GetActiveChannels(Track, Time);
+			FTransform KeyRel(Key.Rotation.GetNormalized(), Key.Translation, Key.Scale);
+			if (Active != AnimStitchChannel::All)
+			{
+				KeyRel = FAnimStitchFootLock::GetComponentSpace(Ref, Local, Bone).GetRelativeTransform(Local[0]);
+				if (Active & AnimStitchChannel::Translation) { KeyRel.SetTranslation(Key.Translation); }
+				if (Active & AnimStitchChannel::Rotation) { KeyRel.SetRotation(Key.Rotation.GetNormalized()); }
+				if (Active & AnimStitchChannel::Scale) { KeyRel.SetScale3D(Key.Scale); }
+			}
+			const FTransform Target = KeyRel * Local[0];
 			const FTransform Relative = Target.GetRelativeTransform(ParentCS);
 			if (!Track.bRotationOnly)
 			{

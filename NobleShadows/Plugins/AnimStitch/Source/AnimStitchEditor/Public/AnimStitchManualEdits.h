@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "AnimStitchTimeline.h"
@@ -24,6 +24,16 @@ public:
 
 	/** Inserts (or replaces the key at the same moment) keeping the keys sorted. Returns its index. */
 	static int32 SetKey(FAnimStitchTrack& Track, const FAnimStitchTrackKey& Key);
+
+	// ---- Per-channel keys (bone tracks): every key holds a subset of Translation / Rotation / Scale (AnimStitchChannel bits) ----
+	/** Channels that exist on this track (FK joints rotate only). */
+	static uint8 GetApplicableChannels(const FAnimStitchTrack& Track);
+	/** Channels whose lane is unlocked (bone tracks; every other track kind is always editable). */
+	static uint8 GetEditableChannels(const FAnimStitchTrack& Track);
+	/** Channels that change the pose at a time: additive = every channel that has keys; absolute = channels inside their own keyed range. */
+	static uint8 GetActiveChannels(const FAnimStitchTrack& Track, double Time);
+	/** Writes only the masked channels of Key into the key at its time (creating a key that holds just those channels if there is none). Returns its index. */
+	static int32 SetChannelKey(FAnimStitchTrack& Track, const FAnimStitchTrackKey& Key, uint8 Channels);
 
 	/**
 	 * Applies all tracks to a skeleton-local pose (indexed by skeleton reference bone) at a timeline time.

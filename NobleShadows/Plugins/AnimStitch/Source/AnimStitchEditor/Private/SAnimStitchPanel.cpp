@@ -681,6 +681,12 @@ EActiveTimerReturnType SAnimStitchPanel::UpdatePreview(double CurrentTime, float
 			Id.A = SelectedTrack;
 			Preview->SelectControl(Id);
 		}
+		else
+		{
+			// Clicking empty timeline space deselects: the viewport control and bone the track had selected go too, so Details empties.
+			Preview->SelectControl(FAnimStitchControlId());
+			Preview->SelectBone(INDEX_NONE);
+		}
 	}
 	{
 		// Selecting a control in the viewport selects its bone track in the timeline.

@@ -5,6 +5,7 @@
 #include "EditorUndoClient.h"
 #include "AnimStitchTimelineAsset.h"
 #include "AnimStitchFootLock.h"
+#include "AnimStitchManualEdits.h"
 
 class FScopedTransaction;
 
@@ -167,6 +168,8 @@ private:
 		int32 Index = INDEX_NONE;
 		/** Track keys: the key index. */
 		int32 Sub = INDEX_NONE;
+		/** Track keys / lanes: 0 = the combined summary lane, else the AnimStitchChannel bit of the channel lane that was hit. */
+		uint8 Channel = 0;
 	};
 enum class EDrag : uint8 { None, Scrub, Move, TrimLeft, TrimRight, RateLeft, RateRight, Overlap, Pan, MarkerStart, MarkerEnd, FootLane, KeyMove, Marquee, Splitter, FootHandle, FootRegion };
 
@@ -195,7 +198,7 @@ enum class EDrag : uint8 { None, Scrub, Move, TrimLeft, TrimRight, RateLeft, Rat
 	bool GetLaneButton(float X, float Y, int32 Track, EHit& OutType) const;
 	void PaintTrackLanes(FSlateWindowElementList& Out, int32 Layer, const FGeometry& G) const;
 	void OpenAddTrackMenu(const FPointerEvent& Event);
-	void OpenTrackMenu(const FPointerEvent& Event, int32 Track, int32 Key, double Time);
+	void OpenTrackMenu(const FPointerEvent& Event, int32 Track, int32 Key, double Time, uint8 Channel = 0);
 	void AddBoneTrack(FName Bone, bool bRotationOnly, int32 GroupId, EAnimStitchTrackMode Mode = EAnimStitchTrackMode::Additive);
 	/** The single Root offset track (additive translation + yaw on the root). Both entry points (menu entry and bone picker) land here. */
 	void AddRootOffsetTrack();
@@ -210,7 +213,8 @@ enum class EDrag : uint8 { None, Scrub, Move, TrimLeft, TrimRight, RateLeft, Rat
 	int32 SelectedKey = INDEX_NONE;
 
 	// ---- Multi-key selection, marquee and clipboard (Phase 10) ----
-	struct FKeyRef { int32 Track = INDEX_NONE; int32 Key = INDEX_NONE; bool operator==(const FKeyRef& O) const { return Track == O.Track && Key == O.Key; } };
+	/** Channel: 0 = the key on the combined summary lane, else the AnimStitchChannel bit of the channel lane the key was picked on. */
+	struct FKeyRef { int32 Track = INDEX_NONE; int32 Key = INDEX_NONE; uint8 Channel = 0; bool operator==(const FKeyRef& O) const { return Track == O.Track && Key == O.Key && Channel == O.Channel; } };
 	/** Every selected key (the primary SelectedTrack / SelectedKey is one of them). */
 	TArray<FKeyRef> SelectedKeys;
 	TArray<FKeyRef> MarqueeInitial;
@@ -220,7 +224,18 @@ enum class EDrag : uint8 { None, Scrub, Move, TrimLeft, TrimRight, RateLeft, Rat
 	double FootHandleMin = 0.0, FootHandleMax = 0.0;
 	FVector2f MarqueeStart = FVector2f::ZeroVector;
 	FVector2f MarqueeCurrent = FVector2f::ZeroVector;
-	bool IsKeySelected(int32 Track, int32 Key) const { return SelectedKeys.Contains(FKeyRef{ Track, Key }) || (Track == SelectedTrack && Key == SelectedKey); }
+	bool IsKeySelected(int32 Track, int32 Key, uint8 Channel = 0) const { return SelectedKeys.Contains(FKeyRef{ Track, Key, Channel }) || (Track == SelectedTrack && Key == SelectedKey && Channel == SelectedChannel); }
+	/** Channel of the primary selected key (0 = combined lane). */
+	uint8 SelectedChannel = 0;
+	/** Bone tracks show a Translation / Rotation / Scale sub-lane per channel while expanded. */
+	bool HasChannelLanes(int32 Track) const { return IsTrackExpanded(Track) && Asset->Timeline.Tracks[Track].Kind == EAnimStitchTrackKind::Bone; }
+	float GetChannelRowHeight() const { return (ExpanderHeight - 2.f) / 4.f; }
+	/** Top (widget-local) of channel sub-lane Row (0 = Translation, 1 = Rotation, 2 = Scale) under an expanded bone track. */
+	float GetChannelRowTop(int32 Track, int32 Row) const { return GetTrackLaneTop(Track) + TrackLaneHeight + 2.f + Row * GetChannelRowHeight(); }
+	static uint8 ChannelBitForRow(int32 Row) { return uint8(1 << Row); }
+	/** Clicking empty timeline space: nothing stays selected (clip, track, keys), including the viewport control the track selected. */
+	void DeselectAll();
+	bool IsChannelEditable(int32 Track, uint8 Channel) const { return Asset->Timeline.Tracks.IsValidIndex(Track) && (FAnimStitchManualEdits::GetEditableChannels(Asset->Timeline.Tracks[Track]) & Channel) != 0; }
 	void UpdateMarquee(const FVector2f& Local);
 	void CopySelectedKeys();
 	void PasteKeys();

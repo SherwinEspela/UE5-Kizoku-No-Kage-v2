@@ -4,7 +4,9 @@
 #include "AnimStitchTimelineAsset.h"
 #include "ScopedTransaction.h"
 #include "Styling/AppStyle.h"
+#include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
+#include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SSpinBox.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Text/STextBlock.h"
@@ -38,7 +40,14 @@ FAnimStitchTrackKey SAnimStitchKeyPanel::GetKey() const
 	const FAnimStitchTrack* Track = GetTrack();
 	if (!Track) { return Key; }
 	const int32 KeyIndex = Timeline->GetSelectedKeyFor(TrackIndexAttr.Get(INDEX_NONE));
-	if (Track->Keys.IsValidIndex(KeyIndex))
+	if (Track->Kind == EAnimStitchTrackKind::Bone)
+	{
+		// Every channel shows its own interpolated value at the selected key's time (or the playhead): a key that holds only some channels still shows the rest.
+		const double Time = Track->Keys.IsValidIndex(KeyIndex) ? Track->Keys[KeyIndex].Time : Timeline->GetPlayhead();
+		Key = FAnimStitchManualEdits::Sample(*Track, Time);
+		Key.Time = Time;
+	}
+	else if (Track->Keys.IsValidIndex(KeyIndex))
 	{
 		Key = Track->Keys[KeyIndex];
 	}
@@ -76,11 +85,24 @@ FAnimStitchTrackKey SAnimStitchKeyPanel::GetKey() const
 	return Key;
 }
 
-void SAnimStitchKeyPanel::Edit(TFunctionRef<void(FAnimStitchTrackKey&)> Mutator)
+bool SAnimStitchKeyPanel::IsBoneTrack() const
+{
+	const FAnimStitchTrack* Track = GetTrack();
+	return Track && Track->Kind == EAnimStitchTrackKind::Bone;
+}
+
+bool SAnimStitchKeyPanel::IsChannelLocked(uint8 Channel) const
+{
+	const FAnimStitchTrack* Track = GetTrack();
+	return Track && (FAnimStitchManualEdits::GetEditableChannels(*Track) & Channel) == 0;
+}
+
+void SAnimStitchKeyPanel::Edit(TFunctionRef<void(FAnimStitchTrackKey&)> Mutator, uint8 Channel)
 {
 	UAnimStitchTimelineAsset* Asset = Timeline->GetAsset();
 	const int32 TrackIndex = TrackIndexAttr.Get(INDEX_NONE);
 	if (!Asset || TrackIndex == INDEX_NONE) { return; }
+	if (IsBoneTrack() && IsChannelLocked(Channel)) { return; } // a locked channel is read-only
 	TSharedPtr<FScopedTransaction> Local;
 	if (!SliderTransaction.IsValid())
 	{
@@ -88,15 +110,40 @@ void SAnimStitchKeyPanel::Edit(TFunctionRef<void(FAnimStitchTrackKey&)> Mutator)
 	}
 	FAnimStitchTrackKey Key = GetKey();
 	Mutator(Key);
-	Asset->SetTrackKey(TrackIndex, Key);
+	if (IsBoneTrack()) { Asset->SetTrackChannelKey(TrackIndex, Key, Channel); } // only the edited channel is keyed
+	else { Asset->SetTrackKey(TrackIndex, Key); }
 }
 
-TSharedRef<SWidget> SAnimStitchKeyPanel::Vec3Row(const FText& Label, TFunction<FVector(const FAnimStitchTrackKey&)> Get, TFunction<void(FAnimStitchTrackKey&, const FVector&)> Set, TAttribute<EVisibility> Visible, double Delta)
+TSharedRef<SWidget> SAnimStitchKeyPanel::Vec3Row(const FText& Label, TFunction<FVector(const FAnimStitchTrackKey&)> Get, TFunction<void(FAnimStitchTrackKey&, const FVector&)> Set, TAttribute<EVisibility> Visible, double Delta, uint8 Channel)
 {
-	TSharedRef<SHorizontalBox> Row = SNew(SHorizontalBox).Visibility(Visible);
-	Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(6.f, 0.f, 4.f, 0.f)
+	TSharedRef<SHorizontalBox> Row = SNew(SHorizontalBox);
+	// Channel rows of a bone track start with the lane's lock toggle; a locked channel keeps its keys visible but is read-only here.
+	Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(4.f, 0.f, 0.f, 0.f)
 	[
-		SNew(SBox).WidthOverride(54.f)[SNew(STextBlock).Text(Label)]
+		SNew(SBox).WidthOverride(22.f).HeightOverride(22.f)
+		.Visibility_Lambda([this, Channel]() { return Channel != 0 && IsBoneTrack() ? EVisibility::Visible : EVisibility::Collapsed; })
+		[
+			SNew(SButton).ButtonStyle(FAppStyle::Get(), "SimpleButton").ContentPadding(FMargin(2.f))
+			.ToolTipText_Lambda([this, Channel]() { return IsChannelLocked(Channel) ? LOCTEXT("ChannelLockedTip", "Locked: the keys on this channel lane cannot be moved or edited. Click to unlock.") : LOCTEXT("ChannelUnlockedTip", "Unlocked: this channel can be keyed and edited. Click to lock."); })
+			.OnClicked_Lambda([this, Channel]()
+			{
+				UAnimStitchTimelineAsset* Asset = Timeline->GetAsset();
+				const FAnimStitchTrack* Track = GetTrack();
+				if (Asset && Track)
+				{
+					const FScopedTransaction Tx(LOCTEXT("ToggleChannelLockTx", "Lock / Unlock Channel"));
+					Asset->SetTrackChannelUnlocked(TrackIndexAttr.Get(INDEX_NONE), Channel, (Track->UnlockedChannels & Channel) == 0);
+				}
+				return FReply::Handled();
+			})
+			[
+				SNew(SImage).Image_Lambda([this, Channel]() { return FAppStyle::GetBrush(IsChannelLocked(Channel) ? "Icons.Lock" : "Icons.Unlock"); })
+			]
+		]
+	];
+	Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(4.f, 0.f, 3.f, 0.f)
+	[
+		SNew(SBox).WidthOverride_Lambda([this, Channel]() -> FOptionalSize { return FOptionalSize(Channel != 0 && IsBoneTrack() ? 40.f : 62.f); })[SNew(STextBlock).Text(Label)]
 	];
 	static const TCHAR* AxisNames[3] = { TEXT("X"), TEXT("Y"), TEXT("Z") };
 	static const FLinearColor AxisColors[3] = { FLinearColor(0.9f, 0.25f, 0.25f), FLinearColor(0.3f, 0.8f, 0.3f), FLinearColor(0.3f, 0.5f, 1.f) };
@@ -105,27 +152,29 @@ TSharedRef<SWidget> SAnimStitchKeyPanel::Vec3Row(const FText& Label, TFunction<F
 		Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 2.f, 0.f)[SNew(STextBlock).Text(FText::FromString(AxisNames[Axis])).ColorAndOpacity(AxisColors[Axis])];
 		Row->AddSlot().AutoWidth().Padding(0.f, 1.f, 3.f, 1.f)
 		[
-			SNew(SBox).WidthOverride(58.f)
+			SNew(SBox).WidthOverride(54.f)
 			[
 				SNew(SSpinBox<double>)
+				.IsEnabled_Lambda([this, Channel]() { return !(Channel != 0 && IsBoneTrack() && IsChannelLocked(Channel)); })
 				.Delta(Delta).MinFractionalDigits(1).MaxFractionalDigits(2)
 				.Value_Lambda([this, Get, Axis]() { return Get(GetKey())[Axis]; })
 				.OnBeginSliderMovement_Lambda([this]() { SliderTransaction = MakeShared<FScopedTransaction>(LOCTEXT("DragKeyValueTx", "Edit Key Value")); })
 				.OnEndSliderMovement_Lambda([this](double) { SliderTransaction.Reset(); })
-				.OnValueChanged_Lambda([this, Get, Set, Axis](double V)
+				.OnValueChanged_Lambda([this, Get, Set, Axis, Channel](double V)
 				{
-					Edit([&](FAnimStitchTrackKey& Key) { FVector Vec = Get(Key); if (FMath::IsNearlyEqual(Vec[Axis], V, 1e-9)) { return; } Vec[Axis] = V; Set(Key, Vec); });
+					Edit([&](FAnimStitchTrackKey& Key) { FVector Vec = Get(Key); if (FMath::IsNearlyEqual(Vec[Axis], V, 1e-9)) { return; } Vec[Axis] = V; Set(Key, Vec); }, Channel ? Channel : AnimStitchChannel::All);
 				})
-				.OnValueCommitted_Lambda([this, Get, Set, Axis](double V, ETextCommit::Type)
+				.OnValueCommitted_Lambda([this, Get, Set, Axis, Channel](double V, ETextCommit::Type)
 				{
 					if (SliderTransaction.IsValid()) { return; }
 					if (FMath::IsNearlyEqual(Get(GetKey())[Axis], V, 1e-6)) { return; }
-					Edit([&](FAnimStitchTrackKey& Key) { FVector Vec = Get(Key); Vec[Axis] = V; Set(Key, Vec); });
+					Edit([&](FAnimStitchTrackKey& Key) { FVector Vec = Get(Key); Vec[Axis] = V; Set(Key, Vec); }, Channel ? Channel : AnimStitchChannel::All);
 				})
 			]
 		];
 	}
-	return Row;
+	// A fixed-height slot: the rows line up with the channel lanes drawn beside them in the timeline.
+	return SNew(SBox).HeightOverride((SAnimStitchTimeline::ExpanderHeight - 2.f) / 4.f).VAlign(VAlign_Center).Visibility(Visible)[Row];
 }
 
 void SAnimStitchKeyPanel::Construct(const FArguments& InArgs)
@@ -144,27 +193,26 @@ void SAnimStitchKeyPanel::Construct(const FArguments& InArgs)
 		SNew(SBox).HeightOverride(SAnimStitchTimeline::ExpanderHeight - 2.f)
 		[
 			SNew(SVerticalBox)
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 3.f, 0.f, 0.f)[SNullWidget::NullWidget]
-			+ SVerticalBox::Slot().AutoHeight()
+						+ SVerticalBox::Slot().AutoHeight()
 			[
 				Vec3Row(LOCTEXT("RowTranslate", "Translate"),
 					[](const FAnimStitchTrackKey& K) { return K.Translation; },
 					[this](FAnimStitchTrackKey& K, const FVector& V) { K.Translation = V; if (GetTrack() && GetTrack()->Kind == EAnimStitchTrackKind::IKLimb && K.Weight < 1e-3f) { K.Weight = 1.f; } },
-					TAttribute<EVisibility>::CreateLambda([ShowTranslate]() { return ShowTranslate() ? EVisibility::Visible : EVisibility::Collapsed; }), 0.5)
+					TAttribute<EVisibility>::CreateLambda([this, ShowTranslate]() { return ShowTranslate() ? EVisibility::Visible : (IsBoneTrack() ? EVisibility::Hidden : EVisibility::Collapsed); }), 0.5, AnimStitchChannel::Translation)
 			]
 			+ SVerticalBox::Slot().AutoHeight()
 			[
 				Vec3Row(LOCTEXT("RowRotate", "Rotate"),
 					[](const FAnimStitchTrackKey& K) { return ToEuler(K.Rotation); },
 					[this](FAnimStitchTrackKey& K, const FVector& V) { K.Rotation = FromEuler(V); if (GetTrack() && GetTrack()->Kind == EAnimStitchTrackKind::RootOffset) { K.Rotation = FQuat(FVector::UpVector, FMath::DegreesToRadians(K.Rotation.Rotator().Yaw)); } if (GetTrack() && GetTrack()->Kind == EAnimStitchTrackKind::IKLimb && K.Weight < 1e-3f) { K.Weight = 1.f; } },
-					TAttribute<EVisibility>::CreateLambda([IsPoleLane]() { return IsPoleLane() ? EVisibility::Collapsed : EVisibility::Visible; }), 0.5)
+					TAttribute<EVisibility>::CreateLambda([IsPoleLane]() { return IsPoleLane() ? EVisibility::Collapsed : EVisibility::Visible; }), 0.5, AnimStitchChannel::Rotation)
 			]
 			+ SVerticalBox::Slot().AutoHeight()
 			[
 				Vec3Row(LOCTEXT("RowScale", "Scale"),
 					[](const FAnimStitchTrackKey& K) { return K.Scale; },
 					[](FAnimStitchTrackKey& K, const FVector& V) { K.Scale = V; },
-					TAttribute<EVisibility>::CreateLambda([this]() { const FAnimStitchTrack* T = GetTrack(); return T && T->Kind == EAnimStitchTrackKind::Bone && !T->bRotationOnly ? EVisibility::Visible : EVisibility::Collapsed; }), 0.01)
+					TAttribute<EVisibility>::CreateLambda([this]() { const FAnimStitchTrack* T = GetTrack(); return T && T->Kind == EAnimStitchTrackKind::Bone ? (T->bRotationOnly ? EVisibility::Hidden : EVisibility::Visible) : EVisibility::Collapsed; }), 0.01, AnimStitchChannel::Scale)
 			]
 			+ SVerticalBox::Slot().AutoHeight()
 			[

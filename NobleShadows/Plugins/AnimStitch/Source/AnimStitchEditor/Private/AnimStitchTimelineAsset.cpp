@@ -83,7 +83,22 @@ const double NewTime = FMath::Clamp(Clip->TimelineTimeAt(Owner.SourceTime), Clip
 		Track.Keys.Reset();
 		for (const TPair<double, FAnimStitchTrackKey>& Entry : Moved)
 		{
-			if (Track.Keys.Num() > 0 && FMath::Abs(Track.Keys.Last().Time - Entry.Key) < 1e-4) { Track.Keys.Last() = Entry.Value; continue; } // two keys landed on the same moment
+			if (Track.Keys.Num() > 0 && FMath::Abs(Track.Keys.Last().Time - Entry.Key) < 1e-4)
+			{
+				// Two keys landed on the same moment: merge their channels (the later one wins where both hold a channel).
+				FAnimStitchTrackKey& Last = Track.Keys.Last();
+				const uint8 Mask = Entry.Value.Channels;
+				const uint8 OldMask = Last.Channels;
+				if (Mask == AnimStitchChannel::All) { Last = Entry.Value; }
+				else
+				{
+					if (Mask & AnimStitchChannel::Translation) { Last.Translation = Entry.Value.Translation; }
+					if (Mask & AnimStitchChannel::Rotation) { Last.Rotation = Entry.Value.Rotation; }
+					if (Mask & AnimStitchChannel::Scale) { Last.Scale = Entry.Value.Scale; }
+					Last.Channels = OldMask | Mask;
+				}
+				continue;
+			}
 			Track.Keys.Add(Entry.Value);
 		}
 	}
@@ -571,6 +586,60 @@ void UAnimStitchTimelineAsset::SetTrackKeyWeight(int32 TrackIndex, int32 KeyInde
 		TouchManual();
 		Timeline.Tracks[TrackIndex].Keys[KeyIndex].Weight = FMath::Clamp(Weight, 0.f, 1.f);
 	}
+}
+
+void UAnimStitchTimelineAsset::SetTrackChannelKey(int32 TrackIndex, const FAnimStitchTrackKey& Key, uint8 Channels)
+{
+	if (!Timeline.Tracks.IsValidIndex(TrackIndex)) { return; }
+	FAnimStitchTrack& Track = Timeline.Tracks[TrackIndex];
+	if (Track.Kind != EAnimStitchTrackKind::Bone) { SetTrackKey(TrackIndex, Key); return; }
+	Channels &= FAnimStitchManualEdits::GetEditableChannels(Track);
+	if (Channels == 0) { return; }
+	TouchTrack(TrackIndex);
+	if (Track.Keys.Num() == 0 && Key.Time > 1e-3 && Track.Mode != EAnimStitchTrackMode::Absolute)
+	{
+		// Anchor (identity) on the same channels, so the correction does not apply to the whole timeline before the first key.
+		FAnimStitchTrackKey Anchor;
+		Anchor.Time = 0.0;
+		FAnimStitchManualEdits::SetChannelKey(Track, Anchor, Channels);
+	}
+	FAnimStitchManualEdits::SetChannelKey(Track, Key, Channels);
+}
+
+void UAnimStitchTimelineAsset::RemoveTrackChannelKey(int32 TrackIndex, int32 KeyIndex, uint8 Channels)
+{
+	if (!Timeline.Tracks.IsValidIndex(TrackIndex) || !Timeline.Tracks[TrackIndex].Keys.IsValidIndex(KeyIndex)) { return; }
+	FAnimStitchTrack& Track = Timeline.Tracks[TrackIndex];
+	if (Track.Kind != EAnimStitchTrackKind::Bone) { RemoveTrackKey(TrackIndex, KeyIndex); return; }
+	Channels &= FAnimStitchManualEdits::GetEditableChannels(Track) & Track.Keys[KeyIndex].Channels;
+	if (Channels == 0) { return; }
+	TouchTrack(TrackIndex);
+	Track.Keys[KeyIndex].Channels &= ~Channels;
+	if ((Track.Keys[KeyIndex].Channels & AnimStitchChannel::All) == 0) { Track.Keys.RemoveAt(KeyIndex); }
+}
+
+int32 UAnimStitchTimelineAsset::MoveTrackChannelKey(int32 TrackIndex, int32 KeyIndex, uint8 Channels, double NewTime)
+{
+	if (!Timeline.Tracks.IsValidIndex(TrackIndex) || !Timeline.Tracks[TrackIndex].Keys.IsValidIndex(KeyIndex)) { return KeyIndex; }
+	FAnimStitchTrack& Track = Timeline.Tracks[TrackIndex];
+	if (Track.Kind != EAnimStitchTrackKind::Bone) { return MoveTrackKey(TrackIndex, KeyIndex, NewTime); }
+	Channels &= FAnimStitchManualEdits::GetEditableChannels(Track) & Track.Keys[KeyIndex].Channels;
+	NewTime = FMath::Max(0.0, NewTime);
+	if (Channels == 0 || FMath::IsNearlyEqual(Track.Keys[KeyIndex].Time, NewTime, 1e-9)) { return KeyIndex; }
+	TouchTrack(TrackIndex);
+	FAnimStitchTrackKey Moved = Track.Keys[KeyIndex];
+	Track.Keys[KeyIndex].Channels &= ~Channels;
+	if ((Track.Keys[KeyIndex].Channels & AnimStitchChannel::All) == 0) { Track.Keys.RemoveAt(KeyIndex); }
+	Moved.Time = NewTime;
+	return FAnimStitchManualEdits::SetChannelKey(Track, Moved, Channels);
+}
+
+void UAnimStitchTimelineAsset::SetTrackChannelUnlocked(int32 TrackIndex, uint8 Channel, bool bUnlocked)
+{
+	if (!Timeline.Tracks.IsValidIndex(TrackIndex)) { return; }
+	TouchManual();
+	uint8& Mask = Timeline.Tracks[TrackIndex].UnlockedChannels;
+	Mask = bUnlocked ? (Mask | Channel) : (Mask & ~Channel);
 }
 
 void UAnimStitchTimelineAsset::SetTrackControlStyle(int32 TrackIndex, bool bPole, const FAnimStitchControlStyle& Style)

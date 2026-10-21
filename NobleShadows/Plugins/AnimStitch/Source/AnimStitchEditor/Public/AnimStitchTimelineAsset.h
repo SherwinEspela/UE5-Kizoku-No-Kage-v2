@@ -72,6 +72,16 @@ void SetTrim(int32 Index, double NewTrimIn, double NewTrimOut);
 	/** Returns the key's index after re-sorting. */
 	int32 MoveTrackKey(int32 Track, int32 KeyIndex, double NewTime);
 	void SetTrackKeyWeight(int32 Track, int32 KeyIndex, float Weight);
+	// ---- Per-channel keys (bone tracks). Other track kinds fall back to the whole-key calls above and ignore the mask. ----
+	// Locked channels (see SetTrackChannelUnlocked) are skipped: they are never written, moved or deleted by these calls.
+	/** Writes only the masked channels of Key at the key's time. */
+	void SetTrackChannelKey(int32 Track, const FAnimStitchTrackKey& Key, uint8 Channels);
+	/** Removes the masked channels from a key; the key disappears when no channel is left. */
+	void RemoveTrackChannelKey(int32 Track, int32 KeyIndex, uint8 Channels);
+	/** Moves the masked channels of a key to a new time (the other channels stay). Returns the index of the key now holding them. */
+	int32 MoveTrackChannelKey(int32 Track, int32 KeyIndex, uint8 Channels, double NewTime);
+	/** Locks / unlocks one channel lane of a bone track for editing. */
+	void SetTrackChannelUnlocked(int32 Track, uint8 Channel, bool bUnlocked);
 	/** Bone tracks: keep the feet planted (leg IK) while this bone moves the legs. */
 	void SetTrackKeepFeet(int32 Track, bool bKeep);
 	/** Sets the per-control look of a track (bPole = the IK pole control, otherwise the bone control / effector). */

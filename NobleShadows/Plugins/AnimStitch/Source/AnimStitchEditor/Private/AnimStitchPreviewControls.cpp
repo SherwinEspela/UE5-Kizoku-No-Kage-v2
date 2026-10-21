@@ -816,12 +816,8 @@ bool FAnimStitchPreview::GetFocusBox(FBox& OutBox) const
 		OutBox = FBox::BuildAABB(MainComponent->GetComponentTransform().TransformPosition(MainComponent->GetComponentSpaceTransforms()[SelectedBone].GetTranslation()), FVector(18.0));
 		return true;
 	}
-	if (Mesh)
-	{
-		OutBox = Mesh->GetBounds().GetBox();
-		return true;
-	}
-	return false;
+	// Nothing selected: frame the preview character (its posed bounds), never the world origin.
+	return GetCharacterBox(OutBox);
 }
 
 bool FAnimStitchPreview::GetCharacterBox(FBox& OutBox) const
@@ -837,9 +833,16 @@ bool FAnimStitchPreview::GetCharacterBox(FBox& OutBox) const
 		OutBox = Box.ExpandBy(25.0);
 		return true;
 	}
+	if (MainComponent && MainComponent->Bounds.SphereRadius > 1.0)
+	{
+		OutBox = MainComponent->Bounds.GetBox();
+		return true;
+	}
 	if (Mesh)
 	{
-		OutBox = Mesh->GetBounds().GetBox();
+		// The mesh asset's bounds are in mesh space: place them where the preview component sits.
+		const FBoxSphereBounds Local = Mesh->GetBounds();
+		OutBox = MainComponent ? Local.TransformBy(MainComponent->GetComponentTransform()).GetBox() : Local.GetBox();
 		return true;
 	}
 	return false;
@@ -921,7 +924,17 @@ void FAnimStitchPreview::ApplyControlEdit(const FVector& Translation, const FQua
 		if (AssetPtr->Timeline.Tracks[Id.A].Kind == EAnimStitchTrackKind::IKPole) { Key.Translation = Drag.StartKey.Translation + Translation; }
 		else { Key.Pole = Drag.StartKey.Pole + Translation; }
 	}
-	AssetPtr->SetTrackKey(Id.A, Key);
+	// Bone tracks key only the channels the gizmo actually changed (rotating never creates translation or scale keys); a locked channel is left alone.
+	uint8 Channels = AnimStitchChannel::All;
+	if (Id.Kind == EAnimStitchControlKind::Bone && AssetPtr->Timeline.Tracks[Id.A].Kind == EAnimStitchTrackKind::Bone)
+	{
+		Channels = 0;
+		if (!Translation.IsNearlyZero(1e-6)) { Channels |= AnimStitchChannel::Translation; }
+		if (!Rotation.Equals(FQuat::Identity, 1e-7)) { Channels |= AnimStitchChannel::Rotation; }
+		if (!Scale.Equals(FVector::OneVector, 1e-7)) { Channels |= AnimStitchChannel::Scale; }
+		if (Channels == 0) { return; }
+	}
+	AssetPtr->SetTrackChannelKey(Id.A, Key, Channels);
 	++DragWrites;
 	// Show the result right now (the panel would only pick the change up on its next tick).
 	ManualTracks = AssetPtr->Timeline.Tracks;

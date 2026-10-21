@@ -30,8 +30,12 @@ public:
 private:
 	const FAnimStitchTrack* GetTrack() const;
 	FAnimStitchTrackKey GetKey() const;
-	void Edit(TFunctionRef<void(FAnimStitchTrackKey&)> Mutator);
-	TSharedRef<SWidget> Vec3Row(const FText& Label, TFunction<FVector(const FAnimStitchTrackKey&)> Get, TFunction<void(FAnimStitchTrackKey&, const FVector&)> Set, TAttribute<EVisibility> Visible, double Delta);
+	/** Writes the edited key. Bone tracks write only Channel (an AnimStitchChannel bit) of the key, and nothing while that channel is locked. */
+	void Edit(TFunctionRef<void(FAnimStitchTrackKey&)> Mutator, uint8 Channel = AnimStitchChannel::All);
+	bool IsBoneTrack() const;
+	bool IsChannelLocked(uint8 Channel) const;
+	/** One numeric row. Channel != 0: it is a bone-track channel row (lock toggle in front, read-only while locked). */
+	TSharedRef<SWidget> Vec3Row(const FText& Label, TFunction<FVector(const FAnimStitchTrackKey&)> Get, TFunction<void(FAnimStitchTrackKey&, const FVector&)> Set, TAttribute<EVisibility> Visible, double Delta, uint8 Channel = 0);
 
 	TSharedPtr<SAnimStitchTimeline> Timeline;
 	FLiveIKDelegate LiveIK;

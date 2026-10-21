@@ -411,6 +411,29 @@ SAnimStitchTimeline::FHit SAnimStitchTimeline::HitTest(const FVector2f& P) const
 			return Result;
 		}
 	}
+	// The Translation / Rotation / Scale sub-lanes under an expanded bone track: each holds only its own channel's keys.
+	for (int32 i = 0; i < Asset->Timeline.Tracks.Num(); ++i)
+	{
+		if (!HasChannelLanes(i)) { continue; }
+		const float RowTop = GetChannelRowTop(i, 0);
+		if (P.Y < GetTracksTop() || P.Y < RowTop || P.Y >= RowTop + 3.f * GetChannelRowHeight()) { continue; }
+		const int32 Row = FMath::Clamp(int32((P.Y - RowTop) / GetChannelRowHeight()), 0, 2);
+		const uint8 Bit = ChannelBitForRow(Row);
+		Result.Type = EHit::TrackLane;
+		Result.Index = i;
+		Result.Channel = Bit;
+		const FAnimStitchTrack& Track = Asset->Timeline.Tracks[i];
+		for (int32 k = 0; k < Track.Keys.Num(); ++k)
+		{
+			if ((Track.Keys[k].Channels & Bit) && FMath::Abs(P.X - TimeToX(Track.Keys[k].Time)) <= 8.f)
+			{
+				Result.Type = EHit::TrackKey;
+				Result.Sub = k;
+				break;
+			}
+		}
+		return Result;
+	}
 	if (P.Y < GetTrackTop() || P.Y > GetTrackTop() + TrackHeight)
 	{
 		return Result;
@@ -477,6 +500,20 @@ void SAnimStitchTimeline::UpdateMarquee(const FVector2f& Local)
 	for (int32 i = 0; i < TL.Tracks.Num(); ++i)
 	{
 		const float CenterY = GetTrackLaneTop(i) + TrackLaneHeight * 0.5f;
+		if (HasChannelLanes(i))
+		{
+			for (int32 Row = 0; Row < 3; ++Row)
+			{
+				const float RowY = GetChannelRowTop(i, Row) + GetChannelRowHeight() * 0.5f;
+				if (RowY < Y0 || RowY > Y1) { continue; }
+				const uint8 Bit = ChannelBitForRow(Row);
+				for (int32 k = 0; k < TL.Tracks[i].Keys.Num(); ++k)
+				{
+					const float X = TimeToX(TL.Tracks[i].Keys[k].Time);
+					if ((TL.Tracks[i].Keys[k].Channels & Bit) && X >= LabelWidth && X >= X0 && X <= X1) { SelectedKeys.AddUnique(FKeyRef{ i, k, Bit }); Last = FKeyRef{ i, k, Bit }; }
+				}
+			}
+		}
 		if (CenterY < Y0 || CenterY > Y1) { continue; }
 		for (int32 k = 0; k < TL.Tracks[i].Keys.Num(); ++k)
 		{
@@ -485,8 +522,8 @@ void SAnimStitchTimeline::UpdateMarquee(const FVector2f& Local)
 		}
 	}
 	// The primary selection (what the value panel shows) follows a single hit.
-	if (SelectedKeys.Num() == 1) { SelectedTrack = SelectedKeys[0].Track; SelectedKey = SelectedKeys[0].Key; }
-	else { SelectedKey = INDEX_NONE; if (Last.Track != INDEX_NONE) { SelectedTrack = Last.Track; } }
+	if (SelectedKeys.Num() == 1) { SelectedTrack = SelectedKeys[0].Track; SelectedKey = SelectedKeys[0].Key; SelectedChannel = SelectedKeys[0].Channel; }
+	else { SelectedKey = INDEX_NONE; SelectedChannel = 0; if (Last.Track != INDEX_NONE) { SelectedTrack = Last.Track; } }
 }
 
 namespace
@@ -575,6 +612,7 @@ void SAnimStitchTimeline::CopySelectedKeys()
 		if (!Entry) { Entry = &KeyClipboard.AddDefaulted_GetRef(); Entry->Bone = Track.Bone; Entry->Kind = Track.Kind; }
 		FAnimStitchTrackKey Key = Track.Keys[Ref.Key];
 		Key.Time -= Earliest;
+		if (Ref.Channel != 0) { Key.Channels = Ref.Channel; } // a key copied from a channel lane carries just that channel
 		Entry->Keys.Add(Key);
 	}
 }
@@ -598,7 +636,7 @@ void SAnimStitchTimeline::PasteKeys()
 		{
 			FAnimStitchTrackKey Key = Source;
 			Key.Time = FMath::Max(0.0, Playhead + Source.Time);
-			Asset->SetTrackKey(TrackIndex, Key);
+			Asset->SetTrackChannelKey(TrackIndex, Key, Key.Channels); // only the channels the copied key held; locked channels are skipped
 		}
 	}
 	// Select what was pasted.
@@ -624,9 +662,28 @@ void SAnimStitchTimeline::DeleteSelectedKeys()
 	TArray<FKeyRef> Refs = SelectedKeys;
 	Refs.Sort([](const FKeyRef& A, const FKeyRef& B) { return A.Track != B.Track ? A.Track < B.Track : A.Key > B.Key; }); // highest key first so indices stay valid
 	const FScopedTransaction Tx(LOCTEXT("DeleteKeysTx", "Delete Keys"));
-	for (const FKeyRef& Ref : Refs) { Asset->RemoveTrackKey(Ref.Track, Ref.Key); }
+	// One removal per key with all its selected channels merged, so a key that loses its last channel is removed exactly once.
+	for (int32 i = 0; i < Refs.Num();)
+	{
+		uint8 Mask = 0;
+		int32 j = i;
+		for (; j < Refs.Num() && Refs[j].Track == Refs[i].Track && Refs[j].Key == Refs[i].Key; ++j) { Mask |= Refs[j].Channel ? Refs[j].Channel : AnimStitchChannel::All; }
+		Asset->RemoveTrackChannelKey(Refs[i].Track, Refs[i].Key, Mask);
+		i = j;
+	}
 	SelectedKeys.Reset();
 	SelectedKey = INDEX_NONE;
+	SelectedChannel = 0;
+}
+
+void SAnimStitchTimeline::DeselectAll()
+{
+	SelectedTrack = INDEX_NONE;
+	SelectedKey = INDEX_NONE;
+	SelectedChannel = 0;
+	SelectedKeys.Reset();
+	++TrackSelectionSerial; // the panel also drops the viewport control / bone the track had selected, so Details empties
+	SelectClip(INDEX_NONE, false);
 }
 
 void SAnimStitchTimeline::SelectClip(int32 Index, bool bOverlap)
@@ -636,6 +693,7 @@ void SAnimStitchTimeline::SelectClip(int32 Index, bool bOverlap)
 	{
 		SelectedTrack = INDEX_NONE;
 		SelectedKey = INDEX_NONE;
+		SelectedChannel = 0;
 		SelectedKeys.Reset();
 	}
 	bOverlapSelected = bOverlap && Index > 0;
@@ -669,7 +727,7 @@ bool SAnimStitchTimeline::AddKeyAtPlayhead()
 	const FScopedTransaction Tx(LOCTEXT("AddKeyAtPlayheadTx", "Add Key at Playhead"));
 	for (const int32 TrackIndex : Targets)
 	{
-		Asset->SetTrackKey(TrackIndex, MakeKeyAtPlayhead(TrackIndex));
+		Asset->SetTrackChannelKey(TrackIndex, MakeKeyAtPlayhead(TrackIndex), FAnimStitchManualEdits::GetEditableChannels(Asset->Timeline.Tracks[TrackIndex])); // locked channels are not keyed
 	}
 	return true;
 }
@@ -691,6 +749,7 @@ void SAnimStitchTimeline::JumpToKey(int32 Track, int32 Direction)
 	SelectedTrack = Track; ++TrackSelectionSerial;
 	if (Target == INDEX_NONE) { return; }
 	SelectedKey = Target;
+	SelectedChannel = 0;
 	SelectedKeys.Reset();
 	SelectedKeys.Add(FKeyRef{ Track, Target });
 	SelectClip(INDEX_NONE, false);
@@ -771,7 +830,7 @@ void SAnimStitchTimeline::ClampSelection()
 		for (const FAnimStitchTrack& Track : Asset->Timeline.Tracks) { Valid.Add(TrackKey(Track)); }
 		ExpandedTracks = ExpandedTracks.Intersect(Valid); // tracks that no longer exist drop their expanded state
 	}
-	if (!Asset->Timeline.Tracks.IsValidIndex(SelectedTrack)) { SelectedTrack = INDEX_NONE; SelectedKey = INDEX_NONE; }
+	if (!Asset->Timeline.Tracks.IsValidIndex(SelectedTrack)) { SelectedTrack = INDEX_NONE; SelectedKey = INDEX_NONE; SelectedChannel = 0; }
 	VScroll = FMath::Clamp(VScroll, 0.f, GetTrackScrollMax());
 	if (!Asset->Timeline.Clips.IsValidIndex(SelectedClip))
 	{
@@ -826,8 +885,9 @@ FReply SAnimStitchTimeline::OnMouseButtonDown(const FGeometry& G, const FPointer
 	{
 		SelectedTrack = Hit.Index; ++TrackSelectionSerial;
 		const FScopedTransaction Tx(LOCTEXT("AddKeyTx", "Add Key"));
-		Asset->SetTrackKey(Hit.Index, MakeKeyAtPlayhead(Hit.Index));
+		Asset->SetTrackChannelKey(Hit.Index, MakeKeyAtPlayhead(Hit.Index), FAnimStitchManualEdits::GetEditableChannels(Asset->Timeline.Tracks[Hit.Index])); // locked channels are not keyed
 		SelectedKey = FAnimStitchManualEdits::FindKey(Asset->Timeline.Tracks[Hit.Index], Playhead);
+		SelectedChannel = 0;
 		return FReply::Handled();
 	}
 	case EHit::TrackLane:
@@ -836,29 +896,33 @@ FReply SAnimStitchTimeline::OnMouseButtonDown(const FGeometry& G, const FPointer
 		if (Hit.Type == EHit::TrackKey)
 		{
 			const bool bAdd = Event.IsControlDown() || Event.IsShiftDown();
-			const bool bAlready = IsKeySelected(Hit.Index, Hit.Sub);
+			const bool bAlready = IsKeySelected(Hit.Index, Hit.Sub, Hit.Channel);
 			if (bAdd)
 			{
-				if (bAlready) { SelectedKeys.Remove(FKeyRef{ Hit.Index, Hit.Sub }); if (SelectedTrack == Hit.Index && SelectedKey == Hit.Sub) { SelectedKey = INDEX_NONE; } }
-				else { SelectedKeys.AddUnique(FKeyRef{ Hit.Index, Hit.Sub }); }
+				if (bAlready) { SelectedKeys.Remove(FKeyRef{ Hit.Index, Hit.Sub, Hit.Channel }); if (SelectedTrack == Hit.Index && SelectedKey == Hit.Sub && SelectedChannel == Hit.Channel) { SelectedKey = INDEX_NONE; SelectedChannel = 0; } }
+				else { SelectedKeys.AddUnique(FKeyRef{ Hit.Index, Hit.Sub, Hit.Channel }); }
 			}
 			else if (!bAlready || SelectedKeys.Num() <= 1)
 			{
 				SelectedKeys.Reset();
-				SelectedKeys.Add(FKeyRef{ Hit.Index, Hit.Sub });
+				SelectedKeys.Add(FKeyRef{ Hit.Index, Hit.Sub, Hit.Channel });
 			}
 			SelectedTrack = Hit.Index; ++TrackSelectionSerial;
-			if (!bAdd || !bAlready) { SelectedKey = Hit.Sub; }
+			if (!bAdd || !bAlready) { SelectedKey = Hit.Sub; SelectedChannel = Hit.Channel; }
 			// Dragging moves a single key; with several keys selected the drag is ignored (copy / paste and delete work on all of them).
-			if (SelectedKeys.Num() <= 1)
+			// A locked channel's keys stay selectable (the Details panel shows them) but cannot be dragged.
+			const FAnimStitchTrack& HitTrack = TL.Tracks[Hit.Index];
+			const uint8 Movable = (Hit.Channel ? Hit.Channel : HitTrack.Keys[Hit.Sub].Channels) & FAnimStitchManualEdits::GetEditableChannels(HitTrack);
+			if (SelectedKeys.Num() <= 1 && Movable != 0)
 			{
 				DragMode = EDrag::KeyMove;
-				InitialKeyTime = Asset->Timeline.Tracks[Hit.Index].Keys[Hit.Sub].Time;
+				InitialKeyTime = HitTrack.Keys[Hit.Sub].Time;
 			}
 		}
 		else
 		{
 			// Empty lane space: select the track and start a marquee.
+				SelectedChannel = 0;
 			SelectedTrack = Hit.Index; ++TrackSelectionSerial;
 			SelectedKey = INDEX_NONE;
 			if (Local.X >= LabelWidth)
@@ -929,19 +993,26 @@ InitialRate = Clip.PlayRate;
 		break;
 	}
 	default:
-		if (Local.X < LabelWidth) { return FReply::Handled(); } // the track column does not scrub
+		if (Local.X < LabelWidth)
+		{
+			// The track column does not scrub; empty space in it deselects like empty space anywhere else in the timeline.
+			if (!Event.IsControlDown() && !Event.IsShiftDown()) { DeselectAll(); }
+			return FReply::Handled();
+		}
 		if (Local.Y > GetTracksTop() && TL.Tracks.Num() > 0)
 		{
-			// Below the clip lane, among the correction lanes: drag a rectangle to select keys.
+			// Below the clip lane, among the correction lanes: drag a rectangle to select keys. A plain click on empty space deselects first.
+			if (!Event.IsControlDown() && !Event.IsShiftDown()) { DeselectAll(); }
 			MarqueeInitial = (Event.IsControlDown() || Event.IsShiftDown()) ? SelectedKeys : TArray<FKeyRef>();
 			SelectedKeys = MarqueeInitial;
 			SelectedKey = INDEX_NONE;
+			SelectedChannel = 0;
 			DragMode = EDrag::Marquee;
 			MarqueeStart = MarqueeCurrent = Local;
 			break;
 		}
 		// Empty space deselects and also scrubs, so the playhead can be dragged from anywhere.
-		SelectClip(INDEX_NONE, false);
+		DeselectAll();
 		DragMode = EDrag::Scrub;
 		Playhead = FMath::Clamp(XToTime(Local.X), 0.0, TL.GetTotalLength());
 		OnPlayheadChangedDelegate.ExecuteIfBound();
@@ -960,7 +1031,8 @@ FReply SAnimStitchTimeline::OnMouseButtonUp(const FGeometry& G, const FPointerEv
 		{
 			SelectedTrack = Hit.Index; ++TrackSelectionSerial;
 			SelectedKey = Hit.Type == EHit::TrackKey ? Hit.Sub : INDEX_NONE;
-			OpenTrackMenu(Event, Hit.Index, SelectedKey, XToTime(LocalPos.X));
+			SelectedChannel = Hit.Type == EHit::TrackKey ? Hit.Channel : 0;
+			OpenTrackMenu(Event, Hit.Index, SelectedKey, XToTime(LocalPos.X), Hit.Channel);
 			return FReply::Handled();
 		}
 		if (Hit.Type == EHit::None)
@@ -1090,9 +1162,9 @@ void SAnimStitchTimeline::OnDragMove(float LocalX)
 			bDragStarted = true;
 			DragTransaction = MakeUnique<FScopedTransaction>(LOCTEXT("MoveKeyTx", "Move Key"));
 		}
-		SelectedKey = Asset->MoveTrackKey(SelectedTrack, SelectedKey, InitialKeyTime + (LocalX - DragStartX) / PxPerSec);
+		SelectedKey = Asset->MoveTrackChannelKey(SelectedTrack, SelectedKey, SelectedChannel ? SelectedChannel : AnimStitchChannel::All, InitialKeyTime + (LocalX - DragStartX) / PxPerSec);
 		SelectedKeys.Reset();
-		SelectedKeys.Add(FKeyRef{ SelectedTrack, SelectedKey });
+		SelectedKeys.Add(FKeyRef{ SelectedTrack, SelectedKey, SelectedChannel });
 		return;
 	}
 	if (DragMode == EDrag::FootLane)
@@ -1264,8 +1336,9 @@ FReply SAnimStitchTimeline::OnKeyDown(const FGeometry& G, const FKeyEvent& Event
 	if ((Event.GetKey() == EKeys::Delete || Event.GetKey() == EKeys::BackSpace) && Asset->Timeline.Tracks.IsValidIndex(SelectedTrack) && Asset->Timeline.Tracks[SelectedTrack].Keys.IsValidIndex(SelectedKey))
 	{
 		const FScopedTransaction Tx(LOCTEXT("DeleteKeyTx", "Delete Key"));
-		Asset->RemoveTrackKey(SelectedTrack, SelectedKey);
+		Asset->RemoveTrackChannelKey(SelectedTrack, SelectedKey, SelectedChannel ? SelectedChannel : AnimStitchChannel::All);
 		SelectedKey = INDEX_NONE;
+		SelectedChannel = 0;
 		return FReply::Handled();
 	}
 	if ((Event.GetKey() == EKeys::Delete || Event.GetKey() == EKeys::BackSpace) && Asset->Timeline.Tracks.IsValidIndex(SelectedTrack) && !Asset->Timeline.Clips.IsValidIndex(SelectedClip))
