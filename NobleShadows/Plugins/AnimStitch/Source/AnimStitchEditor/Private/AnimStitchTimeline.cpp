@@ -1,4 +1,4 @@
-#include "AnimStitchTimeline.h"
+﻿#include "AnimStitchTimeline.h"
 #include "Animation/AnimData/IAnimationDataModel.h"
 #include "ReferenceSkeleton.h"
 #include "AnimStitchManualEdits.h"
@@ -33,7 +33,7 @@ void FAnimStitchTimeline::Relayout()
 		}
 		else
 		{
-			Clip.OverlapIn = FMath::Clamp(Clip.OverlapIn, 0.0, GetMaxOverlap(i));
+			Clip.OverlapIn = FMath::Clamp(Clip.OverlapIn, -MaxGapDuration, GetMaxOverlap(i));
 			Clip.StartTime = Clips[i - 1].GetEndTime() - Clip.OverlapIn;
 		}
 	}
@@ -96,11 +96,6 @@ bool FAnimStitchEvaluator::Initialize(const FAnimStitchTimeline& InTimeline, FSt
 		if (i > 0)
 		{
 			const FAnimStitchClip& Prev = Timeline.Clips[i - 1];
-			if (Clip.StartTime > Prev.GetEndTime() + KINDA_SMALL_NUMBER)
-			{
-				OutError = FText::Format(LOCTEXT("ErrGap", "Gap between clip {0} and {1}."), i - 1, i).ToString();
-				return false;
-			}
 			if (Clip.StartTime < Prev.StartTime || Clip.GetEndTime() < Prev.GetEndTime())
 			{
 				OutError = FText::Format(LOCTEXT("ErrOrder", "Clip {0} must start after and end after clip {1}."), i, i - 1).ToString();
@@ -160,7 +155,8 @@ FTransform FAnimStitchEvaluator::SampleClipRawRoot(int32 ClipIndex, double Sourc
 FTransform FAnimStitchEvaluator::EvaluateClipRoot(int32 ClipIndex, double TimelineTime) const
 {
 	const FAnimStitchClip& Clip = Timeline.Clips[ClipIndex];
-	const double SrcTime = Clip.TrimIn + (TimelineTime - Clip.StartTime);
+	// Held on the first/last trimmed frame outside the clip (gap crossfades).
+	const double SrcTime = FMath::Clamp(Clip.TrimIn + (TimelineTime - Clip.StartTime), Clip.TrimIn, Clip.TrimOut);
 	const FTransform Raw = SampleClipRawRoot(ClipIndex, SrcTime);
 	const int32 Auth = Timeline.RootAuthorityIndex;
 	if (ClipIndex == Auth)
@@ -179,7 +175,7 @@ void FAnimStitchEvaluator::SampleClipRaw(int32 ClipIndex, double TimelineTime, T
 	const FAnimStitchClip& Clip = Timeline.Clips[ClipIndex];
 	const IAnimationDataModel* Model = Clip.Sequence->GetDataModel();
 	const FReferenceSkeleton& RefSkel = Skeleton->GetReferenceSkeleton();
-	const double SrcTime = FMath::Clamp(Clip.TrimIn + (TimelineTime - Clip.StartTime), 0.0, Model->GetPlayLength());
+	const double SrcTime = FMath::Clamp(Clip.TrimIn + (TimelineTime - Clip.StartTime), FMath::Max(Clip.TrimIn, 0.0), FMath::Min(Clip.TrimOut, Model->GetPlayLength()));
 	const FFrameTime FrameTime = Model->GetFrameRate().AsFrameTime(SrcTime);
 
 	OutPose.SetNumUninitialized(NumBones);
@@ -213,12 +209,9 @@ float FAnimStitchEvaluator::ApplyCurve(EAnimStitchBlendCurve Curve, float Alpha)
 	return Curve == EAnimStitchBlendCurve::Smoothstep ? Alpha * Alpha * (3.f - 2.f * Alpha) : Alpha;
 }
 
-void FAnimStitchEvaluator::EvaluatePose(double T, TArray<FTransform>& OutPose) const
+bool FAnimStitchEvaluator::FindBlend(double T, int32& OutIn, double& OutRawAlpha) const
 {
 	const int32 Num = Timeline.Clips.Num();
-	T = FMath::Clamp(T, 0.0, Timeline.GetTotalLength());
-
-	// Find the active clip(s): the last clip that has started, and whether its predecessor still overlaps.
 	int32 Cur = 0;
 	for (int32 i = 0; i < Num; ++i)
 	{
@@ -227,47 +220,66 @@ void FAnimStitchEvaluator::EvaluatePose(double T, TArray<FTransform>& OutPose) c
 			Cur = i;
 		}
 	}
-	SampleClipRaw(Cur, T, OutPose);
-
+	OutIn = Cur;
+	OutRawAlpha = 1.0;
+	// Overlap crossfade: the previous clip is still playing.
 	if (Cur > 0 && T < Timeline.Clips[Cur - 1].GetEndTime())
 	{
-		const FAnimStitchClip& In = Timeline.Clips[Cur];
-		const double OverlapLen = Timeline.Clips[Cur - 1].GetEndTime() - In.StartTime;
-		const float Alpha = ApplyCurve(In.BlendIn, OverlapLen > KINDA_SMALL_NUMBER ? float((T - In.StartTime) / OverlapLen) : 1.f);
-
-		TArray<FTransform> Outgoing;
-		SampleClipRaw(Cur - 1, T, Outgoing);
-		for (int32 b = 0; b < NumBones; ++b)
+		const double Len = Timeline.Clips[Cur - 1].GetEndTime() - Timeline.Clips[Cur].StartTime;
+		OutRawAlpha = Len > KINDA_SMALL_NUMBER ? (T - Timeline.Clips[Cur].StartTime) / Len : 1.0;
+		return true;
+	}
+	// Gap crossfade: the current clip has ended and the next has not started yet.
+	if (Cur + 1 < Num && T > Timeline.Clips[Cur].GetEndTime() + KINDA_SMALL_NUMBER)
+	{
+		const double Start = Timeline.Clips[Cur].GetEndTime();
+		const double Len = Timeline.Clips[Cur + 1].StartTime - Start;
+		if (Len > KINDA_SMALL_NUMBER)
 		{
-			FTransform& Dst = OutPose[b]; // incoming
-			const FTransform& Src = Outgoing[b];
-			const FVector Loc = FMath::Lerp(Src.GetTranslation(), Dst.GetTranslation(), Alpha);
-			const FVector Scl = FMath::Lerp(Src.GetScale3D(), Dst.GetScale3D(), Alpha);
-			const FQuat Rot = FQuat::Slerp(Src.GetRotation(), Dst.GetRotation(), Alpha).GetNormalized();
-			Dst = FTransform(Rot, Loc, Scl);
+			OutIn = Cur + 1;
+			OutRawAlpha = (T - Start) / Len;
+			return true;
 		}
+	}
+	return false;
+}
+
+void FAnimStitchEvaluator::EvaluatePose(double T, TArray<FTransform>& OutPose) const
+{
+	T = FMath::Clamp(T, 0.0, Timeline.GetTotalLength());
+	int32 In = 0;
+	double RawAlpha = 1.0;
+	const bool bBlend = FindBlend(T, In, RawAlpha);
+	SampleClipRaw(In, T, OutPose);
+	if (!bBlend)
+	{
+		return;
+	}
+	const float Alpha = ApplyCurve(Timeline.Clips[In].BlendIn, float(RawAlpha));
+	TArray<FTransform> Outgoing;
+	SampleClipRaw(In - 1, T, Outgoing);
+	for (int32 b = 0; b < NumBones; ++b)
+	{
+		FTransform& Dst = OutPose[b]; // incoming
+		const FTransform& Src = Outgoing[b];
+		const FVector Loc = FMath::Lerp(Src.GetTranslation(), Dst.GetTranslation(), Alpha);
+		const FVector Scl = FMath::Lerp(Src.GetScale3D(), Dst.GetScale3D(), Alpha);
+		const FQuat Rot = FQuat::Slerp(Src.GetRotation(), Dst.GetRotation(), Alpha).GetNormalized();
+		Dst = FTransform(Rot, Loc, Scl);
 	}
 }
 
 FTransform FAnimStitchEvaluator::EvaluateRoot(double T) const
 {
-	const int32 Num = Timeline.Clips.Num();
 	T = FMath::Clamp(T, 0.0, Timeline.GetTotalLength());
-	int32 Cur = 0;
-	for (int32 i = 0; i < Num; ++i)
+	int32 In = 0;
+	double RawAlpha = 1.0;
+	const bool bBlend = FindBlend(T, In, RawAlpha);
+	FTransform Root = EvaluateClipRoot(In, T);
+	if (bBlend)
 	{
-		if (Timeline.Clips[i].StartTime <= T + KINDA_SMALL_NUMBER)
-		{
-			Cur = i;
-		}
-	}
-	FTransform Root = EvaluateClipRoot(Cur, T);
-	if (Cur > 0 && T < Timeline.Clips[Cur - 1].GetEndTime())
-	{
-		const FAnimStitchClip& In = Timeline.Clips[Cur];
-		const double OverlapLen = Timeline.Clips[Cur - 1].GetEndTime() - In.StartTime;
-		const float Alpha = ApplyCurve(In.BlendIn, OverlapLen > KINDA_SMALL_NUMBER ? float((T - In.StartTime) / OverlapLen) : 1.f);
-		const FTransform Out = EvaluateClipRoot(Cur - 1, T);
+		const float Alpha = ApplyCurve(Timeline.Clips[In].BlendIn, float(RawAlpha));
+		const FTransform Out = EvaluateClipRoot(In - 1, T);
 		Root = FTransform(FQuat::Slerp(Out.GetRotation(), Root.GetRotation(), Alpha).GetNormalized(),
 			FMath::Lerp(Out.GetTranslation(), Root.GetTranslation(), Alpha), FMath::Lerp(Out.GetScale3D(), Root.GetScale3D(), Alpha));
 	}
@@ -282,14 +294,14 @@ float FAnimStitchEvaluator::EvaluateBlendAlpha(int32 IncomingIndex, double Timel
 		return 0.f;
 	}
 	const FAnimStitchClip& In = Timeline.Clips[IncomingIndex];
-	const double OverlapLen = Timeline.Clips[IncomingIndex - 1].GetEndTime() - In.StartTime;
-	if (OverlapLen <= KINDA_SMALL_NUMBER || TimelineTime < In.StartTime)
+	const double SpanStart = FMath::Min(In.StartTime, Timeline.Clips[IncomingIndex - 1].GetEndTime());
+	const double SpanLen = FMath::Abs(Timeline.Clips[IncomingIndex - 1].GetEndTime() - In.StartTime);
+	if (SpanLen <= KINDA_SMALL_NUMBER || TimelineTime < SpanStart)
 	{
 		return 0.f;
 	}
-	return ApplyCurve(In.BlendIn, float((TimelineTime - In.StartTime) / OverlapLen));
+	return ApplyCurve(In.BlendIn, float((TimelineTime - SpanStart) / SpanLen));
 }
-
 void FAnimStitchEvaluator::EvaluateClipPose(int32 ClipIndex, double TimelineTime, TArray<FTransform>& OutLocalPose) const
 {
 	SampleClipRaw(ClipIndex, TimelineTime, OutLocalPose);

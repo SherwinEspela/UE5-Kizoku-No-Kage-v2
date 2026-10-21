@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "UObject/GCObject.h"
@@ -171,12 +171,21 @@ public:
 	float GetBoneControlSize(int32 MeshBone) const;
 	void SetShowControls(bool bShow) { bShowControls = bShow; RequestRedraw(); }
 	/** G: hides / shows every helper at once (control shapes, manipulator, grid), like the regular viewport's game view. */
-	void ToggleHelpers() { bHelpersVisible = !bHelpersVisible; RequestRedraw(); }
+	void ToggleHelpers();
+	/** Floor slab (viewport helper): shown with the helpers, colour and side length (m) are editable. */
+	void SetShowFloor(bool bShow) { bShowFloor = bShow; UpdateFloor(); }
+	bool GetShowFloor() const { return bShowFloor; }
+	void SetFloorColor(const FLinearColor& Color) { FloorColor = Color; UpdateFloor(); }
+	FLinearColor GetFloorColor() const { return FloorColor; }
+	void SetFloorSize(float Meters) { FloorSizeMeters = FMath::Clamp(Meters, 2.f, 1000.f); UpdateFloor(); }
+	float GetFloorSize() const { return FloorSizeMeters; }
 	bool AreHelpersVisible() const { return bHelpersVisible; }
 	/** Test hook: runs the same path as dragging a control by Translation (no viewport needed). */
 	bool DebugDragControl(const FAnimStitchControlId& Id, const FVector& Translation);
 	/** What F frames: the selected control, else the selected bone, else the whole mesh. */
 	bool GetFocusBox(FBox& OutBox) const;
+	/** World box around the character as currently posed (all bones, padded); false without a mesh. */
+	bool GetCharacterBox(FBox& OutBox) const;
 	bool GetShowControls() const { return bShowControls; }
 
 	/** Attached Props tab: the prop highlighted in the viewport (INDEX_NONE = none). */
@@ -215,6 +224,8 @@ public:
 
 private:
 	void RebuildComponents();
+	void CreateFloor();
+	void UpdateFloor();
 	void RebuildDerivedData();
 	void ApplyGhostPoses();
 	bool IsReady() const;
@@ -222,6 +233,11 @@ private:
 	TSharedPtr<FAdvancedPreviewScene> Scene;
 	TObjectPtr<USkeletalMesh> Mesh;
 	TObjectPtr<UAnimStitchPoseComponent> MainComponent;
+	TObjectPtr<class UStaticMeshComponent> FloorComponent;
+	TObjectPtr<UMaterialInstanceDynamic> FloorMaterial;
+	bool bShowFloor = true;
+	FLinearColor FloorColor = FLinearColor(0.55f, 0.55f, 0.55f);
+	float FloorSizeMeters = 100.f;
 	TArray<TObjectPtr<UAnimStitchPoseComponent>> GhostComponents;
 	TObjectPtr<UMaterialInstanceDynamic> OutgoingGhostMaterial;
 	TObjectPtr<UMaterialInstanceDynamic> IncomingGhostMaterial;
@@ -303,9 +319,16 @@ private:
 	TArray<TArray<FTransform>> GhostPoses;
 };
 
+/** Camera views of the preview viewport (same set as the Unreal viewport's view menu). */
+enum class EAnimStitchViewMode : uint8 { Perspective, Front, Back, Left, Right, Top, Bottom };
+
 class FAnimStitchViewportClient : public FEditorViewportClient
 {
 public:
+	/** Switches between the free perspective camera and the axis-locked orthographic views; ortho views are framed on the character. */
+	void SetCameraView(EAnimStitchViewMode Mode);
+	EAnimStitchViewMode GetCameraView() const { return CameraView; }
+
 	FAnimStitchViewportClient(const TSharedRef<FAnimStitchPreview>& InPreview, const TSharedRef<SEditorViewport>& InViewport);
 
 	virtual void Tick(float DeltaSeconds) override;
@@ -322,6 +345,10 @@ private:
 
 	TWeakPtr<FAnimStitchPreview> Preview;
 	bool bGizmoDrag = false;
+	EAnimStitchViewMode CameraView = EAnimStitchViewMode::Perspective;
+	/** The free camera, kept while an orthographic view is active so Perspective restores it. */
+	FVector SavedPerspectiveLocation = FVector::ZeroVector;
+	FRotator SavedPerspectiveRotation = FRotator::ZeroRotator;
 };
 
 class SAnimStitchViewport : public SEditorViewport
@@ -335,6 +362,11 @@ public:
 
 	/** Frames the camera on the preview mesh. */
 	void FocusOnMesh();
+	void SetViewMode(EAnimStitchViewMode Mode) { if (Client.IsValid()) { Client->SetCameraView(Mode); } }
+	EAnimStitchViewMode GetViewMode() const { return Client.IsValid() ? Client->GetCameraView() : EAnimStitchViewMode::Perspective; }
+	/** Lit / Unlit / Wireframe (the engine view mode index). */
+	void SetShadingMode(EViewModeIndex Mode) { if (Client.IsValid()) { Client->SetViewMode(Mode); Client->Invalidate(); } }
+	EViewModeIndex GetShadingMode() const { return Client.IsValid() ? Client->GetViewMode() : VMI_Lit; }
 	void HandleRedraw();
 	virtual FReply OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent) override;
 protected:

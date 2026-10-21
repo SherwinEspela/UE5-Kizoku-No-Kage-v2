@@ -1,4 +1,4 @@
-// Manual correction controls (Phase 9): control shapes in the preview viewport, a translate/rotate/scale gizmo and the
+﻿// Manual correction controls (Phase 9): control shapes in the preview viewport, a translate/rotate/scale gizmo and the
 // key-writing that dragging does. Kept apart from AnimStitchPreview.cpp.
 
 #include "AnimStitchPreview.h"
@@ -814,6 +814,27 @@ bool FAnimStitchPreview::GetFocusBox(FBox& OutBox) const
 	if (SelectedBone != INDEX_NONE && MainComponent && MainComponent->GetComponentSpaceTransforms().IsValidIndex(SelectedBone))
 	{
 		OutBox = FBox::BuildAABB(MainComponent->GetComponentTransform().TransformPosition(MainComponent->GetComponentSpaceTransforms()[SelectedBone].GetTranslation()), FVector(18.0));
+		return true;
+	}
+	if (Mesh)
+	{
+		OutBox = Mesh->GetBounds().GetBox();
+		return true;
+	}
+	return false;
+}
+
+bool FAnimStitchPreview::GetCharacterBox(FBox& OutBox) const
+{
+	if (MainComponent && MainComponent->GetComponentSpaceTransforms().Num() > 0)
+	{
+		FBox Box(ForceInit);
+		for (const FTransform& Bone : MainComponent->GetComponentSpaceTransforms())
+		{
+			Box += MainComponent->GetComponentTransform().TransformPosition(Bone.GetTranslation());
+		}
+		Box.Min.Z = FMath::Min(Box.Min.Z, 0.0); // include the ground the character stands on
+		OutBox = Box.ExpandBy(25.0);
 		return true;
 	}
 	if (Mesh)

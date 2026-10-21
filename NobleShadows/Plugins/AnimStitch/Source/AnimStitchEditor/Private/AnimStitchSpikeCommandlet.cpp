@@ -1,4 +1,4 @@
-#include "AnimStitchSpikeCommandlet.h"
+﻿#include "AnimStitchSpikeCommandlet.h"
 #include "AnimStitchBaker.h"
 #include "AnimStitchTimelineAsset.h"
 #include "AnimStitchBatch.h"
@@ -6,6 +6,7 @@
 #include "AnimStitchFootLock.h"
 #include "AnimStitchManualEdits.h"
 #include "AnimStitchPreview.h"
+#include "AnimStitchPoseComponent.h"
 #include "Engine/SkeletalMesh.h"
 #include "Algo/MaxElement.h"
 #include "Misc/PackageName.h"
@@ -35,6 +36,146 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 		return 1;
 	}
 
+	// Phase 17 test: -P17Test with -A=<landing> -B=<run>. (1) Absolute track creation bakes a key on every frame and reproduces the animation; edits change only the touched frames.
+	// (2) Gap crossfade: spacing continuum (overlap / cut / gap), evaluation at the span ends, bake == preview evaluation.
+	if (FParse::Param(*Params, TEXT("P17Test")))
+	{
+		const FString Folder = TEXT("/Game/_AnimStitchSpike");
+		UAnimStitchTimelineAsset* TLAsset = NewObject<UAnimStitchTimelineAsset>(GetTransientPackage());
+		TArray<FText> W;
+		TLAsset->AddSequences({ const_cast<UAnimSequence*>(A), const_cast<UAnimSequence*>(B) }, INDEX_NONE, W);
+		TLAsset->SetTrim(1, 0.0, FMath::Min(3.0, (double)B->GetPlayLength()));
+		TLAsset->SetOverlap(1, 0.2);
+		TLAsset->SetRootAuthority(0);
+		FAnimStitchEvaluator Eval;
+		FString EvalErr;
+		Eval.Initialize(TLAsset->Timeline, EvalErr);
+		const FReferenceSkeleton& Ref = Eval.GetSkeleton()->GetReferenceSkeleton();
+		auto ReadPose = [&Ref](const UAnimSequence* Seq, int32 Frame, TArray<FTransform>& OutPose)
+		{
+			const IAnimationDataModel* Model = Seq->GetDataModel();
+			OutPose = Ref.GetRefBonePose();
+			TArray<FName> Names;
+			Model->GetBoneTrackNames(Names);
+			for (const FName& N : Names)
+			{
+				const int32 b = Ref.FindBoneIndex(N);
+				if (b != INDEX_NONE) { OutPose[b] = Model->GetBoneTrackTransform(N, FFrameNumber(Frame)); }
+			}
+		};
+		auto CS = [&Ref](const TArray<FTransform>& Local, int32 Bone) { return FAnimStitchFootLock::GetComponentSpace(Ref, Local, Bone); };
+		auto BakeAll = [&](const TCHAR* Name, TArray<TArray<FTransform>>& Out) -> bool
+		{
+			FString Err;
+			UAnimSequence* Seq = UAnimStitchBlueprintLibrary::BakeTimeline(TLAsset, Folder / Name, 30, true, Err);
+			if (!Seq) { UE_LOG(LogAnimStitchSpike, Error, TEXT("P17Test bake %s failed: %s"), Name, *Err); return false; }
+			const int32 N = Seq->GetDataModel()->GetNumberOfFrames();
+			Out.SetNum(N + 1);
+			for (int32 f = 0; f <= N; ++f) { ReadPose(Seq, f, Out[f]); }
+			return true;
+		};
+		const int32 Pelvis = Ref.FindBoneIndex(TEXT("pelvis"));
+		const int32 FootL = Ref.FindBoneIndex(TEXT("foot_l"));
+		if (Pelvis == INDEX_NONE || FootL == INDEX_NONE) { UE_LOG(LogAnimStitchSpike, Error, TEXT("P17Test: pelvis/foot_l not found")); return 70; }
+
+		// ---- 1) Absolute track: per-frame bake ----
+		{
+			TArray<TArray<FTransform>> Base;
+			if (!BakeAll(TEXT("AS_P17Base"), Base)) { return 71; }
+			const int32 NumFrames = Base.Num() - 1;
+			FAnimStitchTrack Track;
+			Track.Kind = EAnimStitchTrackKind::Bone;
+			Track.Bone = TEXT("pelvis");
+			Track.Mode = EAnimStitchTrackMode::Absolute;
+			Track.bKeepFeetPlanted = false;
+			const int32 TI = TLAsset->AddTrack(Track);
+			const FAnimStitchTrack& T = TLAsset->Timeline.Tracks[TI];
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("P17 ABS: new absolute track has %d keys for %d baked frames (+1 end key), first %.4f s, last %.4f s (timeline %.4f s)"),
+				T.Keys.Num(), NumFrames, T.Keys[0].Time, T.Keys.Last().Time, TLAsset->Timeline.GetTotalLength());
+			TArray<TArray<FTransform>> Untouched;
+			if (!BakeAll(TEXT("AS_P17Abs"), Untouched)) { return 72; }
+			double Worst = 0.0;
+			for (int32 f = 0; f <= NumFrames; ++f)
+			{
+				for (const int32 Bone : { Pelvis, FootL })
+				{
+					Worst = FMath::Max(Worst, (CS(Untouched[f], Bone).GetTranslation() - CS(Base[f], Bone).GetTranslation()).Size());
+				}
+			}
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("P17 ABS: no edits, every frame: bake vs underlying animation max difference %.5f cm (expected ~0)"), Worst);
+
+			// Edit frames 40..44 (+20 cm up on the keys themselves).
+			const int32 EF0 = 40, EF1 = FMath::Min(44, NumFrames - 2);
+			for (int32 k = EF0; k <= EF1; ++k)
+			{
+				FAnimStitchTrackKey Key = TLAsset->Timeline.Tracks[TI].Keys[k];
+				Key.Translation += FVector(0, 0, 20);
+				TLAsset->SetTrackKey(TI, Key);
+			}
+			TArray<TArray<FTransform>> Edited;
+			if (!BakeAll(TEXT("AS_P17AbsEdit"), Edited)) { return 73; }
+			double Outside = 0.0, Inside = 1e9;
+			for (int32 f = 0; f <= NumFrames; ++f)
+			{
+				const double Diff = (CS(Edited[f], Pelvis).GetTranslation() - CS(Base[f], Pelvis).GetTranslation()).Size();
+				if (f >= EF0 && f <= EF1) { Inside = FMath::Min(Inside, Diff); } else { Outside = FMath::Max(Outside, Diff); }
+			}
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("P17 ABS: edited keys %d..%d: frames outside the edit differ by max %.5f cm (expected ~0, the edited frames' smallest change is %.2f cm)"), EF0, EF1, Outside, Inside);
+			TLAsset->RemoveTrack(TI);
+		}
+
+		// ---- 2) Gap crossfade ----
+		{
+			const FAnimStitchClip& C0 = TLAsset->Timeline.Clips[0];
+			const FAnimStitchClip& C1 = TLAsset->Timeline.Clips[1];
+			TLAsset->SetOverlap(1, 0.2);
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("P17 GAP: overlap 0.2 -> clip1 starts %.3f (clip0 ends %.3f)"), C1.StartTime, C0.GetEndTime());
+			TLAsset->SetOverlap(1, 0.0);
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("P17 GAP: cut -> clip1 starts %.3f (clip0 ends %.3f)"), C1.StartTime, C0.GetEndTime());
+			TLAsset->SetOverlap(1, -0.5);
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("P17 GAP: gap 0.5 -> clip1 starts %.3f (clip0 ends %.3f), OverlapIn %.3f, total length %.3f"), C1.StartTime, C0.GetEndTime(), C1.OverlapIn, TLAsset->Timeline.GetTotalLength());
+
+			FAnimStitchEvaluator E2;
+			FString Err2;
+			if (!E2.Initialize(TLAsset->Timeline, Err2)) { UE_LOG(LogAnimStitchSpike, Error, TEXT("P17 GAP: evaluator init failed: %s"), *Err2); return 74; }
+			const double GapStart = C0.GetEndTime(), GapEnd = C1.StartTime;
+			TArray<FTransform> PA, PB, PM, PAend, PBstart;
+			E2.EvaluatePose(GapStart - 0.01, PAend);
+			E2.EvaluatePose(GapStart, PA);
+			E2.EvaluatePose(GapEnd, PB);
+			E2.EvaluatePose(GapEnd + 0.01, PBstart);
+			E2.EvaluatePose((GapStart + GapEnd) * 0.5, PM);
+			auto Dist = [&](const TArray<FTransform>& X, const TArray<FTransform>& Y, int32 Bone) { return (CS(X, Bone).GetTranslation() - CS(Y, Bone).GetTranslation()).Size(); };
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("P17 GAP: evaluation at gap start vs end of clip 0 (foot_l) %.4f cm; at gap end vs start of clip 1 %.4f cm; mid-gap foot is %.2f cm from A's end / %.2f cm from B's start (A->B %.2f cm)"),
+				Dist(PA, PAend, FootL), Dist(PB, PBstart, FootL), Dist(PM, PA, FootL), Dist(PM, PB, FootL), Dist(PA, PB, FootL));
+			double MaxStep = 0.0, MaxStepTime = 0.0;
+			TArray<FTransform> Prev, Cur;
+			E2.EvaluatePose(0.0, Prev);
+			for (double Time = 1.0 / 30.0; Time <= E2.GetTimeline().GetTotalLength(); Time += 1.0 / 30.0)
+			{
+				E2.EvaluatePose(Time, Cur);
+				const double Step = Dist(Cur, Prev, 0); if (Step > MaxStep) { MaxStep = Step; MaxStepTime = Time; }
+				Prev = Cur;
+			}
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("P17 GAP: largest root step between frames across the whole timeline %.2f cm at %.3f s (gap %.3f..%.3f)"), MaxStep, MaxStepTime, GapStart, GapEnd);
+
+			TArray<TArray<FTransform>> Baked;
+			if (!BakeAll(TEXT("AS_P17Gap"), Baked)) { return 75; }
+			double MaxDiff = 0.0;
+			for (int32 f = 0; f < Baked.Num(); ++f)
+			{
+				TArray<FTransform> Pose;
+				E2.EvaluatePose(f / 30.0, Pose);
+				for (const int32 Bone : { 0, Pelvis, FootL })
+				{
+					MaxDiff = FMath::Max(MaxDiff, Dist(Pose, Baked[f], Bone));
+				}
+			}
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("P17 GAP: baked %d frames vs preview evaluation: max difference %.5f cm"), Baked.Num(), MaxDiff);
+			TLAsset->SetOverlap(1, 0.2);
+		}
+		return 0;
+	}
 	// Phase 16 test: -P16Test with -A=<landing> -B=<run>. Absolute bone tracks (replace the animation across the keyed range, no pops, bake == evaluation)
 	// and the Root offset track (evaluated with the blend before foot lock: planted feet stay glued on the corrected path).
 	if (FParse::Param(*Params, TEXT("P16Test")))

@@ -1,4 +1,4 @@
-#include "SAnimStitchPanel.h"
+﻿#include "SAnimStitchPanel.h"
 #include "SAnimStitchTimeline.h"
 #include "SAnimStitchKeyPanel.h"
 #include "SAnimStitchTransportBar.h"
@@ -28,6 +28,8 @@
 #include "Widgets/Layout/SScrollBar.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "Widgets/SOverlay.h"
+#include "Widgets/Colors/SColorBlock.h"
+#include "Widgets/Colors/SColorPicker.h"
 #include "AnimStitchPreview.h"
 #include "AnimStitchSettings.h"
 #include "Engine/SkeletalMesh.h"
@@ -885,7 +887,81 @@ TSharedRef<SWidget> SAnimStitchPanel::MakeViewportToolbar()
 		[
 			SNullWidget::NullWidget
 		]
-		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
++ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
+[
+	// Camera view: Perspective plus the six orthographic views.
+	SNew(SComboButton).HasDownArrow(true)
+	.ToolTipText(LOCTEXT("ViewModeTip", "Camera view: Perspective (free orbit) or an axis-locked orthographic view"))
+	.ButtonContent()
+	[
+		SNew(STextBlock).Text_Lambda([this]()
+		{
+			switch (Viewport.IsValid() ? Viewport->GetViewMode() : EAnimStitchViewMode::Perspective)
+			{
+			case EAnimStitchViewMode::Front: return LOCTEXT("ViewFront", "Front");
+			case EAnimStitchViewMode::Back: return LOCTEXT("ViewBack", "Back");
+			case EAnimStitchViewMode::Left: return LOCTEXT("ViewLeft", "Left");
+			case EAnimStitchViewMode::Right: return LOCTEXT("ViewRight", "Right");
+			case EAnimStitchViewMode::Top: return LOCTEXT("ViewTop", "Top");
+			case EAnimStitchViewMode::Bottom: return LOCTEXT("ViewBottom", "Bottom");
+			default: return LOCTEXT("ViewPerspective", "Perspective");
+			}
+		})
+	]
+	.OnGetMenuContent_Lambda([this]() -> TSharedRef<SWidget>
+	{
+		FMenuBuilder Menu(true, nullptr);
+		auto AddView = [this, &Menu](EAnimStitchViewMode Mode, const FText& Label)
+		{
+			Menu.AddMenuEntry(Label, FText::GetEmpty(), FSlateIcon(),
+				FUIAction(FExecuteAction::CreateLambda([this, Mode]() { Viewport->SetViewMode(Mode); }), FCanExecuteAction(),
+					FIsActionChecked::CreateLambda([this, Mode]() { return Viewport->GetViewMode() == Mode; })),
+				NAME_None, EUserInterfaceActionType::RadioButton);
+		};
+		AddView(EAnimStitchViewMode::Perspective, LOCTEXT("ViewPerspective", "Perspective"));
+		Menu.AddMenuSeparator();
+		AddView(EAnimStitchViewMode::Front, LOCTEXT("ViewFront", "Front"));
+		AddView(EAnimStitchViewMode::Back, LOCTEXT("ViewBack", "Back"));
+		AddView(EAnimStitchViewMode::Left, LOCTEXT("ViewLeft", "Left"));
+		AddView(EAnimStitchViewMode::Right, LOCTEXT("ViewRight", "Right"));
+		AddView(EAnimStitchViewMode::Top, LOCTEXT("ViewTop", "Top"));
+		AddView(EAnimStitchViewMode::Bottom, LOCTEXT("ViewBottom", "Bottom"));
+		return Menu.MakeWidget();
+	})
+]
++ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
+[
+	// Shading: lit / unlit / wireframe, like the Unreal viewport.
+	SNew(SComboButton).HasDownArrow(true)
+	.ToolTipText(LOCTEXT("ShadingModeTip", "Viewport shading: Lit, Unlit or Wireframe"))
+	.ButtonContent()
+	[
+		SNew(STextBlock).Text_Lambda([this]()
+		{
+			switch (Viewport.IsValid() ? Viewport->GetShadingMode() : VMI_Lit)
+			{
+			case VMI_Unlit: return LOCTEXT("ShadeUnlit", "Unlit");
+			case VMI_BrushWireframe: return LOCTEXT("ShadeWireframe", "Wireframe");
+			default: return LOCTEXT("ShadeLit", "Lit");
+			}
+		})
+	]
+	.OnGetMenuContent_Lambda([this]() -> TSharedRef<SWidget>
+	{
+		FMenuBuilder Menu(true, nullptr);
+		auto AddShade = [this, &Menu](EViewModeIndex Mode, const FText& Label)
+		{
+			Menu.AddMenuEntry(Label, FText::GetEmpty(), FSlateIcon(),
+				FUIAction(FExecuteAction::CreateLambda([this, Mode]() { Viewport->SetShadingMode(Mode); }), FCanExecuteAction(),
+					FIsActionChecked::CreateLambda([this, Mode]() { return Viewport->GetShadingMode() == Mode; })),
+				NAME_None, EUserInterfaceActionType::RadioButton);
+		};
+		AddShade(VMI_Lit, LOCTEXT("ShadeLit", "Lit"));
+		AddShade(VMI_Unlit, LOCTEXT("ShadeUnlit", "Unlit"));
+		AddShade(VMI_BrushWireframe, LOCTEXT("ShadeWireframe", "Wireframe"));
+		return Menu.MakeWidget();
+	})
+]		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 		[
 			SNew(SBox).WidthOverride(260.f)
 			[
@@ -911,7 +987,38 @@ TSharedRef<SWidget> SAnimStitchPanel::MakeShowMenu()
 	Menu.BeginSection("SceneElements", LOCTEXT("SceneElements", "Scene Elements"));
 	Menu.AddSubMenu(LOCTEXT("BonesMenu", "Bones"), LOCTEXT("BonesMenuTip", "How the skeleton of the preview character is drawn"), FNewMenuDelegate::CreateSP(this, &SAnimStitchPanel::FillBonesMenu));
 	Menu.AddSubMenu(LOCTEXT("ControlsMenu", "Controls"), LOCTEXT("ControlsMenuTip", "Manual-correction control shapes: visibility and size"), FNewMenuDelegate::CreateSP(this, &SAnimStitchPanel::FillControlsMenu));
-	Menu.AddSubMenu(LOCTEXT("AttachmentsMenu", "Preview Attachments"), LOCTEXT("AttachmentsMenuTip", "Props on the preview character (preview only, never baked)"), FNewMenuDelegate::CreateSP(this, &SAnimStitchPanel::FillAttachmentsMenu));
+		Menu.AddSubMenu(LOCTEXT("FloorMenu", "Floor"), LOCTEXT("FloorMenuTip", "The ground slab: visibility, colour and size (viewport only)"), FNewMenuDelegate::CreateLambda([this](FMenuBuilder& Floor)
+		{
+			Floor.AddMenuEntry(LOCTEXT("ShowFloor", "Show Floor"), LOCTEXT("ShowFloorTip", "Show or hide the ground slab (G hides it with the other helpers)"), FSlateIcon(),
+				FUIAction(FExecuteAction::CreateLambda([this]() { Preview->SetShowFloor(!Preview->GetShowFloor()); }), FCanExecuteAction(),
+					FIsActionChecked::CreateLambda([this]() { return Preview->GetShowFloor(); })),
+				NAME_None, EUserInterfaceActionType::ToggleButton);
+			Floor.AddWidget(
+				SNew(SBox).WidthOverride(120.f).HeightOverride(20.f)
+				[
+					SNew(SColorBlock).Color_Lambda([this]() { return Preview->GetFloorColor(); }).ShowBackgroundForAlpha(false)
+					.OnMouseButtonDown_Lambda([this](const FGeometry&, const FPointerEvent&)
+					{
+						FColorPickerArgs Args;
+						Args.bUseAlpha = false;
+						Args.InitialColor = Preview->GetFloorColor();
+						Args.OnColorCommitted = FOnLinearColorValueChanged::CreateLambda([this](FLinearColor C) { Preview->SetFloorColor(C); });
+						OpenColorPicker(Args);
+						return FReply::Handled();
+					})
+				],
+				LOCTEXT("FloorColor", "Color"));
+			Floor.AddWidget(
+				SNew(SBox).WidthOverride(120.f)
+				[
+					SNew(SSpinBox<float>).MinValue(2.f).MaxValue(1000.f).MinSliderValue(2.f).MaxSliderValue(200.f).Delta(1.f)
+					.ToolTipText(LOCTEXT("FloorSizeTip", "Side length of the floor in metres"))
+					.Value_Lambda([this]() { return Preview->GetFloorSize(); })
+					.OnValueChanged_Lambda([this](float V) { Preview->SetFloorSize(V); })
+					.OnValueCommitted_Lambda([this](float V, ETextCommit::Type) { Preview->SetFloorSize(V); })
+				],
+				LOCTEXT("FloorSize", "Size (m)"));
+		}));	Menu.AddSubMenu(LOCTEXT("AttachmentsMenu", "Preview Attachments"), LOCTEXT("AttachmentsMenuTip", "Props on the preview character (preview only, never baked)"), FNewMenuDelegate::CreateSP(this, &SAnimStitchPanel::FillAttachmentsMenu));
 	Menu.EndSection();
 
 	Menu.BeginSection("CommonShowFlags", LOCTEXT("CommonShowFlags", "Common Show Flags"));

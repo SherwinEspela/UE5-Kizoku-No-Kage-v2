@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Misc/FrameRate.h"
@@ -269,7 +269,11 @@ struct ANIMSTITCHEDITOR_API FAnimStitchClip
 	UPROPERTY()
 	double TrimOut = 0.0;
 
-	/** How far this clip overlaps the previous one (the crossfade length). Always 0 for the first clip. */
+	/**
+	 * Spacing to the previous clip, one continuum: > 0 = overlap crossfade of that length, 0 = straight cut,
+	 * < 0 = a GAP of -OverlapIn seconds that is itself a crossfade (outgoing clip held on its last frame, incoming on its first).
+	 * Always 0 for the first clip.
+	 */
 	UPROPERTY()
 	double OverlapIn = 0.0;
 
@@ -293,6 +297,8 @@ struct ANIMSTITCHEDITOR_API FAnimStitchClip
 	UPROPERTY()
 	TArray<FAnimStitchFootEvent> FootEvents;
 
+	double GetOverlap() const { return FMath::Max(OverlapIn, 0.0); }
+	double GetGap() const { return FMath::Max(-OverlapIn, 0.0); }
 	double GetDuration() const { return TrimOut - TrimIn; }
 	double GetEndTime() const { return StartTime + GetDuration(); }
 };
@@ -331,6 +337,9 @@ struct ANIMSTITCHEDITOR_API FAnimStitchTimeline
 
 	/** Smallest allowed clip length after trimming. */
 	static constexpr double MinClipDuration = 0.05;
+
+	/** Largest gap (seconds) that can be opened between two clips. */
+	static constexpr double MaxGapDuration = 60.0;
 
 	/** Clamps overlaps to legal values and recomputes every StartTime. */
 	void Relayout();
@@ -383,6 +392,11 @@ public:
 	FTransform EvaluateClipRoot(int32 ClipIndex, double TimelineTime) const;
 
 private:
+	/**
+	 * Which clips are mixed at timeline time T. Returns true for a crossfade (overlap OR gap): OutIn is the incoming clip,
+	 * OutRawAlpha the 0..1 position across the span. Returns false for a single clip (OutIn = that clip).
+	 */
+	bool FindBlend(double T, int32& OutIn, double& OutRawAlpha) const;
 	void SampleClipRaw(int32 ClipIndex, double TimelineTime, TArray<FTransform>& OutPose) const;
 	FTransform SampleClipRawRoot(int32 ClipIndex, double SourceTime) const;
 	static float ApplyCurve(EAnimStitchBlendCurve Curve, float Alpha);

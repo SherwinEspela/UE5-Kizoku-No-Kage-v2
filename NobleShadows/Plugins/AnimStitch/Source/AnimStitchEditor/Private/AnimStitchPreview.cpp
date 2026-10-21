@@ -1,4 +1,4 @@
-#include "AnimStitchPreview.h"
+﻿#include "AnimStitchPreview.h"
 #include "AnimStitchPoseComponent.h"
 #include "AnimStitchManualEdits.h"
 #include "Components/StaticMeshComponent.h"
@@ -26,7 +26,8 @@ namespace
 FAnimStitchPreview::FAnimStitchPreview()
 {
 	Scene = MakeShared<FAdvancedPreviewScene>(FPreviewScene::ConstructionValues());
-	Scene->SetFloorVisibility(true, true);
+	Scene->SetFloorVisibility(false, true); // replaced by our own ground (below) so the G helper toggle controls it
+	CreateFloor();
 
 	if (UMaterialInterface* Base = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/EngineDebugMaterials/M_SimpleUnlitTranslucent.M_SimpleUnlitTranslucent")))
 	{
@@ -42,6 +43,42 @@ FAnimStitchPreview::FAnimStitchPreview()
 	}
 }
 
+void FAnimStitchPreview::CreateFloor()
+{
+	// Viewport helper only: a transient slab in the preview world, never part of an asset or a bake.
+	UStaticMesh* Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+	UMaterialInterface* Base = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+	if (!Cube) { return; }
+	FloorComponent = NewObject<UStaticMeshComponent>(GetTransientPackage(), NAME_None, RF_Transient);
+	FloorComponent->SetStaticMesh(Cube);
+	if (Base)
+	{
+		FloorMaterial = UMaterialInstanceDynamic::Create(Base, GetTransientPackage());
+		FloorComponent->SetMaterial(0, FloorMaterial);
+	}
+	FloorComponent->SetCastShadow(false);
+	FloorComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	FloorComponent->bSelectable = false;
+	Scene->AddComponent(FloorComponent, FTransform::Identity);
+	UpdateFloor();
+}
+
+void FAnimStitchPreview::UpdateFloor()
+{
+	if (!FloorComponent) { return; }
+	// A 10 cm thick slab whose top sits a hair below Z=0, so the feet and the 0.5 cm grid lines are drawn on top without z-fighting.
+	constexpr double Thickness = 10.0;
+	const double Side = FloorSizeMeters * 100.0;
+	FloorComponent->SetWorldTransform(FTransform(FRotator::ZeroRotator, FVector(0.0, 0.0, -0.2 - Thickness * 0.5), FVector(Side / 100.0, Side / 100.0, Thickness / 100.0)));
+	if (FloorMaterial) { FloorMaterial->SetVectorParameterValue(TEXT("Color"), FloorColor); }
+	FloorComponent->SetVisibility(bHelpersVisible && bShowFloor);
+	RequestRedraw();
+}
+void FAnimStitchPreview::ToggleHelpers()
+{
+	bHelpersVisible = !bHelpersVisible;
+	UpdateFloor();
+}
 FAnimStitchPreview::~FAnimStitchPreview()
 {
 }
@@ -50,6 +87,8 @@ void FAnimStitchPreview::AddReferencedObjects(FReferenceCollector& Collector)
 {
 	Collector.AddReferencedObject(Mesh);
 	Collector.AddReferencedObject(MainComponent);
+	Collector.AddReferencedObject(FloorComponent);
+	Collector.AddReferencedObject(FloorMaterial);
 	Collector.AddReferencedObjects(GhostComponents);
 	Collector.AddReferencedObjects(AttachmentComponents);
 	Collector.AddReferencedObject(OutgoingGhostMaterial);
@@ -622,11 +661,11 @@ void FAnimStitchPreview::Draw(const FSceneView* View, FPrimitiveDrawInterface* P
 	// Animation Sequence editor style: a dark gray curve, a round dot on every frame and larger round dots at the start and end.
 	const FLinearColor CurveColor(0.2f, 0.2f, 0.2f);
 	const FLinearColor DivisionColor = FLinearColor::Black;
-	auto OnGround = [](const FVector& P) { return FVector(P.X, P.Y, 1.0); };
+	// Full 3D: the path follows the real root positions (jumps and flights arc through the air); a flat clip simply lies on the ground.
 	for (int32 i = 1; i < TrajectoryPoints.Num(); ++i)
 	{
 		// A little thicker than a hairline; screen-space thickness in pixels (world-unit thickness would turn into a ribbon).
-		PDI->DrawLine(OnGround(TrajectoryPoints[i - 1]), OnGround(TrajectoryPoints[i]), CurveColor, SDPG_Foreground, 1.5f, 0.f, true);
+		PDI->DrawLine(TrajectoryPoints[i - 1], TrajectoryPoints[i], CurveColor, SDPG_Foreground, 1.5f, 0.f, true);
 	}
 	if (!View)
 	{
@@ -648,10 +687,10 @@ void FAnimStitchPreview::Draw(const FSceneView* View, FPrimitiveDrawInterface* P
 	};
 	for (int32 i = 1; i < TrajectoryPoints.Num() - 1; ++i) // every frame
 	{
-		DrawDot(OnGround(TrajectoryPoints[i]), 2.5f, DivisionColor);
+		DrawDot(TrajectoryPoints[i], 2.5f, DivisionColor);
 	}
-	DrawDot(OnGround(TrajectoryPoints[0]), 6.f, FLinearColor::Black);
-	DrawDot(OnGround(TrajectoryPoints.Last()), 6.f, FLinearColor::Black);
+	DrawDot(TrajectoryPoints[0], 6.f, FLinearColor::Black);
+	DrawDot(TrajectoryPoints.Last(), 6.f, FLinearColor::Black);
 }
 // ---------------------------------------------------------------------------------------------
 
@@ -665,6 +704,49 @@ FAnimStitchViewportClient::FAnimStitchViewportClient(const TSharedRef<FAnimStitc
 	EngineShowFlags.SetSnap(0);
 	bSetListenerPosition = false;
 	OverrideNearClipPlane(1.f);
+}
+
+void FAnimStitchViewportClient::SetCameraView(EAnimStitchViewMode Mode)
+{
+	if (Mode == CameraView) { return; }
+	if (CameraView == EAnimStitchViewMode::Perspective)
+	{
+		SavedPerspectiveLocation = GetViewLocation();
+		SavedPerspectiveRotation = GetViewRotation();
+	}
+	CameraView = Mode;
+	if (Mode == EAnimStitchViewMode::Perspective)
+	{
+		SetViewportType(LVT_Perspective);
+		SetViewLocation(SavedPerspectiveLocation);
+		SetViewRotation(SavedPerspectiveRotation);
+	}
+	else
+	{
+		// Same axes as the Unreal viewport: Top = XY, Front = XZ, Left = YZ and their negatives for Bottom / Back / Right.
+		ELevelViewportType Type = LVT_OrthoXY;
+		switch (Mode)
+		{
+		case EAnimStitchViewMode::Front:  Type = LVT_OrthoXZ; break;
+		case EAnimStitchViewMode::Back:   Type = LVT_OrthoNegativeXZ; break;
+		case EAnimStitchViewMode::Left:   Type = LVT_OrthoYZ; break;
+		case EAnimStitchViewMode::Right:  Type = LVT_OrthoNegativeYZ; break;
+		case EAnimStitchViewMode::Top:    Type = LVT_OrthoXY; break;
+		case EAnimStitchViewMode::Bottom: Type = LVT_OrthoNegativeXY; break;
+		default: break;
+		}
+		SetViewportType(Type);
+		FBox Box;
+		if (const TSharedPtr<FAnimStitchPreview> Pinned = Preview.Pin())
+		{
+			if (Pinned->GetCharacterBox(Box))
+			{
+				SetViewLocation(Box.GetCenter());
+				FocusViewportOnBox(Box, true);
+			}
+		}
+	}
+	Invalidate();
 }
 
 void FAnimStitchViewportClient::Tick(float DeltaSeconds)
@@ -847,8 +929,9 @@ void SAnimStitchViewport::FocusOnMesh()
 {
 	if (Client.IsValid() && Preview->GetMesh())
 	{
-		const FBoxSphereBounds Bounds = Preview->GetMesh()->GetBounds();
-		Client->FocusViewportOnBox(Bounds.GetBox(), true);
+		FBox Box;
+		if (!Preview->GetCharacterBox(Box)) { Box = Preview->GetMesh()->GetBounds().GetBox(); }
+		Client->FocusViewportOnBox(Box, true);
 	}
 }
 

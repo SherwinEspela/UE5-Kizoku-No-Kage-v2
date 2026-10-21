@@ -1,4 +1,4 @@
-#include "AnimStitchProvenance.h"
+﻿#include "AnimStitchProvenance.h"
 #include "Interfaces/IPluginManager.h"
 #include "Misc/DateTime.h"
 
@@ -16,7 +16,7 @@ void UAnimStitchProvenance::Fill(const FAnimStitchTimeline& Timeline, const FSof
 		Entry.Source = FSoftObjectPath(Clip.Sequence.Get());
 		Entry.TrimIn = Clip.TrimIn;
 		Entry.TrimOut = Clip.TrimOut;
-		Entry.CrossfadeLength = i > 0 ? Clip.OverlapIn : 0.0;
+		Entry.CrossfadeLength = i > 0 ? FMath::Abs(Clip.OverlapIn) : 0.0;
 		Entry.CrossfadeCurve = Clip.BlendIn;
 		Entry.bRootMotionAuthority = i == Authority;
 		if (i == Authority) { RootMotionAuthority = Entry.Source; }

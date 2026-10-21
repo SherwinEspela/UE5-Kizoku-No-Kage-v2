@@ -1,4 +1,4 @@
-#include "AnimStitchPoseComponent.h"
+﻿#include "AnimStitchPoseComponent.h"
 #include "Animation/Skeleton.h"
 #include "ReferenceSkeleton.h"
 
@@ -35,4 +35,24 @@ void UAnimStitchPoseComponent::ApplySkeletonPose(const USkeleton* Skeleton, cons
 		}
 	}
 	RefreshBoneTransforms(nullptr);
+	UpdateBounds();
+	MarkRenderTransformDirty(); // sends the new bounds to the renderer; without it the proxy keeps culling against the old ones
+}
+
+FBoxSphereBounds UAnimStitchPoseComponent::CalcBounds(const FTransform& LocalToWorld) const
+{
+	const TArray<FTransform>& Bones = GetComponentSpaceTransforms();
+	if (Bones.Num() == 0)
+	{
+		return Super::CalcBounds(LocalToWorld);
+	}
+	FBox Box(ForceInit);
+	for (const FTransform& Bone : Bones)
+	{
+		Box += Bone.GetTranslation();
+	}
+	// Skin extends past the joints: pad by the mesh's own size (never less than half a metre).
+	const USkinnedAsset* Asset = GetSkinnedAsset();
+	const double Pad = FMath::Max(50.0, Asset ? Asset->GetBounds().SphereRadius * 0.5 : 0.0);
+	return FBoxSphereBounds(Box.ExpandBy(Pad).TransformBy(LocalToWorld));
 }

@@ -18,6 +18,8 @@ public class AnimStitchEditor : ModuleRules
 			"AssetRegistry",
 			"UnrealEd",
 			"Slate",
+			"AppFramework",
+			"AppFramework",
 			"SlateCore",
 			"InputCore",
 				"RenderCore",

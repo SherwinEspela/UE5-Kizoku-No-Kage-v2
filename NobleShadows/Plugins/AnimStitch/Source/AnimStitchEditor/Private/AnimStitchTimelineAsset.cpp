@@ -1,4 +1,4 @@
-#include "AnimStitchTimelineAsset.h"
+﻿#include "AnimStitchTimelineAsset.h"
 #include "AnimStitchSettings.h"
 #include "AnimStitchManualEdits.h"
 #include "Animation/AnimData/IAnimationDataModel.h"
@@ -396,6 +396,38 @@ bool UAnimStitchTimelineAsset::CaptureBlendedBoneTransform(FName Bone, double Ti
 	return true;
 }
 
+/** Fills an Absolute bone track with one root-relative key per frame across the whole timeline, taken from the blended (pre-manual) pose. */
+static void BakeAbsoluteKeys(const FAnimStitchTimeline& Timeline, FAnimStitchTrack& Track)
+{
+	FAnimStitchEvaluator Evaluator;
+	FString Error;
+	if (!Evaluator.Initialize(Timeline, Error)) { return; }
+	const FReferenceSkeleton& Ref = Evaluator.GetSkeleton()->GetReferenceSkeleton();
+	const int32 BoneIndex = Ref.FindBoneIndex(Track.Bone);
+	const double Total = Timeline.GetTotalLength();
+	if (BoneIndex == INDEX_NONE || Total <= KINDA_SMALL_NUMBER) { return; }
+	double Rate = 30.0;
+	if (const UAnimSequence* Seq = Timeline.Clips.Num() > 0 ? Timeline.Clips[0].Sequence.Get() : nullptr)
+	{
+		Rate = Seq->GetDataModel()->GetFrameRate().AsDecimal();
+	}
+	if (Rate < 1.0 || Rate > 120.0) { Rate = 30.0; }
+	const int32 NumFrames = FMath::Max(1, FMath::CeilToInt(Total * Rate - 1e-6));
+	Track.Keys.Reserve(NumFrames + 1);
+	TArray<FTransform> Pose;
+	for (int32 f = 0; f <= NumFrames; ++f)
+	{
+		const double Time = f == NumFrames ? Total : f / Rate;
+		Evaluator.EvaluatePose(Time, Pose);
+		const FTransform Rel = FAnimStitchFootLock::GetComponentSpace(Ref, Pose, BoneIndex).GetRelativeTransform(FAnimStitchFootLock::GetComponentSpace(Ref, Pose, 0));
+		FAnimStitchTrackKey Key;
+		Key.Time = Time;
+		Key.Translation = Rel.GetTranslation();
+		Key.Rotation = Rel.GetRotation().GetNormalized();
+		Key.Scale = Rel.GetScale3D();
+		Track.Keys.Add(Key);
+	}
+}
 int32 UAnimStitchTimelineAsset::AddTrack(const FAnimStitchTrack& Track)
 {
 	for (int32 i = 0; i < Timeline.Tracks.Num(); ++i)
@@ -415,6 +447,13 @@ int32 UAnimStitchTimelineAsset::AddTrack(const FAnimStitchTrack& Track)
 		NewTrack.bKeepFeetPlanted = false;
 	}
 	NewTrack.bKeepFeetPlanted = Track.Kind == EAnimStitchTrackKind::Bone && FAnimStitchManualEdits::IsPelvisBone(Track.Bone) && Track.bKeepFeetPlanted;
+	if (NewTrack.Keys.Num() == 0 && NewTrack.Kind == EAnimStitchTrackKind::Bone && NewTrack.Mode == EAnimStitchTrackMode::Absolute)
+	{
+		// Absolute: bake the bone's evaluated (blended) pose into a key on EVERY frame, like baking onto a Control Rig. The track then owns the
+		// bone: untouched frames reproduce the underlying animation, edits only change the keys the user touches.
+		BakeAbsoluteKeys(Timeline, NewTrack);
+		return Timeline.Tracks.Add(NewTrack);
+	}
 	if (NewTrack.Keys.Num() == 0 && NewTrack.Kind != EAnimStitchTrackKind::IKPole)
 	{
 		// Like a new Sequencer section: keys at the start and the end of the timeline (identity offset / IK off).
@@ -423,19 +462,6 @@ int32 UAnimStitchTimelineAsset::AddTrack(const FAnimStitchTrack& Track)
 		Start.Weight = NewTrack.Kind == EAnimStitchTrackKind::IKLimb ? 0.f : 1.f;
 		FAnimStitchTrackKey End;
 		bool bHaveEndValue = false;
-		if (NewTrack.Kind == EAnimStitchTrackKind::Bone && NewTrack.Mode == EAnimStitchTrackMode::Absolute)
-		{
-			// Absolute: the boundary keys hold the underlying blended value, so the bone eases out of the animation and back instead of snapping.
-			if (CaptureBlendedBoneTransform(NewTrack.Bone, 0.0, Start) )
-			{
-				End = Start;
-				bHaveEndValue = CaptureBlendedBoneTransform(NewTrack.Bone, Timeline.GetTotalLength(), End);
-			}
-			else
-			{
-				return Timeline.Tracks.Add(NewTrack); // could not evaluate the blend: no boundary keys; the first key written starts the track
-			}
-		}
 		FAnimStitchManualEdits::SetKey(NewTrack, Start);
 		const double Total = Timeline.GetTotalLength();
 		if (Total > 0.05)

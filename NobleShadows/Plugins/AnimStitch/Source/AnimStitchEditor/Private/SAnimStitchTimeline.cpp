@@ -1,4 +1,4 @@
-#include "SAnimStitchTimeline.h"
+﻿#include "SAnimStitchTimeline.h"
 #include "Editor.h"
 #include "ScopedTransaction.h"
 #include "DragAndDrop/AssetDragDropOp.h"
@@ -18,7 +18,10 @@ namespace AnimStitchTimelineUI
 	const FLinearColor RulerBg(0.08f, 0.08f, 0.09f);
 	const FLinearColor ClipColors[2] = { FLinearColor(0.16f, 0.34f, 0.55f), FLinearColor(0.20f, 0.46f, 0.34f) };
 	const FLinearColor AuthorityColor(0.50f, 0.24f, 0.60f);
-	const FLinearColor OverlapColor(0.95f, 0.65f, 0.15f, 0.55f);
+const FLinearColor OverlapColor(0.95f, 0.65f, 0.15f, 0.55f);
+	/** Gap crossfade span: same look as the overlap, different colour (teal vs amber). */
+	const FLinearColor GapColor(0.1f, 0.65f, 0.75f, 0.5f);
+	const FLinearColor GapLineColor(0.7f, 1.f, 1.f, 1.f);
 	const FLinearColor Handle(1.f, 1.f, 1.f, 0.35f);
 	const FLinearColor Selected(1.f, 1.f, 1.f, 1.f);
 
@@ -203,14 +206,16 @@ int32 SAnimStitchTimeline::OnPaint(const FPaintArgs& Args, const FGeometry& G, c
 	for (int32 i = 1; i < TL.Clips.Num(); ++i)
 	{
 		const FAnimStitchClip& Clip = TL.Clips[i];
-		if (Clip.OverlapIn <= 0.0)
+		if (FMath::IsNearlyZero(Clip.OverlapIn))
 		{
 			continue;
 		}
-		const float X0 = TimeToX(Clip.StartTime);
-		const float X1 = TimeToX(Clip.StartTime + Clip.OverlapIn);
+		// Overlap = span at the start of this clip; gap = span between the previous clip's end and this clip's start (distinct colour).
+		const bool bGap = Clip.OverlapIn < 0.0;
+		const float X0 = TimeToX(bGap ? TL.Clips[i - 1].GetEndTime() : Clip.StartTime);
+		const float X1 = TimeToX(bGap ? Clip.StartTime : Clip.StartTime + Clip.OverlapIn);
 		const float W = FMath::Max(1.f, X1 - X0);
-		DrawRect(Out, Layer + 9, G, FVector2f(X0, GetTrackTop()), FVector2f(W, TrackHeight), OverlapColor);
+		DrawRect(Out, Layer + 9, G, FVector2f(X0, GetTrackTop()), FVector2f(W, TrackHeight), bGap ? GapColor : OverlapColor);
 
 		// Weight curves: outgoing falls, incoming rises.
 		TArray<FVector2f> Fall, Rise;
@@ -222,11 +227,12 @@ int32 SAnimStitchTimeline::OnPaint(const FPaintArgs& Args, const FGeometry& G, c
 			Rise.Add(FVector2f(X0 + W * A, GetTrackTop() + TrackHeight - 4.f - (TrackHeight - 8.f) * Wt));
 			Fall.Add(FVector2f(X0 + W * A, GetTrackTop() + 4.f + (TrackHeight - 8.f) * Wt));
 		}
-		DrawLine(Out, Layer + 10, G, Rise, FLinearColor::White, 1.5f);
-		DrawLine(Out, Layer + 10, G, Fall, FLinearColor(1, 1, 1, 0.6f), 1.5f);
+		const FLinearColor LineColor = bGap ? GapLineColor : FLinearColor::White;
+		DrawLine(Out, Layer + 10, G, Rise, LineColor, 1.5f);
+		DrawLine(Out, Layer + 10, G, Fall, bGap ? GapLineColor.CopyWithNewOpacity(0.6f) : FLinearColor(1, 1, 1, 0.6f), 1.5f);
 		if (W > 36.f)
 		{
-			PaintLabel(Out, Layer + 11, G, FVector2f(X0 + 3.f, GetTrackTop() + TrackHeight - 16.f), FString::Printf(TEXT("%.2fs"), Clip.OverlapIn), FLinearColor::White);
+			PaintLabel(Out, Layer + 11, G, FVector2f(X0 + 3.f, GetTrackTop() + TrackHeight - 16.f), FString::Printf(TEXT("%.2fs"), FMath::Abs(Clip.OverlapIn)), LineColor);
 		}
 		if (i == SelectedClip && bOverlapSelected)
 		{
@@ -410,6 +416,19 @@ SAnimStitchTimeline::FHit SAnimStitchTimeline::HitTest(const FVector2f& P) const
 	for (int32 i = TL.Clips.Num() - 1; i >= 1; --i)
 	{
 		const FAnimStitchClip& Clip = TL.Clips[i];
+		if (Clip.OverlapIn < 0.0)
+		{
+			// Gap crossfade: the whole span is the grab area (drag = change the spacing).
+			const float GX0 = TimeToX(TL.Clips[i - 1].GetEndTime());
+			const float GX1 = TimeToX(Clip.StartTime);
+			if (P.X >= GX0 && P.X <= GX1)
+			{
+				Result.Index = i;
+				Result.Type = EHit::Overlap;
+				return Result;
+			}
+			continue;
+		}
 		if (Clip.OverlapIn <= 0.0)
 		{
 			continue;
