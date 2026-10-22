@@ -376,6 +376,14 @@ void FAnimStitchManualEdits::Apply(const FReferenceSkeleton& Ref, const TArray<F
 		}
 	}
 
+	// Control hierarchy: an Absolute control places its bone at a fixed spot, so a parented one also follows what its parent control did to the parent bone
+	// (the parent bone's change from the blended pose to its corrected pose, which already includes everything above it).
+	TArray<FTransform> Original;
+	for (const FAnimStitchTrack& T : Tracks)
+	{
+		if (T.Kind == EAnimStitchTrackKind::Bone && T.Mode == EAnimStitchTrackMode::Absolute && !T.ParentBone.IsNone() && T.Keys.Num() > 0) { Original = Local; break; }
+	}
+
 	for (const TPair<int32, const FAnimStitchTrack*>& Entry : BoneTracks)
 	{
 		const FAnimStitchTrack& Track = *Entry.Value;
@@ -399,7 +407,18 @@ void FAnimStitchManualEdits::Apply(const FReferenceSkeleton& Ref, const TArray<F
 				if (Active & AnimStitchChannel::Rotation) { KeyRel.SetRotation(Key.Rotation.GetNormalized()); }
 				if (Active & AnimStitchChannel::Scale) { KeyRel.SetScale3D(Key.Scale); }
 			}
-			const FTransform Target = KeyRel * Local[0];
+			FTransform Target = KeyRel * Local[0];
+			if (Original.Num() > 0 && !Track.ParentBone.IsNone() && Active == AnimStitchChannel::All)
+			{
+				const int32 ParentControlBone = Ref.FindBoneIndex(Track.ParentBone);
+				if (ParentControlBone != INDEX_NONE)
+				{
+					const FTransform ParentBefore = FAnimStitchFootLock::GetComponentSpace(Ref, Original, ParentControlBone);
+					const FTransform ParentAfter = FAnimStitchFootLock::GetComponentSpace(Ref, Local, ParentControlBone);
+					const FTransform ParentMove = ParentBefore.Inverse() * ParentAfter; // the parent bone's own motion, in its frame
+					if (!ParentMove.Equals(FTransform::Identity, 1e-4f)) { Target = Target * ParentMove; }
+				}
+			}
 			const FTransform Relative = Target.GetRelativeTransform(ParentCS);
 			if (!Track.bRotationOnly)
 			{

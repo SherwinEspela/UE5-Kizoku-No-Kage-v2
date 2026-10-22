@@ -1170,7 +1170,7 @@ FText SAnimStitchTimeline::GetHoverTipText() const
 	case EHit::TrackKey:
 		if (Hit.Channel != 0 && Asset->Timeline.Tracks.IsValidIndex(Hit.Index) && !IsChannelEditable(Hit.Index, Hit.Channel))
 		{
-			return LOCTEXT("TipKeyLocked", "Key on a locked channel lane: visible, but it cannot be moved or edited. Unlock the lane to change it.");
+			return LOCTEXT("TipKeyLocked", "Key on a locked channel lane: its value cannot be edited or moved while the lane is locked, but Delete still removes it.");
 		}
 		return LOCTEXT("TipKey", "Key: click to select, drag to move it, Delete removes it, right-click for more");
 	case EHit::TrackLane: return LOCTEXT("TipTrackLane", "Correction track: click to select it, drag a rectangle to select keys, right-click for more");

@@ -80,7 +80,19 @@ void SAnimStitchControlProperties::Construct(const FArguments& InArgs)
 				return FText::Format(LOCTEXT("ControlTitle", "{0}{1}"), FText::FromName(Asset->Timeline.Tracks[Track].Bone), bPole ? LOCTEXT("PoleSuffix", " (pole)") : (Asset->Timeline.Tracks[Track].Kind == EAnimStitchTrackKind::IKLimb ? LOCTEXT("EffectorSuffix", " (IK)") : FText::GetEmpty()));
 			})
 		]
-		+ SVerticalBox::Slot().AutoHeight().Padding(8.f, 0.f, 8.f, 8.f)
+		+ SVerticalBox::Slot().AutoHeight().Padding(8.f, 0.f, 8.f, 2.f)
+			[
+				SNew(STextBlock).AutoWrapText(true).ColorAndOpacity(FSlateColor::UseSubduedForeground())
+				.ToolTipText(LOCTEXT("ParentControlTip", "Control hierarchy: a new control is parented to the control of its skeleton parent bone when that control exists. Moving the parent control carries this one. The timeline track list stays flat."))
+				.Text_Lambda([this]() -> FText
+				{
+					UAnimStitchTimelineAsset* A = nullptr; int32 T = INDEX_NONE; bool bP = false;
+					if (!GetTarget(A, T, bP)) { return FText::GetEmpty(); }
+					const FName Parent = A->Timeline.Tracks[T].ParentBone;
+					return Parent.IsNone() ? LOCTEXT("NoParentControl", "Parent control: none (top level)") : FText::Format(LOCTEXT("ParentControl", "Parent control: {0}"), FText::FromName(Parent));
+				})
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(8.f, 0.f, 8.f, 8.f)
 		[
 			SNew(STextBlock).AutoWrapText(true).ColorAndOpacity(FSlateColor::UseSubduedForeground())
 			.Text(LOCTEXT("ControlPropsHint", "Values you override here win over the global Show > Controls settings, for this control only."))

@@ -338,6 +338,10 @@ private:
 	struct FTrailSegment { FAnimStitchControlId Control; bool bEditable = false; TArray<FVector> Points; };
 	void BuildTrailFor(const FAnimStitchControlId& Id) const;
 	void RebuildTrail() const;
+	void EnsureTrail() const;
+	const TArray<FAnimStitchTrack>& GetTrailTracks() const;
+	uint32 ComputeTrailSignature() const;
+	mutable uint32 TrailSignature = 0;
 	bool IsHeavyTrail() const;
 	bool StartTrailDrag(int32 TrailKey, const FVector& StartHit, const FVector2D& Pixel);
 	mutable bool bTrailDirty = true;

@@ -258,6 +258,10 @@ struct ANIMSTITCHEDITOR_API FAnimStitchTrack
 	UPROPERTY()
 	EAnimStitchTrackMode Mode = EAnimStitchTrackMode::Additive;
 
+	/** Bone tracks: the control (track) of the skeleton parent bone this control is parented to, set when the track is created (NAME_None = top level). Control hierarchy only; the track list stays flat. */
+	UPROPERTY()
+	FName ParentBone;
+
 	/** Show this control's motion trail in the viewport. Off by default; G, the master helper switch, still hides all trails. */
 	UPROPERTY()
 	bool bShowTrail = false;

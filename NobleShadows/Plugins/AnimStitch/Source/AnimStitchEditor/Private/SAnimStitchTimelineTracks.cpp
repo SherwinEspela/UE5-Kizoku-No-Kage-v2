@@ -230,7 +230,13 @@ FAnimStitchTrackKey SAnimStitchTimeline::MakeKeyAtPlayhead(int32 TrackIndex) con
 			if (LiveKeyProvider(TrackIndex, Live))
 			{
 				if (Track.Kind == EAnimStitchTrackKind::IKPole) { Key.Translation = Live.Pole; }
-				else if (Key.Weight < 1e-3f) { Key.Translation = Live.Translation; Key.Rotation = Live.Rotation; Key.Pole = Live.Pole; }
+				else
+				{
+					// A key added at the playhead puts the limb ON its target, where it is right now: with the IK off (or half way through an ease) the sampled weight would be
+					// 0, and a weight-0 key is "IK off", so the foot used to jump to the next key instead of travelling to this one.
+					if (Key.Weight < 0.999f) { Key.Translation = Live.Translation; Key.Rotation = Live.Rotation; Key.Pole = Live.Pole; }
+					Key.Weight = 1.f;
+				}
 			}
 		}
 	}
@@ -599,7 +605,7 @@ void SAnimStitchTimeline::OpenTrackMenu(const FPointerEvent& Event, int32 TrackI
 				Asset->SetTrackKeyWeight(TrackIndex, KeyIndex, 0.f);
 			})));
 		}
-		Menu.AddMenuEntry(LOCTEXT("DeleteKey", "Delete Key"), LOCTEXT("DeleteKeyTip", "Delete the key (on a channel lane: just that channel's key; a locked channel is left alone)"), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, TrackIndex, KeyIndex, Channel]()
+		Menu.AddMenuEntry(LOCTEXT("DeleteKey", "Delete Key"), LOCTEXT("DeleteKeyTip", "Delete the key (on a channel lane: just that channel's key). Deleting always works, whatever the channel locks say"), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, TrackIndex, KeyIndex, Channel]()
 		{
 			const FScopedTransaction Tx(LOCTEXT("DeleteKeyTx", "Delete Key"));
 			Asset->RemoveTrackChannelKey(TrackIndex, KeyIndex, Channel ? Channel : AnimStitchChannel::All);

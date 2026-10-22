@@ -25,10 +25,53 @@ namespace
 	constexpr float TrailPickPixels = 9.f;
 }
 
+// The trail always reads the timeline asset's own tracks (the preview's copy is only refreshed on the panel's next tick), so it can never show a deleted or moved key.
+const TArray<FAnimStitchTrack>& FAnimStitchPreview::GetTrailTracks() const
+{
+	const UAnimStitchTimelineAsset* AssetPtr = Asset.Get();
+	return AssetPtr ? AssetPtr->Timeline.Tracks : ManualTracks;
+}
+
+/** Hash of everything a trail is drawn from: any key added, deleted, moved or edited (by any route, undo / redo included) changes it. */
+uint32 FAnimStitchPreview::ComputeTrailSignature() const
+{
+	uint32 Hash = 0;
+	for (const FAnimStitchTrack& Track : GetTrailTracks())
+	{
+		Hash = HashCombine(Hash, GetTypeHash(Track.Bone));
+		Hash = HashCombine(Hash, GetTypeHash((int32)Track.Kind * 16 + (int32)Track.Mode * 4 + (Track.bShowTrail ? 2 : 0) + (Track.bRotationOnly ? 1 : 0)));
+		if (!Track.bShowTrail) { continue; }
+		Hash = HashCombine(Hash, GetTypeHash(Track.ControlStyle.Offset));
+		Hash = HashCombine(Hash, GetTypeHash(Track.PoleStyle.Offset));
+		Hash = HashCombine(Hash, GetTypeHash(Track.Keys.Num()));
+		for (const FAnimStitchTrackKey& K : Track.Keys)
+		{
+			Hash = HashCombine(Hash, GetTypeHash(K.Time));
+			Hash = HashCombine(Hash, GetTypeHash(K.Translation));
+			Hash = HashCombine(Hash, GetTypeHash(K.Pole));
+			Hash = HashCombine(Hash, GetTypeHash(K.Scale));
+			Hash = HashCombine(Hash, GetTypeHash(K.Rotation.X + 3.0 * K.Rotation.Y + 7.0 * K.Rotation.Z + 11.0 * K.Rotation.W));
+			Hash = HashCombine(Hash, GetTypeHash(K.Weight));
+			Hash = HashCombine(Hash, GetTypeHash((int32)K.Channels));
+		}
+	}
+	return Hash;
+}
+
+void FAnimStitchPreview::EnsureTrail() const
+{
+	const uint32 Signature = ComputeTrailSignature();
+	if (bTrailDirty || Signature != TrailSignature)
+	{
+		TrailSignature = Signature;
+		RebuildTrail();
+	}
+}
+
 bool FAnimStitchPreview::IsHeavyTrail() const
 {
 	// FK bone trails need whole poses evaluated; they are not rebuilt while a drag is running.
-	return SelectedControl.Kind == EAnimStitchControlKind::Bone && ManualTracks.IsValidIndex(SelectedControl.A) && ManualTracks[SelectedControl.A].Kind == EAnimStitchTrackKind::Bone;
+	return SelectedControl.Kind == EAnimStitchControlKind::Bone && GetTrailTracks().IsValidIndex(SelectedControl.A) && GetTrailTracks()[SelectedControl.A].Kind == EAnimStitchTrackKind::Bone;
 }
 
 void FAnimStitchPreview::RebuildTrail() const
@@ -41,9 +84,9 @@ void FAnimStitchPreview::RebuildTrail() const
 	if (!IsReady()) { return; }
 
 	// Every control whose track has its trail switched on shows it (G, the master helper switch, is checked when drawing).
-	for (int32 TrackIndex = 0; TrackIndex < ManualTracks.Num(); ++TrackIndex)
+	for (int32 TrackIndex = 0; TrackIndex < GetTrailTracks().Num(); ++TrackIndex)
 	{
-		const FAnimStitchTrack& Track = ManualTracks[TrackIndex];
+		const FAnimStitchTrack& Track = GetTrailTracks()[TrackIndex];
 		if (!Track.bShowTrail || Track.Keys.Num() == 0) { continue; }
 		TArray<FAnimStitchControlId, TInlineAllocator<2>> Ids;
 		if (Track.Kind == EAnimStitchTrackKind::Bone || Track.Kind == EAnimStitchTrackKind::RootOffset)
@@ -53,7 +96,7 @@ void FAnimStitchPreview::RebuildTrail() const
 		else if (Track.Kind == EAnimStitchTrackKind::IKLimb)
 		{
 			Ids.Add({ EAnimStitchControlKind::IKEffector, TrackIndex, INDEX_NONE });
-			const bool bHasPoleTrack = ManualTracks.ContainsByPredicate([&Track](const FAnimStitchTrack& T) { return T.Kind == EAnimStitchTrackKind::IKPole && T.Bone == Track.Bone; });
+			const bool bHasPoleTrack = GetTrailTracks().ContainsByPredicate([&Track](const FAnimStitchTrack& T) { return T.Kind == EAnimStitchTrackKind::IKPole && T.Bone == Track.Bone; });
 			if (!bHasPoleTrack) { Ids.Add({ EAnimStitchControlKind::IKPole, TrackIndex, INDEX_NONE }); }
 		}
 		else if (Track.Kind == EAnimStitchTrackKind::IKPole)
@@ -77,7 +120,7 @@ void FAnimStitchPreview::RebuildTrail() const
 
 void FAnimStitchPreview::BuildTrailFor(const FAnimStitchControlId& Id) const
 {
-	const FAnimStitchTrack& Track = ManualTracks[Id.A];
+	const FAnimStitchTrack& Track = GetTrailTracks()[Id.A];
 	const FReferenceSkeleton& SkelRef = Evaluator.GetSkeleton()->GetReferenceSkeleton();
 	const bool bRootOffset = Track.Kind == EAnimStitchTrackKind::RootOffset;
 	const bool bPoleLane = Id.Kind == EAnimStitchControlKind::IKPole && Track.Kind == EAnimStitchTrackKind::IKPole;
@@ -127,7 +170,7 @@ void FAnimStitchPreview::BuildTrailFor(const FAnimStitchControlId& Id) const
 			{
 				Evaluator.EvaluatePose(Time, Scratch);
 			}
-			FAnimStitchManualEdits::Apply(SkelRef, ManualTracks, Time, Scratch, PlantFeet);
+			FAnimStitchManualEdits::Apply(SkelRef, GetTrailTracks(), Time, Scratch, PlantFeet);
 			Out = FAnimStitchFootLock::GetComponentSpace(SkelRef, Scratch, SkelBone).GetTranslation() + DisplayOffset;
 			return true;
 		}
@@ -181,13 +224,13 @@ void FAnimStitchPreview::BuildTrailFor(const FAnimStitchControlId& Id) const
 
 bool FAnimStitchPreview::IsTrailEditable() const
 {
-	if (bTrailDirty) { RebuildTrail(); }
+	EnsureTrail();
 	return TrailKeys.ContainsByPredicate([this](const FTrailKey& K) { return K.Control == SelectedControl && K.bEditable; });
 }
 
 int32 FAnimStitchPreview::GetNumTrailKeysFor(const FAnimStitchControlId& Id) const
 {
-	if (bTrailDirty) { RebuildTrail(); }
+	EnsureTrail();
 	int32 N = 0;
 	for (const FTrailKey& K : TrailKeys) { N += K.Control == Id ? 1 : 0; }
 	return bHelpersVisible ? N : 0; // G is the master switch
@@ -207,7 +250,7 @@ int32 FAnimStitchPreview::FindTrailKey(double Time) const
 int32 FAnimStitchPreview::PickTrailKey(const FSceneView& View, const FVector2D& Pixel) const
 {
 	if (!bHelpersVisible) { return INDEX_NONE; }
-	if (bTrailDirty) { RebuildTrail(); }
+	EnsureTrail();
 	int32 Best = INDEX_NONE;
 	double BestDistance = TrailPickPixels;
 	for (int32 i = 0; i < TrailKeys.Num(); ++i)
@@ -223,7 +266,7 @@ int32 FAnimStitchPreview::PickTrailKey(const FSceneView& View, const FVector2D& 
 void FAnimStitchPreview::DrawTrail(const FSceneView& View, FPrimitiveDrawInterface* PDI) const
 {
 	if (!bHelpersVisible) { return; } // the G helper toggle hides the trail with everything else
-	if (bTrailDirty) { RebuildTrail(); }
+	EnsureTrail();
 	if (TrailSegments.Num() == 0 && TrailKeys.Num() == 0) { return; }
 
 	// Draggable trails (IK, pole, root offset) are orange; display-only FK bone trails are cyan.
@@ -282,7 +325,7 @@ bool FAnimStitchPreview::StartTrailDrag(int32 TrailKey, const FVector& StartHit,
 
 bool FAnimStitchPreview::DebugDragTrailKey(int32 TrailKey, const FVector& Translation)
 {
-	if (bTrailDirty) { RebuildTrail(); }
+	EnsureTrail();
 	if (!StartTrailDrag(TrailKey, FVector::ZeroVector, FVector2D::ZeroVector)) { return false; }
 	Drag.LastTranslation = Translation;
 	ApplyControlEdit(Translation, FQuat::Identity, FVector::OneVector);

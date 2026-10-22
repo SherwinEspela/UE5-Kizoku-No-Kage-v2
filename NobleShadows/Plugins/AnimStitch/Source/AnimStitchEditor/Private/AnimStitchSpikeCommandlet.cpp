@@ -238,6 +238,153 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 	// and the Root offset track (evaluated with the blend before foot lock: planted feet stay glued on the corrected path).
 	// Hotfix Set 2 test: per-channel keys and channel locks on a bone track (data level, no editor UI).
 	// Hotfix Set 3 test: absolute tracks fill new clip spans with per-frame baseline keys; clip block move / multi remove.
+	// Hotfix Set 5 test: -S5Test. Trail refresh, deletion vs channel locks, control parenting, Absolute delete-interpolation on crossfades.
+	if (FParse::Param(*Params, TEXT("S5Test")))
+	{
+		int32 Fails = 0;
+		auto Check = [&Fails](bool b, const TCHAR* What) { UE_LOG(LogAnimStitchSpike, Display, TEXT("S5 %s: %s"), b ? TEXT("PASS") : TEXT("FAIL"), What); if (!b) { ++Fails; } };
+		UAnimStitchTimelineAsset* TLAsset = NewObject<UAnimStitchTimelineAsset>(GetTransientPackage());
+		TArray<FText> W;
+		TLAsset->AddSequences({ const_cast<UAnimSequence*>(B), const_cast<UAnimSequence*>(B) }, INDEX_NONE, W);
+		FAnimStitchEvaluator Eval; FString Err;
+		if (!Eval.Initialize(TLAsset->Timeline, Err)) { UE_LOG(LogAnimStitchSpike, Error, TEXT("S5: evaluator failed: %s"), *Err); return 61; }
+		const FReferenceSkeleton& Ref = Eval.GetSkeleton()->GetReferenceSkeleton();
+
+		// S5-2: deletion ignores channel locks (Translation locked by default).
+		{
+			FAnimStitchTrack Fk; Fk.Kind = EAnimStitchTrackKind::Bone; Fk.Bone = TEXT("spine_01");
+			const int32 TI = TLAsset->AddTrack(Fk);
+			Check(!(TLAsset->Timeline.Tracks[TI].UnlockedChannels & AnimStitchChannel::Translation), TEXT("translation lane is locked by default"));
+			FAnimStitchTrackKey K; K.Time = 1.0; K.Channels = AnimStitchChannel::All; K.Translation = FVector(1, 2, 3);
+			FAnimStitchTrack& T = TLAsset->Timeline.Tracks[TI];
+			T.Keys.Reset(); T.Keys.Add(K);
+			K.Time = 2.0; T.Keys.Add(K);
+			TLAsset->RemoveTrackChannelKey(TI, 0, AnimStitchChannel::Translation);
+			Check(T.Keys.Num() == 2 && !(T.Keys[0].Channels & AnimStitchChannel::Translation) && (T.Keys[0].Channels & AnimStitchChannel::Rotation), TEXT("a locked translation lane key can be deleted"));
+			TLAsset->RemoveTrackChannelKey(TI, 1, AnimStitchChannel::All);
+			Check(T.Keys.Num() == 1, TEXT("the combined key deletes although translation / scale are locked"));
+			TLAsset->RemoveTrackChannelKey(TI, 0, AnimStitchChannel::All);
+			Check(T.Keys.Num() == 0, TEXT("a partially keyed combined key deletes"));
+		}
+
+		// S5-3: new controls parent to their skeleton parent's control.
+		{
+			FAnimStitchTrack Pelvis; Pelvis.Kind = EAnimStitchTrackKind::Bone; Pelvis.Bone = TEXT("pelvis"); Pelvis.Mode = EAnimStitchTrackMode::Absolute; Pelvis.bKeepFeetPlanted = false;
+			TLAsset->AddTrack(Pelvis);
+			FAnimStitchTrack Spine; Spine.Kind = EAnimStitchTrackKind::Bone; Spine.Bone = TEXT("spine_01"); Spine.Mode = EAnimStitchTrackMode::Absolute;
+			const int32 SpineTrack = TLAsset->Timeline.Tracks.IndexOfByPredicate([](const FAnimStitchTrack& T) { return T.Bone == TEXT("spine_01"); });
+			Check(SpineTrack != INDEX_NONE, TEXT("spine track exists"));
+			// spine_01 existed before pelvis: it was created unparented; remove and re-add so it is created under the pelvis control.
+			TLAsset->RemoveTrack(SpineTrack);
+			const int32 NewSpine = TLAsset->AddTrack(Spine);
+			const int32 PelvisTrack = TLAsset->Timeline.Tracks.IndexOfByPredicate([](const FAnimStitchTrack& T) { return T.Bone == TEXT("pelvis"); }); // indices shifted by the removal
+			Check(TLAsset->Timeline.Tracks[NewSpine].ParentBone == TEXT("pelvis"), TEXT("spine_01 control is parented to the pelvis control"));
+			FAnimStitchTrack Hand; Hand.Kind = EAnimStitchTrackKind::Bone; Hand.Bone = TEXT("hand_l");
+			const int32 HandTrack = TLAsset->AddTrack(Hand);
+			Check(TLAsset->Timeline.Tracks[HandTrack].ParentBone.IsNone(), TEXT("no control on the skeleton parent: stays top level"));
+			Check(TLAsset->Timeline.Tracks[PelvisTrack].ParentBone.IsNone(), TEXT("the pelvis (its parent has no control) is top level"));
+			Check(TLAsset->Timeline.Tracks.Num() == 3, TEXT("the track list is flat (3 tracks, no nesting)"));
+
+			// Inheritance: lift the pelvis control; the Absolute child follows only while parented.
+			const int32 SpineBone = Ref.FindBoneIndex(TEXT("spine_01"));
+			auto SpineRel = [&](double Time)
+			{
+				TArray<FTransform> Pose; Eval.EvaluatePose(Time, Pose);
+				FAnimStitchManualEdits::Apply(Ref, TLAsset->Timeline.Tracks, Time, Pose);
+				return FAnimStitchFootLock::GetComponentSpace(Ref, Pose, SpineBone).GetRelativeTransform(FAnimStitchFootLock::GetComponentSpace(Ref, Pose, 0)).GetTranslation();
+			};
+			const FVector Before = SpineRel(0.8);
+			for (FAnimStitchTrackKey& K : TLAsset->Timeline.Tracks[PelvisTrack].Keys) { K.Translation += FVector(0, 0, 30); }
+			const FVector Carried = SpineRel(0.8);
+			TLAsset->Timeline.Tracks[NewSpine].ParentBone = NAME_None;
+			const FVector Free = SpineRel(0.8);
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("S5 spine before %s, parented after lifting pelvis 30: %s, unparented: %s"), *Before.ToCompactString(), *Carried.ToCompactString(), *Free.ToCompactString());
+			Check((Carried - Before - FVector(0, 0, 30)).Size() < 0.5, TEXT("moving the parent control carries the child control"));
+			Check((Free - Before).Size() < 0.5, TEXT("an unparented Absolute control stays put"));
+			TLAsset->RemoveTrack(HandTrack);
+		}
+
+		// S5-4: delete-interpolation across crossfades (XOver and gap), both curves.
+		for (const EAnimStitchBlendCurve Curve : { EAnimStitchBlendCurve::Linear, EAnimStitchBlendCurve::Smoothstep })
+		{
+			for (const double XOver : { 0.4, -0.3 })
+			{
+				UAnimStitchTimelineAsset* A2 = NewObject<UAnimStitchTimelineAsset>(GetTransientPackage());
+				A2->AddSequences({ const_cast<UAnimSequence*>(B), const_cast<UAnimSequence*>(B) }, INDEX_NONE, W);
+				A2->Timeline.Clips[1].BlendIn = Curve;
+				A2->SetOverlap(1, XOver);
+				FAnimStitchTrack Abs; Abs.Kind = EAnimStitchTrackKind::Bone; Abs.Bone = TEXT("pelvis"); Abs.Mode = EAnimStitchTrackMode::Absolute; Abs.bKeepFeetPlanted = false;
+				const int32 TI = A2->AddTrack(Abs);
+				FAnimStitchTrack& T = A2->Timeline.Tracks[TI];
+				const double JoinStart = A2->Timeline.Clips[1].StartTime;
+				const double Lo = JoinStart - 0.25, Hi = JoinStart + 0.55; // a run that spans the crossfade
+				T.Keys.RemoveAll([Lo, Hi](const FAnimStitchTrackKey& K) { return K.Time > Lo && K.Time < Hi; });
+				auto WidestGap = [&](int32& OutIndex)
+				{
+					double Best = 0.0; OutIndex = INDEX_NONE;
+					for (int32 i = 0; i + 1 < T.Keys.Num(); ++i) { if (T.Keys[i + 1].Time - T.Keys[i].Time > Best) { Best = T.Keys[i + 1].Time - T.Keys[i].Time; OutIndex = i; } }
+					return Best;
+				};
+				int32 GapIndex = INDEX_NONE;
+				const double GapBefore = WidestGap(GapIndex);
+				const FString Label = FString::Printf(TEXT("%s, %s crossfade"), Curve == EAnimStitchBlendCurve::Linear ? TEXT("Linear") : TEXT("Smoothstep"), XOver > 0 ? TEXT("XOver") : TEXT("gap"));
+				bool bOk = GapBefore > 0.7;
+				// Dragging the crossfade length used to refill the deleted span from the clip.
+				for (const double NewOverlap : { XOver * 0.5, XOver * 1.4, XOver })
+				{
+					A2->SetOverlap(1, NewOverlap);
+					const double Gap = WidestGap(GapIndex);
+					bOk &= Gap > 0.6;
+					if (GapIndex != INDEX_NONE)
+					{
+						const FAnimStitchTrackKey& Ka = T.Keys[GapIndex]; const FAnimStitchTrackKey& Kb = T.Keys[GapIndex + 1];
+						const double Mid = (Ka.Time + Kb.Time) * 0.5;
+						const FVector Expected = FMath::Lerp(Ka.Translation, Kb.Translation, 0.5);
+						bOk &= FAnimStitchManualEdits::Sample(T, Mid).Translation.Equals(Expected, 1e-3);
+					}
+				}
+				Check(bOk, *(TEXT("deleted span stays empty and interpolates: ") + Label));
+				// Edge: delete the head keys; the head holds the first surviving key, also after a crossfade edit.
+				T.Keys.RemoveAll([](const FAnimStitchTrackKey& K) { return K.Time < 0.4; });
+				A2->SetOverlap(1, XOver * 0.8);
+				Check(T.Keys.Num() > 0 && T.Keys[0].Time > 0.3 && FAnimStitchManualEdits::Sample(T, 0.0).Translation.Equals(T.Keys[0].Translation, 1e-3), *(TEXT("deleted head holds the first surviving key: ") + Label));
+			}
+		}
+
+		// S5-1: the trail follows every key change with no panel refresh in between.
+		{
+			USkeletalMesh* PreviewMesh = Eval.GetSkeleton()->GetPreviewMesh(true);
+			if (!PreviewMesh) { UE_LOG(LogAnimStitchSpike, Error, TEXT("S5: no preview mesh")); return 62; }
+			FAnimStitchTrack IK; IK.Kind = EAnimStitchTrackKind::IKLimb; IK.Bone = TEXT("foot_l"); IK.bShowTrail = true;
+			const int32 IKTrack = TLAsset->AddTrack(IK);
+			for (const double Time : { 0.2, 0.6, 1.0, 1.4 }) { FAnimStitchTrackKey K; K.Time = Time; K.Weight = 1.f; K.Translation = FVector(Time * 100.0, 10.0, 20.0); K.Pole = FVector(Time * 100.0, 40.0, 50.0); TLAsset->SetTrackKey(IKTrack, K); }
+			TSharedRef<FAnimStitchPreview> Preview = MakeShared<FAnimStitchPreview>();
+			Preview->SetMesh(PreviewMesh);
+			Preview->SetAsset(TLAsset);
+			Preview->SetTimeline(TLAsset->Timeline);
+			const FAnimStitchControlId Id = { EAnimStitchControlKind::IKEffector, IKTrack, INDEX_NONE };
+			const int32 Start = Preview->GetNumTrailKeysFor(Id);
+			Check(Start >= 4, TEXT("trail shows its keys"));
+			const int32 MidKey = FAnimStitchManualEdits::FindKey(TLAsset->Timeline.Tracks[IKTrack], 0.6);
+			TLAsset->RemoveTrackKey(IKTrack, MidKey);
+			Check(Preview->GetNumTrailKeysFor(Id) == Start - 1, TEXT("deleting a key removes its point at once"));
+			FAnimStitchTrackKey Added; Added.Time = 0.8; Added.Weight = 1.f; Added.Translation = FVector(80, 10, 20);
+			TLAsset->SetTrackKey(IKTrack, Added);
+			Check(Preview->GetNumTrailKeysFor(Id) == Start, TEXT("adding a key adds its point"));
+			const FVector* Before = nullptr; (void)Before;
+			TLAsset->SetTrackKey(IKTrack, [&] { FAnimStitchTrackKey K = Added; K.Translation = FVector(80, 10, 90); return K; }());
+			Preview->SelectControl(Id);
+			const int32 PointIdx = Preview->FindTrailKey(0.8);
+			Check(PointIdx != INDEX_NONE, TEXT("the edited key has a point"));
+			const int32 NewIdx = FAnimStitchManualEdits::FindKey(TLAsset->Timeline.Tracks[IKTrack], 0.8);
+			TLAsset->MoveTrackKey(IKTrack, NewIdx, 0.9);
+			Check(Preview->FindTrailKey(0.9) != INDEX_NONE && Preview->FindTrailKey(0.8) == INDEX_NONE, TEXT("moving a key moves its point"));
+			TLAsset->RemoveTrackKey(IKTrack, FAnimStitchManualEdits::FindKey(TLAsset->Timeline.Tracks[IKTrack], 0.9));
+			Check(Preview->GetNumTrailKeysFor(Id) == Start - 1 && Preview->FindTrailKey(0.9) == INDEX_NONE, TEXT("deleting again leaves no stale point"));
+		}
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("S5 RESULT: %d failures"), Fails);
+		return Fails;
+	}
 	// Hotfix Set 4 test: -S4Test. Absolute tracks interpolate / hold (never fall back to the clip); per-control trail toggle.
 	if (FParse::Param(*Params, TEXT("S4Test")))
 	{
@@ -609,10 +756,9 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 		const double Before = TLAsset->Timeline.Tracks[TI].Keys[NI].Time;
 		TLAsset->MoveTrackChannelKey(TI, NI, AnimStitchChannel::Rotation, 1.0);
 		TLAsset->RemoveTrackChannelKey(TI, NI, AnimStitchChannel::Rotation);
-		Check(Count(AnimStitchChannel::Rotation) == R0 + 1 && FMath::IsNearlyEqual(TLAsset->Timeline.Tracks[TI].Keys[NI].Time, Before), TEXT("locked rotation key cannot be moved or deleted"));
+		Check(Count(AnimStitchChannel::Rotation) == R0 && FMath::IsNearlyEqual(Before, 0.8), TEXT("locked rotation key cannot be moved, but deleting ignores the lock (Set 5)"));
 		TLAsset->SetTrackChannelUnlocked(TI, AnimStitchChannel::Rotation, true);
-		TLAsset->RemoveTrackChannelKey(TI, NI, AnimStitchChannel::Rotation);
-		Check(Count(AnimStitchChannel::Rotation) == R0, TEXT("unlocked rotation key deletes"));
+		Check(Count(AnimStitchChannel::Rotation) == R0, TEXT("rotation key is gone after the lock-ignoring delete"));
 		UE_LOG(LogAnimStitchSpike, Display, TEXT("S2 RESULT: %d failures"), Fails);
 		return Fails;
 	}

@@ -132,7 +132,9 @@ private:
 	/** Component-space transform of a bone as the BLEND alone produces it (no manual tracks) at a timeline time; fills Translation / Rotation / Scale of the key. */
 	bool CaptureBlendedBoneTransform(FName Bone, double Time, FAnimStitchTrackKey& InOutKey) const;
 	/** Absolute bone tracks never have a timeline span without per-frame keys: every frame with no key nearby gets a baseline key baked from the evaluated underlying animation (new or extended clips). Existing keys are never touched. */
-	void FillAbsoluteTracks();
+	/** Spans the user emptied by deleting keys (Scope) are left alone: they interpolate between the surviving keys. */
+	struct FKeyFollowScope;
+	void FillAbsoluteTracks(const FKeyFollowScope* Scope = nullptr);
 	void Touch() { Modify(); ++EditCounter; bUnsavedChanges = true; }
 	/** Manual track edits don't change what the automatic passes see, so they only bump this counter. */
 	void TouchManual() { Modify(); ++ManualCounter; bUnsavedChanges = true; }
@@ -150,8 +152,13 @@ private:
 		~FKeyFollowScope() { Apply(); }
 		void Apply();
 		struct FOwner { int32 Track = INDEX_NONE; int32 Key = INDEX_NONE; FGuid Clip; double SourceTime = 0.0; };
+		/** A span of an Absolute track that was empty (keys deleted) before the edit: between two keys, before the first, or after the last. */
+		struct FGuard { int32 Track = INDEX_NONE; int32 KeyA = INDEX_NONE; int32 KeyB = INDEX_NONE; FGuid EndClip; double EndSourceTime = 0.0; };
 		UAnimStitchTimelineAsset& Asset;
 		TArray<FOwner> Owners;
+		TArray<FGuard> Guards;
+		/** After Apply: per track, the timeline time ranges (open intervals) that must not be re-filled with the underlying animation. */
+		TArray<TArray<TPair<double, double>>> Protected;
 		bool bApplied = false;
 	};
 	friend struct FKeyFollowScope;
