@@ -12,6 +12,8 @@
 #include "Widgets/Text/STextBlock.h"
 #include "Styling/AppStyle.h"
 
+#include "AnimStitchHelp.h"
+
 #define LOCTEXT_NAMESPACE "AnimStitch"
 
 void SAnimStitchFootLockSettings::AddReferencedObjects(FReferenceCollector& Collector)
@@ -87,6 +89,7 @@ void SAnimStitchFootLockSettings::Construct(const FArguments& InArgs)
 	auto BoneCombo = [this](TSharedPtr<FString>& Selected, bool bLeft)
 	{
 		return SNew(SSearchableComboBox)
+			.ToolTipText(bLeft ? LOCTEXT("LeftFootBoneTip", "The left foot bone used for plant detection and pinning. Remembered per skeleton.") : LOCTEXT("RightFootBoneTip", "The right foot bone used for plant detection and pinning. Remembered per skeleton."))
 			.OptionsSource(&BoneItems)
 			.InitiallySelectedItem(Selected)
 			.OnGenerateWidget_Lambda([](TSharedPtr<FString> Item) { return SNew(STextBlock).Text(FText::FromString(*Item)); })
@@ -106,7 +109,9 @@ void SAnimStitchFootLockSettings::Construct(const FArguments& InArgs)
 		SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 6)
 		[
-			SNew(STextBlock).Text(LOCTEXT("FootLockHeader", "Foot lock settings")).Font(FAppStyle::GetFontStyle("BoldFont"))
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)[SNew(STextBlock).Text(LOCTEXT("FootLockHeader", "Foot lock settings")).Font(FAppStyle::GetFontStyle("BoldFont"))]
+			+ SHorizontalBox::Slot().AutoWidth()[FAnimStitchHelp::MakeHelpButton(EAnimStitchHelpPage::FootLock, LOCTEXT("FootLockHelpTip", "Help: opens the Foot Lock page of the online documentation in your browser"))]
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
 		[

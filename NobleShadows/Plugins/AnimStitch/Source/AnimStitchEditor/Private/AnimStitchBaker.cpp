@@ -11,8 +11,37 @@
 #include "UObject/SavePackage.h"
 #include "AnimStitchSettings.h"
 #include "ReferenceSkeleton.h"
+#include "Containers/Ticker.h"
+#include "Editor.h"
+#include "Framework/Application/SlateApplication.h"
+#include "Framework/Notifications/NotificationManager.h"
+#include "Widgets/Notifications/SNotificationList.h"
 
 #define LOCTEXT_NAMESPACE "AnimStitch"
+
+void FAnimStitchBaker::NotifyBakeComplete(UAnimSequence* Baked)
+{
+	if (!Baked || !FSlateApplication::IsInitialized()) { return; }
+	const TWeakObjectPtr<UAnimSequence> WeakBaked = Baked;
+	const FString Name = Baked->GetName();
+	FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([WeakBaked, Name](float)
+	{
+		FNotificationInfo Info(FText::Format(NSLOCTEXT("AnimStitch", "BakeDone", "Baked {0}"), FText::FromString(Name)));
+		Info.ExpireDuration = 10.f;
+		Info.bUseSuccessFailIcons = true;
+		Info.HyperlinkText = NSLOCTEXT("AnimStitch", "ShowInBrowser", "Show in Content Browser");
+		Info.Hyperlink = FSimpleDelegate::CreateLambda([WeakBaked]()
+		{
+			if (GEditor && WeakBaked.IsValid())
+			{
+				TArray<UObject*> Objects = { WeakBaked.Get() };
+				GEditor->SyncBrowserToObjects(Objects);
+			}
+		});
+		if (TSharedPtr<SNotificationItem> Item = FSlateNotificationManager::Get().AddNotification(Info)) { Item->SetCompletionState(SNotificationItem::CS_Success); }
+		return false;
+	}), 0.2f);
+}
 
 bool FAnimStitchBaker::AssetExists(const FString& PackagePath)
 {

@@ -376,6 +376,7 @@ void SAnimStitchTimeline::PickOtherBone()
 	auto ModeButton = [Mode](const FText& Label, int32 Value)
 	{
 		return SNew(SCheckBox).Style(FAppStyle::Get(), "RadioButton")
+			.ToolTipText(Value == 0 ? LOCTEXT("ModeSingleTip", "Add just this bone as one track of additive offsets") : Value == 1 ? LOCTEXT("ModeFKTip", "Add a rotate-only track for each joint of the limb (thigh, calf, foot or upper arm, forearm, hand)") : LOCTEXT("ModeIKTip", "Add an IK track for the end effector, with its own pole-vector lane"))
 			.IsChecked_Lambda([Mode, Value]() { return *Mode == Value ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
 			.OnCheckStateChanged_Lambda([Mode, Value](ECheckBoxState State) { if (State == ECheckBoxState::Checked) { *Mode = Value; } })
 			[
@@ -392,6 +393,7 @@ void SAnimStitchTimeline::PickOtherBone()
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 10)
 			[
 				SNew(SSearchableComboBox)
+				.ToolTipText(LOCTEXT("PickBoneComboTip", "The bone to correct. Bones that already have a track are not listed. Type to search."))
 				.OptionsSource(&Items.Get())
 				.OnGenerateWidget_Lambda([](TSharedPtr<FString> Item) { return SNew(STextBlock).Text(FText::FromString(*Item)); })
 				.OnSelectionChanged_Lambda([Chosen, Mode](TSharedPtr<FString> Item, ESelectInfo::Type) { *Chosen = Item; *Mode = 0; })
@@ -425,7 +427,7 @@ void SAnimStitchTimeline::PickOtherBone()
 			+ SVerticalBox::Slot().FillHeight(1.f)[SNullWidget::NullWidget]
 			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right)
 			[
-				SNew(SButton).Text(LOCTEXT("AddTrackOk", "Add Track"))
+				SNew(SButton).Text(LOCTEXT("AddTrackOk", "Add Track")).ToolTipText(LOCTEXT("AddTrackOkTip", "Create the track for the chosen bone"))
 				.IsEnabled_Lambda([Chosen]() { return Chosen->IsValid(); })
 				.OnClicked_Lambda([this, Chosen, Mode, TrackMode, IsEffector, IsRoot, WeakWindow = TWeakPtr<SWindow>(Window)]()
 				{
@@ -458,8 +460,8 @@ void SAnimStitchTimeline::BuildCoreBoneMenu(FMenuBuilder& Menu)
 		if (HasTrackFor(Name, EAnimStitchTrackKind::Bone)) { continue; } // already on the list
 		Menu.AddSubMenu(FText::FromName(Name), FText::GetEmpty(), FNewMenuDelegate::CreateLambda([this, Name](FMenuBuilder& Choice)
 		{
-			Choice.AddMenuEntry(LOCTEXT("CoreModeAdditive", "Additive: keys are offsets on the animation"), FText::GetEmpty(), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, Name]() { AddBoneTrack(Name, false, 0, EAnimStitchTrackMode::Additive); })));
-			Choice.AddMenuEntry(LOCTEXT("CoreModeAbsolute", "Absolute: keys are full transforms"), FText::GetEmpty(), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, Name]() { AddBoneTrack(Name, false, 0, EAnimStitchTrackMode::Absolute); })));
+			Choice.AddMenuEntry(LOCTEXT("CoreModeAdditive", "Additive: keys are offsets on the animation"), LOCTEXT("CoreModeAdditiveTip", "The animation keeps playing and your keys add offsets on top of it (default)"), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, Name]() { AddBoneTrack(Name, false, 0, EAnimStitchTrackMode::Additive); })));
+			Choice.AddMenuEntry(LOCTEXT("CoreModeAbsolute", "Absolute: keys are full transforms"), LOCTEXT("CoreModeAbsoluteTip", "Your keys hold the bone's full transform relative to the root and replace the animation between the first and last key"), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, Name]() { AddBoneTrack(Name, false, 0, EAnimStitchTrackMode::Absolute); })));
 		}));
 	}
 	Menu.AddSeparator();
@@ -477,9 +479,9 @@ void SAnimStitchTimeline::BuildLimbMenu(FMenuBuilder& Menu)
 	{
 		Menu.AddSubMenu(Name, FText::GetEmpty(), FNewMenuDelegate::CreateLambda([this, bLeft, bLeg](FMenuBuilder& Choice)
 		{
-			Choice.AddMenuEntry(LOCTEXT("LimbFK", "FK: a control on each joint (rotate)"), FText::GetEmpty(), FSlateIcon(),
+			Choice.AddMenuEntry(LOCTEXT("LimbFK", "FK: a control on each joint (rotate)"), LOCTEXT("LimbFKTip", "A rotate-only track and control on each joint of the limb"), FSlateIcon(),
 				FUIAction(FExecuteAction::CreateLambda([this, bLeft, bLeg]() { AddLimb(bLeft, bLeg, false); }), FCanExecuteAction::CreateLambda([this, bLeft, bLeg]() { return !LimbTrackExists(bLeft, bLeg, false); })));
-			Choice.AddMenuEntry(LOCTEXT("LimbIK", "IK: end effector + pole vector (free target)"), FText::GetEmpty(), FSlateIcon(),
+			Choice.AddMenuEntry(LOCTEXT("LimbIK", "IK: end effector + pole vector (free target)"), LOCTEXT("LimbIKTip", "An IK track for the end effector plus a pole-vector lane, so the hand or foot can be placed freely"), FSlateIcon(),
 				FUIAction(FExecuteAction::CreateLambda([this, bLeft, bLeg]() { AddLimb(bLeft, bLeg, true); }), FCanExecuteAction::CreateLambda([this, bLeft, bLeg]() { return !LimbTrackExists(bLeft, bLeg, true); })));
 		}));
 	};
@@ -578,18 +580,18 @@ void SAnimStitchTimeline::OpenTrackMenu(const FPointerEvent& Event, int32 TrackI
 		Menu.AddSeparator();
 		if (bIK)
 		{
-			Menu.AddMenuEntry(LOCTEXT("KeyWeight1", "Key Weight 1 (IK on, plants on the target)"), FText::GetEmpty(), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, TrackIndex, KeyIndex]()
+			Menu.AddMenuEntry(LOCTEXT("KeyWeight1", "Key Weight 1 (IK on, plants on the target)"), LOCTEXT("KeyWeight1Tip", "Sets this key's IK weight to 1 so the limb sits on the IK target"), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, TrackIndex, KeyIndex]()
 			{
 				const FScopedTransaction Tx(LOCTEXT("KeyWeightTx", "Set Key Weight"));
 				Asset->SetTrackKeyWeight(TrackIndex, KeyIndex, 1.f);
 			})));
-			Menu.AddMenuEntry(LOCTEXT("KeyWeight0", "Key Weight 0 (release)"), FText::GetEmpty(), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, TrackIndex, KeyIndex]()
+			Menu.AddMenuEntry(LOCTEXT("KeyWeight0", "Key Weight 0 (release)"), LOCTEXT("KeyWeight0Tip", "Sets this key's IK weight to 0 so the limb returns to the animation"), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, TrackIndex, KeyIndex]()
 			{
 				const FScopedTransaction Tx(LOCTEXT("KeyWeightTx", "Set Key Weight"));
 				Asset->SetTrackKeyWeight(TrackIndex, KeyIndex, 0.f);
 			})));
 		}
-		Menu.AddMenuEntry(LOCTEXT("DeleteKey", "Delete Key"), FText::GetEmpty(), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, TrackIndex, KeyIndex, Channel]()
+		Menu.AddMenuEntry(LOCTEXT("DeleteKey", "Delete Key"), LOCTEXT("DeleteKeyTip", "Delete the key (on a channel lane: just that channel's key; a locked channel is left alone)"), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, TrackIndex, KeyIndex, Channel]()
 		{
 			const FScopedTransaction Tx(LOCTEXT("DeleteKeyTx", "Delete Key"));
 			Asset->RemoveTrackChannelKey(TrackIndex, KeyIndex, Channel ? Channel : AnimStitchChannel::All);

@@ -9,6 +9,7 @@
 #include "Styling/CoreStyle.h"
 #include "Fonts/FontMeasure.h"
 #include "AnimStitchManualEdits.h"
+#include "AnimStitchShortcuts.h"
 
 #define LOCTEXT_NAMESPACE "AnimStitch"
 
@@ -49,6 +50,7 @@ void SAnimStitchTimeline::Construct(const FArguments& InArgs)
 	OnPlayheadChangedDelegate = InArgs._OnPlayheadChanged;
 	OnWarningsDelegate = InArgs._OnWarnings;
 	ForceVolatile(true); // painted from live model data, no invalidation bookkeeping needed
+	SetToolTipText(TAttribute<FText>::CreateSP(this, &SAnimStitchTimeline::GetHoverTipText));
 	if (GEditor)
 	{
 		GEditor->RegisterForUndo(this);
@@ -201,7 +203,7 @@ PaintLabel(Out, Layer + 6, G, Pos + FVector2f(HandleWidth + 3.f, 17.f), FString:
 		}
 		Out.PopClip();
 
-		if (i == SelectedClip && !bOverlapSelected)
+		if (IsClipSelected(i) && !bOverlapSelected)
 		{
 			DrawLine(Out, Layer + 8, G, { Pos, Pos + FVector2f(BoxSize.X, 0), Pos + BoxSize, Pos + FVector2f(0, BoxSize.Y), Pos }, Selected, 2.f);
 		}
@@ -686,9 +688,54 @@ void SAnimStitchTimeline::DeselectAll()
 	SelectClip(INDEX_NONE, false);
 }
 
+TArray<int32> SAnimStitchTimeline::GetSelectedClipIndices() const
+{
+	TArray<int32> Result;
+	if (!Asset) { return Result; }
+	for (int32 i = 0; i < Asset->Timeline.Clips.Num(); ++i)
+	{
+		if (IsClipSelected(i)) { Result.Add(i); }
+	}
+	return Result;
+}
+
+void SAnimStitchTimeline::ToggleClipInSelection(int32 Index)
+{
+	if (!Asset->Timeline.Clips.IsValidIndex(Index)) { return; }
+	Asset->EnsureClipIds();
+	const FGuid Id = Asset->Timeline.Clips[Index].ClipId;
+	// The previously selected primary clip joins the id set, so everything shown as selected is in it.
+	if (Asset->Timeline.Clips.IsValidIndex(SelectedClip)) { SelectedClipIds.AddUnique(Asset->Timeline.Clips[SelectedClip].ClipId); }
+	if (SelectedClipIds.Contains(Id))
+	{
+		SelectedClipIds.Remove(Id);
+		if (SelectedClip == Index)
+		{
+			SelectedClip = INDEX_NONE;
+			for (int32 i = 0; i < Asset->Timeline.Clips.Num(); ++i)
+			{
+				if (SelectedClipIds.Contains(Asset->Timeline.Clips[i].ClipId)) { SelectedClip = i; }
+			}
+		}
+	}
+	else
+	{
+		SelectedClipIds.AddUnique(Id);
+		SelectedClip = Index;
+		SelectedTrack = INDEX_NONE;
+		SelectedKey = INDEX_NONE;
+		SelectedChannel = 0;
+		SelectedKeys.Reset();
+	}
+	bOverlapSelected = false;
+	OnSelectionChangedDelegate.ExecuteIfBound();
+}
+
 void SAnimStitchTimeline::SelectClip(int32 Index, bool bOverlap)
 {
 	SelectedClip = Index;
+	SelectedClipIds.Reset();
+	if (Asset && Asset->Timeline.Clips.IsValidIndex(Index) && Asset->Timeline.Clips[Index].ClipId.IsValid()) { SelectedClipIds.Add(Asset->Timeline.Clips[Index].ClipId); }
 	if (Index != INDEX_NONE)
 	{
 		SelectedTrack = INDEX_NONE;
@@ -832,6 +879,7 @@ void SAnimStitchTimeline::ClampSelection()
 	}
 	if (!Asset->Timeline.Tracks.IsValidIndex(SelectedTrack)) { SelectedTrack = INDEX_NONE; SelectedKey = INDEX_NONE; SelectedChannel = 0; }
 	VScroll = FMath::Clamp(VScroll, 0.f, GetTrackScrollMax());
+	SelectedClipIds.RemoveAll([this](const FGuid& Id) { return !Asset->Timeline.Clips.ContainsByPredicate([&Id](const FAnimStitchClip& C) { return C.ClipId == Id; }); });
 	if (!Asset->Timeline.Clips.IsValidIndex(SelectedClip))
 	{
 		SelectClip(INDEX_NONE, false);
@@ -975,7 +1023,24 @@ FReply SAnimStitchTimeline::OnMouseButtonDown(const FGeometry& G, const FPointer
 	case EHit::TrimRight:
 	case EHit::Overlap:
 	{
-		SelectClip(Hit.Index, Hit.Type == EHit::Overlap);
+		bCollapseOnRelease = false;
+		if (Hit.Type != EHit::Overlap && Event.IsShiftDown())
+		{
+			// Shift+click adds the clip to (or removes it from) the multi-selection.
+			ToggleClipInSelection(Hit.Index);
+			return FReply::Handled().SetUserFocus(SharedThis(this), EFocusCause::Mouse);
+		}
+		else if (Hit.Type == EHit::Body && GetNumSelectedClips() > 1 && IsClipSelected(Hit.Index))
+		{
+			// A plain press on one of several selected clips keeps the group so it can be dragged together; releasing without a drag selects just this clip.
+			SelectedClip = Hit.Index;
+			bCollapseOnRelease = true;
+			OnSelectionChangedDelegate.ExecuteIfBound();
+		}
+		else
+		{
+			SelectClip(Hit.Index, Hit.Type == EHit::Overlap);
+		}
 		const FAnimStitchClip& Clip = TL.Clips[Hit.Index];
 		InitialTrimIn = Clip.TrimIn;
 		InitialTrimOut = Clip.TrimOut;
@@ -985,7 +1050,7 @@ InitialRate = Clip.PlayRate;
 		InitialWidth = Clip.GetDuration();
 		DragMode = Hit.Type == EHit::Body ? EDrag::Move : Hit.Type == EHit::TrimLeft ? EDrag::TrimLeft : Hit.Type == EHit::TrimRight ? EDrag::TrimRight : EDrag::Overlap;
 		// Alt + edge drag stretches the clip (changes its play rate) instead of trimming it.
-		if (Event.IsAltDown())
+		if (FAnimStitchShortcuts::ModifiersMatch(EAnimStitchShortcut::RateStretch, Event))
 		{
 			if (DragMode == EDrag::TrimLeft) { DragMode = EDrag::RateLeft; }
 			else if (DragMode == EDrag::TrimRight) { DragMode = EDrag::RateRight; }
@@ -1073,14 +1138,49 @@ FReply SAnimStitchTimeline::OnMouseButtonUp(const FGeometry& G, const FPointerEv
 			ToggleFootPlantAt(DragFoot, FootDragStartTime);
 		}
 	}
+	if (bCollapseOnRelease && DragMode == EDrag::Move && !bDragStarted && Asset->Timeline.Clips.IsValidIndex(DragIndex)) { SelectClip(DragIndex, false); }
+	bCollapseOnRelease = false;
 	DragTransaction.Reset(); // ends the undo transaction
 	DragMode = EDrag::None;
 	bDragStarted = false;
 	return FReply::Handled().ReleaseMouseCapture();
 }
 
+FText SAnimStitchTimeline::GetHoverTipText() const
+{
+	if (!Asset || HoverLocal.X < 0.f) { return FText::GetEmpty(); }
+	const FHit Hit = HitTest(HoverLocal);
+	switch (Hit.Type)
+	{
+	case EHit::Ruler: return LOCTEXT("TipRuler", "Click or drag to move the playhead");
+	case EHit::MarkerStart: return LOCTEXT("TipMarkerStart", "Range START flag (green): playback and bake start here. Drag to move it.");
+	case EHit::MarkerEnd: return LOCTEXT("TipMarkerEnd", "Range END flag (red): playback and bake stop here. Drag to move it.");
+	case EHit::Splitter: return LOCTEXT("TipSplitter", "Drag to resize the track column");
+	case EHit::TrimLeft:
+	case EHit::TrimRight: return FText::Format(LOCTEXT("TipTrim", "Drag to trim the clip (non-destructive). {0} + drag stretches it instead (changes its play rate)."), FAnimStitchShortcuts::GetKeysText(EAnimStitchShortcut::RateStretch));
+	case EHit::Overlap: return LOCTEXT("TipOverlap", "Crossfade between two clips: drag to change its length. Pull clips apart for a gap, which crossfades too.");
+	case EHit::Body: return LOCTEXT("TipClip", "Clip: click to select, drag to move or reorder it. Right-click for more.");
+	case EHit::FootLane: return LOCTEXT("TipFootLane", "Foot lock lane: click to lock or unlock this foot at that moment, drag to lock a stretch, right-click for more.");
+	case EHit::FootHandle: return LOCTEXT("TipFootHandle", "Edge of a manual foot lock: drag to move it");
+	case EHit::FootRegion: return LOCTEXT("TipFootRegion", "Manual foot lock: drag to move the whole region, click to unlock");
+	case EHit::TrackPrev: return LOCTEXT("TipPrevKey", "Jump to the previous key of this track");
+	case EHit::TrackNext: return LOCTEXT("TipNextKey", "Jump to the next key of this track");
+	case EHit::TrackAddKey: return FText::Format(LOCTEXT("TipAddKey", "Add a key at the playhead ({0}). Bone tracks key only their unlocked channels."), FAnimStitchShortcuts::GetKeysText(EAnimStitchShortcut::AddKey));
+	case EHit::TrackExpand: return LOCTEXT("TipExpand", "Expand or collapse the track: separate Translation, Rotation and Scale key lanes with lock toggles, and numeric values");
+	case EHit::TrackKey:
+		if (Hit.Channel != 0 && Asset->Timeline.Tracks.IsValidIndex(Hit.Index) && !IsChannelEditable(Hit.Index, Hit.Channel))
+		{
+			return LOCTEXT("TipKeyLocked", "Key on a locked channel lane: visible, but it cannot be moved or edited. Unlock the lane to change it.");
+		}
+		return LOCTEXT("TipKey", "Key: click to select, drag to move it, Delete removes it, right-click for more");
+	case EHit::TrackLane: return LOCTEXT("TipTrackLane", "Correction track: click to select it, drag a rectangle to select keys, right-click for more");
+	default: return FText::GetEmpty();
+	}
+}
+
 FReply SAnimStitchTimeline::OnMouseMove(const FGeometry& G, const FPointerEvent& Event)
 {
+	HoverLocal = G.AbsoluteToLocal(Event.GetScreenSpacePosition());
 	if (!HasMouseCapture() || DragMode == EDrag::None)
 	{
 		return FReply::Unhandled();
@@ -1244,6 +1344,28 @@ const double Applied = (TL.Clips[DragIndex].TrimIn - InitialTrimIn) / InitialRat
 		break;
 	case EDrag::Move:
 	{
+		if (GetNumSelectedClips() > 1)
+		{
+			// Several clips selected: they move together as one block (their relative order is kept).
+			const TArray<int32> Block = GetSelectedClipIndices();
+			const FGuid DragId = TL.Clips[DragIndex].ClipId;
+			const double GroupCenter = InitialStart + Dt + TL.Clips[DragIndex].GetDuration() * 0.5;
+			int32 Current = 0, Target = 0;
+			for (int32 i = 0; i < TL.Clips.Num(); ++i)
+			{
+				if (Block.Contains(i)) { continue; }
+				if (i < DragIndex) { ++Current; }
+				if (TL.Clips[i].StartTime + TL.Clips[i].GetDuration() * 0.5 < GroupCenter) { ++Target; }
+			}
+			Target = FMath::Clamp(Target, Current - 1, Current + 1); // one step per mouse event, like a single clip
+			if (Target != Current)
+			{
+				Asset->MoveClipBlock(Block, Target);
+				const int32 NewIndex = TL.Clips.IndexOfByPredicate([&DragId](const FAnimStitchClip& C) { return C.ClipId == DragId; });
+				if (NewIndex != INDEX_NONE) { DragIndex = NewIndex; SelectedClip = NewIndex; }
+			}
+			break;
+		}
 		const double DesiredStart = InitialStart + Dt;
 		const double DesiredCenter = DesiredStart + TL.Clips[DragIndex].GetDuration() * 0.5;
 		// One reorder step per mouse event keeps the layout from oscillating.
@@ -1329,9 +1451,9 @@ FCursorReply SAnimStitchTimeline::OnCursorQuery(const FGeometry& G, const FPoint
 
 FReply SAnimStitchTimeline::OnKeyDown(const FGeometry& G, const FKeyEvent& Event)
 {
-	if (!Event.IsControlDown() && !Event.IsAltDown() && !Event.IsShiftDown() && !Event.IsRepeat() && (Event.GetKey() == EKeys::Enter || Event.GetKey() == EKeys::A) && AddKeyAtPlayhead()) { return FReply::Handled(); }
-	if (Event.IsControlDown() && Event.GetKey() == EKeys::C) { CopySelectedKeys(); return FReply::Handled(); }
-	if (Event.IsControlDown() && Event.GetKey() == EKeys::V) { PasteKeys(); return FReply::Handled(); }
+	if (!Event.IsRepeat() && FAnimStitchShortcuts::Matches(EAnimStitchShortcut::AddKey, Event) && AddKeyAtPlayhead()) { return FReply::Handled(); }
+	if (FAnimStitchShortcuts::Matches(EAnimStitchShortcut::CopyKeys, Event)) { CopySelectedKeys(); return FReply::Handled(); }
+	if (FAnimStitchShortcuts::Matches(EAnimStitchShortcut::PasteKeys, Event)) { PasteKeys(); return FReply::Handled(); }
 	if (SelectedKeys.Num() > 1 && (Event.GetKey() == EKeys::Delete || Event.GetKey() == EKeys::BackSpace)) { DeleteSelectedKeys(); return FReply::Handled(); }
 	if ((Event.GetKey() == EKeys::Delete || Event.GetKey() == EKeys::BackSpace) && Asset->Timeline.Tracks.IsValidIndex(SelectedTrack) && Asset->Timeline.Tracks[SelectedTrack].Keys.IsValidIndex(SelectedKey))
 	{
@@ -1356,7 +1478,7 @@ FReply SAnimStitchTimeline::OnKeyDown(const FGeometry& G, const FKeyEvent& Event
 		DeleteSelected();
 		return FReply::Handled();
 	}
-	if (Event.GetKey() == EKeys::D && Event.IsControlDown())
+	if (FAnimStitchShortcuts::Matches(EAnimStitchShortcut::DuplicateClip, Event))
 	{
 		DuplicateSelected();
 		return FReply::Handled();
@@ -1366,7 +1488,14 @@ FReply SAnimStitchTimeline::OnKeyDown(const FGeometry& G, const FKeyEvent& Event
 
 void SAnimStitchTimeline::DeleteSelected()
 {
-	if (Asset->Timeline.Clips.IsValidIndex(SelectedClip))
+	if (GetNumSelectedClips() > 1)
+	{
+		const FScopedTransaction Tx(LOCTEXT("RemoveClipsTx", "Remove Clips"));
+		Asset->RemoveClips(GetSelectedClipIndices());
+		ClampSelection();
+		SelectClip(INDEX_NONE, false);
+	}
+	else if (Asset->Timeline.Clips.IsValidIndex(SelectedClip))
 	{
 		const FScopedTransaction Tx(LOCTEXT("RemoveClipTx", "Remove Clip"));
 		Asset->RemoveClip(SelectedClip);
@@ -1539,6 +1668,28 @@ void SAnimStitchTimeline::SetSelectedBlendCurve(EAnimStitchBlendCurve Curve)
 		const FScopedTransaction Tx(LOCTEXT("SetCurveTx", "Set Crossfade Curve"));
 		Asset->SetBlendCurve(SelectedClip, Curve);
 	}
+}
+
+void SAnimStitchTimeline::ZoomToRange()
+{
+	double RangeStart, RangeEnd;
+	Asset->GetPlaybackRange(RangeStart, RangeEnd);
+	constexpr double Eps = 1e-4;
+	if (RangeStart <= Eps && RangeEnd >= Asset->Timeline.GetTotalLength() - Eps)
+	{
+		ZoomToFit(); // the range is the whole timeline
+		return;
+	}
+	SetVisibleTimeRange(RangeStart, RangeEnd); // flag to flag, edge to edge
+}
+
+void SAnimStitchTimeline::SetRangeFlagToPlayhead(bool bStart)
+{
+	double RangeStart, RangeEnd;
+	Asset->GetPlaybackRange(RangeStart, RangeEnd);
+	const FScopedTransaction Tx(bStart ? LOCTEXT("SetRangeStartTx", "Set Range Start to Playhead") : LOCTEXT("SetRangeEndTx", "Set Range End to Playhead"));
+	if (bStart) { Asset->SetPlaybackRange(Playhead, RangeEnd); }
+	else { Asset->SetPlaybackRange(RangeStart, Playhead); }
 }
 
 void SAnimStitchTimeline::ZoomToFit()

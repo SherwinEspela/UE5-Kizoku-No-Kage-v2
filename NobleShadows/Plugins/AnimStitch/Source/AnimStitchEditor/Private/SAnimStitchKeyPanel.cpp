@@ -156,6 +156,7 @@ TSharedRef<SWidget> SAnimStitchKeyPanel::Vec3Row(const FText& Label, TFunction<F
 			[
 				SNew(SSpinBox<double>)
 				.IsEnabled_Lambda([this, Channel]() { return !(Channel != 0 && IsBoneTrack() && IsChannelLocked(Channel)); })
+				.ToolTipText_Lambda([this, Label, Channel]() { return Channel != 0 && IsBoneTrack() && IsChannelLocked(Channel) ? FText::Format(LOCTEXT("ChannelRowLockedTip", "{0}: locked, read-only. Unlock the lane with the lock icon to edit it."), Label) : Channel != 0 && IsBoneTrack() ? FText::Format(LOCTEXT("ChannelRowTip", "{0} of the key at the playhead or of the selected key. Editing it keys only this channel."), Label) : FText::Format(LOCTEXT("PlainRowTip", "{0} of the key at the playhead or of the selected key."), Label); })
 				.Delta(Delta).MinFractionalDigits(1).MaxFractionalDigits(2)
 				.Value_Lambda([this, Get, Axis]() { return Get(GetKey())[Axis]; })
 				.OnBeginSliderMovement_Lambda([this]() { SliderTransaction = MakeShared<FScopedTransaction>(LOCTEXT("DragKeyValueTx", "Edit Key Value")); })
@@ -238,6 +239,7 @@ void SAnimStitchKeyPanel::Construct(const FArguments& InArgs)
 					.Visibility_Lambda([IsIK]() { return IsIK() ? EVisibility::Visible : EVisibility::Collapsed; })
 					[
 						SNew(SSpinBox<float>).MinValue(0.f).MaxValue(1.f).Delta(0.05f)
+							.ToolTipText(LOCTEXT("IKWeightTip", "IK weight of the key: 0 follows the animation, 1 puts the limb on the IK target. The weight eases over 0.1 s before the key."))
 						.Value_Lambda([this]() { return GetKey().Weight; })
 						.OnBeginSliderMovement_Lambda([this]() { SliderTransaction = MakeShared<FScopedTransaction>(LOCTEXT("DragKeyValueTx", "Edit Key Value")); })
 						.OnEndSliderMovement_Lambda([this](float) { SliderTransaction.Reset(); })

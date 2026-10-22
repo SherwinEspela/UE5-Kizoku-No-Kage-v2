@@ -42,6 +42,12 @@ public:
 	int32 AddSequences(const TArray<UAnimSequence*>& Sequences, int32 InsertIndex, TArray<FText>& OutWarnings);
 
 	void RemoveClip(int32 Index);
+	/** Removes several clips at once (indices into the current order). */
+	void RemoveClips(const TArray<int32>& Indices);
+	/** Moves the clips at Indices as one block (keeping their relative order) so it sits before the Target-th clip of the remaining ones. Overlaps around the move reset to 0. */
+	void MoveClipBlock(const TArray<int32>& Indices, int32 TargetAmongRemaining);
+	/** Gives every clip a unique stable id (selection and correction keys refer to clips by it). */
+	void EnsureClipIds();
 	/** Inserts a copy directly after the source clip (butt-joined). Returns the new index. */
 	int32 DuplicateClip(int32 Index);
 	/** Moves a clip to a new position in the order. Affected overlaps reset to 0. */
@@ -121,6 +127,8 @@ void SetTrim(int32 Index, double NewTrimIn, double NewTrimOut);
 private:
 	/** Component-space transform of a bone as the BLEND alone produces it (no manual tracks) at a timeline time; fills Translation / Rotation / Scale of the key. */
 	bool CaptureBlendedBoneTransform(FName Bone, double Time, FAnimStitchTrackKey& InOutKey) const;
+	/** Absolute bone tracks never have a timeline span without per-frame keys: every frame with no key nearby gets a baseline key baked from the evaluated underlying animation (new or extended clips). Existing keys are never touched. */
+	void FillAbsoluteTracks();
 	void Touch() { Modify(); ++EditCounter; bUnsavedChanges = true; }
 	/** Manual track edits don't change what the automatic passes see, so they only bump this counter. */
 	void TouchManual() { Modify(); ++ManualCounter; bUnsavedChanges = true; }

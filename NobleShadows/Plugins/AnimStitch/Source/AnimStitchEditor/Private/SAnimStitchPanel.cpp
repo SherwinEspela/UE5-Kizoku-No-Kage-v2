@@ -72,6 +72,10 @@
 #include "Widgets/Text/STextBlock.h"
 #include "Styling/AppStyle.h"
 
+#include "AnimStitchShortcuts.h"
+#include "AnimStitchHelp.h"
+#include "DragAndDrop/AssetDragDropOp.h"
+
 #define LOCTEXT_NAMESPACE "AnimStitch"
 
 void SAnimStitchPanel::Construct(const FArguments& InArgs)
@@ -86,6 +90,9 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 		return SNew(SCheckBox)
 			.Style(FAppStyle::Get(), "ToggleButtonCheckbox")
 			.IsEnabled(this, &SAnimStitchPanel::IsCurveEnabled)
+			.ToolTipText(Curve == EAnimStitchBlendCurve::Linear
+				? LOCTEXT("CurveLinearTip", "Linear crossfade: the blend weight changes at a constant rate. Applies to the selected crossfade.")
+				: LOCTEXT("CurveEaseTip", "Ease In/Out crossfade: the blend starts and ends gently (smoothstep). Applies to the selected crossfade."))
 			.IsChecked(this, &SAnimStitchPanel::GetCurveState, Curve)
 			.OnCheckStateChanged_Lambda([this, Curve](ECheckBoxState) { Timeline->SetSelectedBlendCurve(Curve); })
 			[
@@ -121,6 +128,7 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 	{
 		return SNew(SCheckBox)
 			.Style(FAppStyle::Get(), "ToggleButtonCheckbox")
+			.ToolTipText(FText::Format(LOCTEXT("TabButtonTip", "Show the {0} tab"), Label))
 			.IsChecked_Lambda([Selected, Index]() { return *Selected == Index ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
 			.OnCheckStateChanged_Lambda([Selected, Index, OnPicked](ECheckBoxState State) { if (State == ECheckBoxState::Checked) { *Selected = Index; if (OnPicked) { OnPicked(); } } })
 			[
@@ -224,6 +232,13 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 				.ToolTipText(LOCTEXT("LayoutTip", "Docking layout of the editor sections"))
 				.ButtonContent()[SNew(STextBlock).Text(LOCTEXT("LayoutLabel", "Layout"))]
 				.OnGetMenuContent_Lambda([this]() -> TSharedRef<SWidget> { return MakeLayoutMenu(); })
+				]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(6.f, 0.f, 0.f, 0.f)
+				[
+					SNew(SComboButton).HasDownArrow(true)
+					.ToolTipText(LOCTEXT("HelpMenuTip", "Help: the Quick Start, and the online documentation (opens in your browser)"))
+					.ButtonContent()[SNew(STextBlock).Text(LOCTEXT("HelpLabel", "Help"))]
+					.OnGetMenuContent_Lambda([]() -> TSharedRef<SWidget> { FMenuBuilder Menu(true, nullptr); FAnimStitchHelp::FillHelpMenu(Menu); return Menu.MakeWidget(); })
 			]
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(6.f, 6.f, 6.f, 2.f)
@@ -252,7 +267,7 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 			]
 			+ SWrapBox::Slot().Padding(0, 0, 6, 3)
 			[
-				IconButton(TAttribute<const FSlateBrush*>::CreateLambda([this]() { return FAppStyle::GetBrush(IsDirtyState() ? "Icons.SaveChanged" : "AssetEditor.SaveAsset"); }), LOCTEXT("SaveTimelineTip", "Save the timeline as an asset (Ctrl+S). An asterisk on the icon means unsaved changes."), [this]() { Save(); })
+				IconButton(TAttribute<const FSlateBrush*>::CreateLambda([this]() { return FAppStyle::GetBrush(IsDirtyState() ? "Icons.SaveChanged" : "AssetEditor.SaveAsset"); }), FText::Format(LOCTEXT("SaveTimelineTip", "Save the timeline as an asset ({0}). An asterisk on the icon means unsaved changes."), FAnimStitchShortcuts::GetKeysText(EAnimStitchShortcut::Save)), [this]() { Save(); })
 			]
 			+ SWrapBox::Slot().Padding(0, 0, 6, 3)
 			[
@@ -316,6 +331,7 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 				+ SWrapBox::Slot().VAlign(VAlign_Center).Padding(0, 0, 2, 3)
 				[
 					SNew(SBox).MinDesiredWidth(220.f).MaxDesiredWidth(320.f)[SNew(SObjectPropertyEntryBox)
+						.ToolTipText(LOCTEXT("PreviewMeshTip", "Skeletal mesh used to preview the timeline. Not baked; it only has to use the same skeleton as the clips."))
 					.AllowedClass(USkeletalMesh::StaticClass())
 					.ObjectPath(this, &SAnimStitchPanel::GetMeshPath)
 					.OnObjectChanged(this, &SAnimStitchPanel::OnMeshChanged)
@@ -390,7 +406,7 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 			+ SWrapBox::Slot().Padding(0, 0, 6, 3)
 			[
 				SNew(SButton).ButtonStyle(FAppStyle::Get(), "SimpleButton").ContentPadding(FMargin(5.f, 4.f))
-				.ToolTipText(LOCTEXT("DuplicateTip", "Duplicate the selected clip (Ctrl+D)"))
+				.ToolTipText(FText::Format(LOCTEXT("DuplicateTip", "Duplicate the selected clip ({0})"), FAnimStitchShortcuts::GetKeysText(EAnimStitchShortcut::DuplicateClip)))
 				.OnClicked_Lambda([this]() { Timeline->DuplicateSelected(); return FReply::Handled(); })
 				[Glyph("GenericCommands.Duplicate")]
 			]
@@ -413,12 +429,19 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 			[
 				TimelineButton(Icons({ Glyph("Icons.ChevronLeft"), Bar() }), LOCTEXT("TrimEndTip", "Trim End: cut the part of the clip after the playhead"), [this]() { Timeline->TrimEndAtPlayhead(); })
 			]
+			+ SWrapBox::Slot().Padding(0, 0, 2, 3)
+			[
+				SNew(SButton).ButtonStyle(FAppStyle::Get(), "SimpleButton").ContentPadding(FMargin(5.f, 4.f))
+				.ToolTipText(FText::Format(LOCTEXT("ZoomFitTip", "Zoom to Fit the whole timeline ({0} with no track selected)"), FAnimStitchShortcuts::GetKeysText(EAnimStitchShortcut::ZoomToFit)))
+				.OnClicked_Lambda([this]() { Timeline->ZoomToFit(); return FReply::Handled(); })
+				[Icons({ Glyph("Icons.ChevronRight"), Glyph("Icons.ChevronLeft") })]
+			]
 			+ SWrapBox::Slot().Padding(0, 0, 18, 3)
 			[
 				SNew(SButton).ButtonStyle(FAppStyle::Get(), "SimpleButton").ContentPadding(FMargin(5.f, 4.f))
-				.ToolTipText(LOCTEXT("ZoomFitTip", "Zoom to Fit (Enter with no track selected)"))
-				.OnClicked_Lambda([this]() { Timeline->ZoomToFit(); return FReply::Handled(); })
-				[Icons({ Glyph("Icons.ChevronRight"), Glyph("Icons.ChevronLeft") })]
+				.ToolTipText(LOCTEXT("ZoomRangeTip", "Zoom to Range: the region between the green and red range flags fills the timeline width (a full-span range acts like Zoom to Fit)"))
+				.OnClicked_Lambda([this]() { Timeline->ZoomToRange(); return FReply::Handled(); })
+				[Icons({ Bar(), Glyph("Icons.ChevronRight"), Glyph("Icons.ChevronLeft"), Bar() })]
 			]
 			+ SWrapBox::Slot().Padding(0, 0, 6, 3)
 			[
@@ -897,15 +920,15 @@ TSharedRef<SWidget> SAnimStitchPanel::MakeViewportToolbar()
 		SNew(SHorizontalBox)
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 2, 0)
 		[
-			IconToggle("EditorViewport.TranslateMode", LOCTEXT("GizmoMoveTip", "Move the selected control (W)"), [this]() { return Preview->GetGizmoMode() == EAnimStitchGizmoMode::Translate; }, [this]() { Preview->SetGizmoMode(EAnimStitchGizmoMode::Translate); })
+			IconToggle("EditorViewport.TranslateMode", FText::Format(LOCTEXT("GizmoMoveTip", "Move the selected control ({0})"), FAnimStitchShortcuts::GetKeysText(EAnimStitchShortcut::GizmoMove)), [this]() { return Preview->GetGizmoMode() == EAnimStitchGizmoMode::Translate; }, [this]() { Preview->SetGizmoMode(EAnimStitchGizmoMode::Translate); })
 		]
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 2, 0)
 		[
-			IconToggle("EditorViewport.RotateMode", LOCTEXT("GizmoRotateTip", "Rotate the selected control (E)"), [this]() { return Preview->GetGizmoMode() == EAnimStitchGizmoMode::Rotate; }, [this]() { Preview->SetGizmoMode(EAnimStitchGizmoMode::Rotate); })
+			IconToggle("EditorViewport.RotateMode", FText::Format(LOCTEXT("GizmoRotateTip", "Rotate the selected control ({0})"), FAnimStitchShortcuts::GetKeysText(EAnimStitchShortcut::GizmoRotate)), [this]() { return Preview->GetGizmoMode() == EAnimStitchGizmoMode::Rotate; }, [this]() { Preview->SetGizmoMode(EAnimStitchGizmoMode::Rotate); })
 		]
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
 		[
-			IconToggle("EditorViewport.ScaleMode", LOCTEXT("GizmoScaleTip", "Scale the selected control (R)"), [this]() { return Preview->GetGizmoMode() == EAnimStitchGizmoMode::Scale; }, [this]() { Preview->SetGizmoMode(EAnimStitchGizmoMode::Scale); })
+			IconToggle("EditorViewport.ScaleMode", FText::Format(LOCTEXT("GizmoScaleTip", "Scale the selected control ({0})"), FAnimStitchShortcuts::GetKeysText(EAnimStitchShortcut::GizmoScale)), [this]() { return Preview->GetGizmoMode() == EAnimStitchGizmoMode::Scale; }, [this]() { Preview->SetGizmoMode(EAnimStitchGizmoMode::Scale); })
 		]
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
 		[
@@ -974,7 +997,7 @@ TSharedRef<SWidget> SAnimStitchPanel::MakeViewportToolbar()
 		FMenuBuilder Menu(true, nullptr);
 		auto AddView = [this, &Menu](EAnimStitchViewMode Mode, const FText& Label)
 		{
-			Menu.AddMenuEntry(Label, FText::GetEmpty(), FSlateIcon(),
+			Menu.AddMenuEntry(Label, FText::Format(LOCTEXT("ViewEntryTip", "Switch the camera to the {0} view"), Label), FSlateIcon(),
 				FUIAction(FExecuteAction::CreateLambda([this, Mode]() { Viewport->SetViewMode(Mode); }), FCanExecuteAction(),
 					FIsActionChecked::CreateLambda([this, Mode]() { return Viewport->GetViewMode() == Mode; })),
 				NAME_None, EUserInterfaceActionType::RadioButton);
@@ -1012,7 +1035,7 @@ TSharedRef<SWidget> SAnimStitchPanel::MakeViewportToolbar()
 		FMenuBuilder Menu(true, nullptr);
 		auto AddShade = [this, &Menu](EViewModeIndex Mode, const FText& Label)
 		{
-			Menu.AddMenuEntry(Label, FText::GetEmpty(), FSlateIcon(),
+			Menu.AddMenuEntry(Label, FText::Format(LOCTEXT("ShadeEntryTip", "Shade the viewport as {0}"), Label), FSlateIcon(),
 				FUIAction(FExecuteAction::CreateLambda([this, Mode]() { Viewport->SetShadingMode(Mode); }), FCanExecuteAction(),
 					FIsActionChecked::CreateLambda([this, Mode]() { return Viewport->GetShadingMode() == Mode; })),
 				NAME_None, EUserInterfaceActionType::RadioButton);
@@ -1027,6 +1050,7 @@ TSharedRef<SWidget> SAnimStitchPanel::MakeViewportToolbar()
 			SNew(SBox).WidthOverride(260.f)
 			[
 				SAssignNew(BoneCombo, SSearchableComboBox)
+					.ToolTipText(LOCTEXT("BoneComboTip", "Pick a bone of the preview skeleton to show in the viewport and in Details. Clicking a joint in the viewport does the same."))
 				.OptionsSource(&BoneItems)
 				.OnGenerateWidget_Lambda([](TSharedPtr<FString> Item) { return SNew(STextBlock).Text(FText::FromString(*Item)); })
 				.OnSelectionChanged(this, &SAnimStitchPanel::OnBoneComboChanged)
@@ -1050,7 +1074,7 @@ TSharedRef<SWidget> SAnimStitchPanel::MakeShowMenu()
 	Menu.AddSubMenu(LOCTEXT("ControlsMenu", "Controls"), LOCTEXT("ControlsMenuTip", "Manual-correction control shapes: visibility and size"), FNewMenuDelegate::CreateSP(this, &SAnimStitchPanel::FillControlsMenu));
 		Menu.AddSubMenu(LOCTEXT("FloorMenu", "Floor"), LOCTEXT("FloorMenuTip", "The ground slab: visibility, colour and size (viewport only)"), FNewMenuDelegate::CreateLambda([this](FMenuBuilder& Floor)
 		{
-			Floor.AddMenuEntry(LOCTEXT("ShowFloor", "Show Floor"), LOCTEXT("ShowFloorTip", "Show or hide the ground slab (G hides it with the other helpers)"), FSlateIcon(),
+			Floor.AddMenuEntry(LOCTEXT("ShowFloor", "Show Floor"), FText::Format(LOCTEXT("ShowFloorTip", "Show or hide the ground slab ({0} hides it with the other helpers)"), FAnimStitchShortcuts::GetKeysText(EAnimStitchShortcut::ToggleHelpers)), FSlateIcon(),
 				FUIAction(FExecuteAction::CreateLambda([this]() { Preview->SetShowFloor(!Preview->GetShowFloor()); }), FCanExecuteAction(),
 					FIsActionChecked::CreateLambda([this]() { return Preview->GetShowFloor(); })),
 				NAME_None, EUserInterfaceActionType::ToggleButton);
@@ -1058,6 +1082,7 @@ TSharedRef<SWidget> SAnimStitchPanel::MakeShowMenu()
 				SNew(SBox).WidthOverride(120.f).HeightOverride(20.f)
 				[
 					SNew(SColorBlock).Color_Lambda([this]() { return Preview->GetFloorColor(); }).ShowBackgroundForAlpha(false)
+						.ToolTipText(LOCTEXT("FloorColorTip", "Colour of the floor slab: click to pick one"))
 					.OnMouseButtonDown_Lambda([this](const FGeometry&, const FPointerEvent&)
 					{
 						FColorPickerArgs Args;
@@ -1083,7 +1108,7 @@ TSharedRef<SWidget> SAnimStitchPanel::MakeShowMenu()
 	Menu.EndSection();
 
 	Menu.BeginSection("CommonShowFlags", LOCTEXT("CommonShowFlags", "Common Show Flags"));
-	Menu.AddMenuEntry(LOCTEXT("GridFlag", "Grid"), LOCTEXT("GridFlagTip", "Show or hide the ground grid (Alt+Shift+G)"), FSlateIcon(),
+	Menu.AddMenuEntry(LOCTEXT("GridFlag", "Grid"), FText::Format(LOCTEXT("GridFlagTip", "Show or hide the ground grid ({0})"), FAnimStitchShortcuts::GetKeysText(EAnimStitchShortcut::ToggleGrid)), FSlateIcon(),
 		FUIAction(FExecuteAction::CreateLambda([this]() { Preview->SetShowGrid(!Preview->GetShowGrid()); }), FCanExecuteAction(),
 			FIsActionChecked::CreateLambda([this]() { return Preview->GetShowGrid(); })),
 		NAME_None, EUserInterfaceActionType::ToggleButton);
@@ -1142,7 +1167,7 @@ void SAnimStitchPanel::FillAttachmentsMenu(FMenuBuilder& Menu)
 		for (int32 i = 0; i < Asset->Timeline.PreviewAttachments.Num(); ++i)
 		{
 			const FAnimStitchPreviewAttachment& Attachment = Asset->Timeline.PreviewAttachments[i];
-			Menu.AddMenuEntry(FText::Format(LOCTEXT("RemoveAttachment", "Remove {0} @ {1}"), FText::FromString(Attachment.Asset.GetAssetName()), FText::FromName(Attachment.Socket)), FText::GetEmpty(), FSlateIcon(),
+			Menu.AddMenuEntry(FText::Format(LOCTEXT("RemoveAttachment", "Remove {0} @ {1}"), FText::FromString(Attachment.Asset.GetAssetName()), FText::FromName(Attachment.Socket)), LOCTEXT("RemoveAttachmentTip", "Remove this prop from the preview character"), FSlateIcon(),
 				FUIAction(FExecuteAction::CreateLambda([this, i]()
 				{
 					const FScopedTransaction Tx(LOCTEXT("RemoveAttachTx", "Remove Preview Attachment"));
@@ -1436,19 +1461,19 @@ TSharedRef<SWidget> SAnimStitchPanel::MakeLayoutMenu()
 		FNewMenuDelegate::CreateLambda([this, Names](FMenuBuilder& Sub)
 		{
 			if (Names.Num() == 0) { Sub.AddMenuEntry(LOCTEXT("NoSavedLayouts", "No saved layouts yet"), FText::GetEmpty(), FSlateIcon(), FUIAction(FExecuteAction(), FCanExecuteAction::CreateLambda([]() { return false; }))); }
-			for (const FString& Name : Names) { Sub.AddMenuEntry(FText::FromString(Name), FText::GetEmpty(), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, Name]() { LoadSavedLayout(Name); }))); }
+			for (const FString& Name : Names) { Sub.AddMenuEntry(FText::FromString(Name), LOCTEXT("LoadLayoutTip", "Switch the panels to this saved layout"), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, Name]() { LoadSavedLayout(Name); }))); }
 		}), false, FSlateIcon(), false);
 	Menu.AddSubMenu(LOCTEXT("DeleteLayoutMenu", "Delete Saved Layout"), LOCTEXT("DeleteLayoutMenuTip", "Remove one of your saved layouts"),
 		FNewMenuDelegate::CreateLambda([this, Names](FMenuBuilder& Sub)
 		{
 			if (Names.Num() == 0) { Sub.AddMenuEntry(LOCTEXT("NoSavedLayouts2", "No saved layouts yet"), FText::GetEmpty(), FSlateIcon(), FUIAction(FExecuteAction(), FCanExecuteAction::CreateLambda([]() { return false; }))); }
-			for (const FString& Name : Names) { Sub.AddMenuEntry(FText::FromString(Name), FText::GetEmpty(), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, Name]() { DeleteSavedLayout(Name); }))); }
+			for (const FString& Name : Names) { Sub.AddMenuEntry(FText::FromString(Name), LOCTEXT("DeleteLayoutTip", "Delete this saved layout"), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, Name]() { DeleteSavedLayout(Name); }))); }
 		}), false, FSlateIcon(), false);
 	Menu.AddSeparator();
 	// Sections that were closed can be brought back.
 	auto ShowEntry = [this, &Menu](const FText& Label, FName Id)
 	{
-		Menu.AddMenuEntry(Label, FText::GetEmpty(), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, Id]() { if (TabManager.IsValid()) { TabManager->TryInvokeTab(FTabId(Id)); } })));
+		Menu.AddMenuEntry(Label, LOCTEXT("ShowTabTip", "Bring this section back (or to the front) if it was closed"), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, Id]() { if (TabManager.IsValid()) { TabManager->TryInvokeTab(FTabId(Id)); } })));
 	};
 	ShowEntry(LOCTEXT("ShowTimeline", "Show Timeline"), TimelineTabId);
 	ShowEntry(LOCTEXT("ShowInspector", "Show Inspector"), InspectorTabId);
@@ -1482,12 +1507,13 @@ void SAnimStitchPanel::SaveLayoutAs()
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 10)
 			[
 				SNew(SEditableTextBox)
+					.ToolTipText(LOCTEXT("LayoutNameTip", "Name for this panel layout"))
 				.OnTextChanged_Lambda([Name](const FText& Text) { *Name = Text.ToString(); })
 				.OnTextCommitted_Lambda([Name, Commit](const FText& Text, ETextCommit::Type Type) { *Name = Text.ToString(); if (Type == ETextCommit::OnEnter) { Commit(); } })
 			]
 			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right)
 			[
-				SNew(SButton).Text(LOCTEXT("SaveLayoutOk", "Save"))
+				SNew(SButton).Text(LOCTEXT("SaveLayoutOk", "Save")).ToolTipText(LOCTEXT("SaveLayoutOkTip", "Save the layout under this name (an existing layout of the same name is replaced)"))
 				.OnClicked_Lambda([Commit]() { Commit(); return FReply::Handled(); })
 			]
 		]);
@@ -1586,6 +1612,13 @@ TSharedRef<SWidget> SAnimStitchPanel::MakeBakedAssetsTab()
 			.OnGenerateTile_Lambda([](TSharedPtr<FBakedItem> Item, const TSharedRef<STableViewBase>& Owner) -> TSharedRef<ITableRow>
 			{
 				return SNew(STableRow<TSharedPtr<FBakedItem>>, Owner)
+					.OnDragDetected_Lambda([Item](const FGeometry&, const FPointerEvent&) -> FReply
+					{
+						// Drag a baked animation onto the timeline like any animation from the Content Browser.
+						IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+						const FAssetData Data = Registry.GetAssetByObjectPath(Item->Path);
+						return Data.IsValid() ? FReply::Handled().BeginDragDrop(FAssetDragDropOp::New(Data)) : FReply::Unhandled();
+					})
 				[
 					SNew(SVerticalBox)
 					+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(4.f, 4.f, 4.f, 2.f)
@@ -1628,7 +1661,12 @@ TSharedRef<SWidget> SAnimStitchPanel::MakeBakedAssetsTab()
 				if (Selected.Num() == 0) { return nullptr; }
 				const FSoftObjectPath Path = Selected[0]->Path;
 				FMenuBuilder Menu(true, nullptr);
-				Menu.AddMenuEntry(LOCTEXT("ShowInContentBrowser", "Show in Content Browser"), FText::GetEmpty(), FSlateIcon(),
+				Menu.AddMenuEntry(LOCTEXT("BakedAddToTimeline", "Add to Timeline"), LOCTEXT("BakedAddToTimelineTip", "Append this baked animation to the end of the timeline (it must use the timeline's skeleton)"), FSlateIcon(),
+						FUIAction(FExecuteAction::CreateLambda([this, Path]()
+						{
+							if (UAnimSequence* Sequence = Cast<UAnimSequence>(Path.TryLoad())) { Timeline->AddSequencesToEnd({ Sequence }); }
+						})));
+					Menu.AddMenuEntry(LOCTEXT("ShowInContentBrowser", "Show in Content Browser"), LOCTEXT("ShowInContentBrowserTip", "Select the baked animation in the editor Content Browser"), FSlateIcon(),
 					FUIAction(FExecuteAction::CreateLambda([Path]()
 					{
 						if (UObject* Object = Path.TryLoad())
@@ -1839,7 +1877,7 @@ void SAnimStitchPanel::TogglePlayback()
 
 FReply SAnimStitchPanel::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
 {
-	if (InKeyEvent.GetKey() == EKeys::G && InKeyEvent.IsAltDown() && InKeyEvent.IsShiftDown() && !InKeyEvent.IsRepeat())
+	if (FAnimStitchShortcuts::Matches(EAnimStitchShortcut::ToggleGrid, InKeyEvent) && !InKeyEvent.IsRepeat())
 	{
 		Preview->SetShowGrid(!Preview->GetShowGrid());
 		return FReply::Handled();
@@ -1849,21 +1887,21 @@ FReply SAnimStitchPanel::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent&
 	const bool bTyping = Focused.IsValid() && (Focused->GetType() == FName("SEditableText") || Focused->GetType() == FName("SMultiLineEditableText"));
 	const bool bPlainKey = !bTyping && !InKeyEvent.IsControlDown() && !InKeyEvent.IsAltDown() && !InKeyEvent.IsShiftDown() && !InKeyEvent.IsRepeat();
 	// Enter or A: key the selected bone track(s) at the playhead (Sequencer style). Enter with nothing selected still zooms to fit.
-	if (bPlainKey && (InKeyEvent.GetKey() == EKeys::Enter || InKeyEvent.GetKey() == EKeys::A) && Timeline->AddKeyAtPlayhead())
+	if (bPlainKey && FAnimStitchShortcuts::Matches(EAnimStitchShortcut::AddKey, InKeyEvent) && Timeline->AddKeyAtPlayhead())
 	{
 		return FReply::Handled();
 	}
-	if (InKeyEvent.GetKey() == EKeys::Enter && !InKeyEvent.IsRepeat())
+	if (FAnimStitchShortcuts::Matches(EAnimStitchShortcut::ZoomToFit, InKeyEvent) && !InKeyEvent.IsRepeat())
 	{
 		Timeline->ZoomToFit();
 		return FReply::Handled();
 	}
-	if (InKeyEvent.GetKey() == EKeys::S && InKeyEvent.IsControlDown() && !InKeyEvent.IsRepeat())
+	if (FAnimStitchShortcuts::Matches(EAnimStitchShortcut::Save, InKeyEvent) && !InKeyEvent.IsRepeat())
 	{
 		Save();
 		return FReply::Handled();
 	}
-	if (InKeyEvent.GetKey() == EKeys::SpaceBar && !InKeyEvent.IsRepeat())
+	if (FAnimStitchShortcuts::Matches(EAnimStitchShortcut::PlayPause, InKeyEvent) && !InKeyEvent.IsRepeat())
 	{
 		TogglePlayback();
 		return FReply::Handled();

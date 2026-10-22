@@ -26,6 +26,7 @@
 #include "Widgets/SWindow.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Styling/AppStyle.h"
+#include "AnimStitchHelp.h"
 
 #define LOCTEXT_NAMESPACE "AnimStitch"
 
@@ -98,6 +99,7 @@ void SAnimStitchBakeDialog::Construct(const FArguments& InArgs)
 				+ SHorizontalBox::Slot().FillWidth(1.f)
 				[
 					SNew(SEditableTextBox).Text_Lambda([this]() { return FText::FromString(Name); })
+						.ToolTipText(LOCTEXT("BakeNameTip", "Name of the new animation sequence (created in the folder chosen above). An existing asset of the same name asks before it is overwritten."))
 					.OnTextChanged_Lambda([this](const FText& T) { Name = T.ToString(); })
 				]
 			]
@@ -110,6 +112,7 @@ void SAnimStitchBakeDialog::Construct(const FArguments& InArgs)
 					SNew(SBox).WidthOverride(80.f)
 					[
 						SNew(SSpinBox<int32>).MinValue(0).MaxValue(240)
+							.ToolTipText(LOCTEXT("BakeFpsTip", "Frame rate of the baked sequence. 0 uses the first clip's source rate (sources above 120 fps fall back to 30)."))
 						.Value_Lambda([this]() { return FrameRate; })
 						.OnValueChanged_Lambda([this](int32 V) { FrameRate = V; })
 					]
@@ -123,6 +126,7 @@ void SAnimStitchBakeDialog::Construct(const FArguments& InArgs)
 				+ SHorizontalBox::Slot().FillWidth(1.f)
 				[
 					SNew(SComboBox<TSharedPtr<FString>>)
+						.ToolTipText(LOCTEXT("BakeAuthorityTip", "The clip whose root motion drives the whole bake; the other clips continue from where it leaves off. Changing it is an undoable edit of the timeline."))
 					.OptionsSource(&AuthorityItems)
 					.InitiallySelectedItem(SelectedAuthority)
 					.OnGenerateWidget_Lambda([](TSharedPtr<FString> Item) { return SNew(STextBlock).Text(FText::FromString(*Item)); })
@@ -144,6 +148,7 @@ void SAnimStitchBakeDialog::Construct(const FArguments& InArgs)
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 6)
 			[
 				SNew(SCheckBox)
+					.ToolTipText(LOCTEXT("BakeOverwriteTip", "Replace an existing sequence of the same name without asking. Off: you are asked first."))
 				.IsChecked_Lambda([this]() { return bOverwrite ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
 				.OnCheckStateChanged_Lambda([this](ECheckBoxState S) { bOverwrite = S == ECheckBoxState::Checked; })
 				[
@@ -164,11 +169,16 @@ void SAnimStitchBakeDialog::Construct(const FArguments& InArgs)
 				SNew(SHorizontalBox)
 				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
 				[
-					SNew(SButton).Text(LOCTEXT("BakeButton", "Bake")).IsEnabled(this, &SAnimStitchBakeDialog::CanBake).OnClicked(this, &SAnimStitchBakeDialog::OnBake)
+					FAnimStitchHelp::MakeHelpButton(EAnimStitchHelpPage::Baking, LOCTEXT("BakeHelpTip", "Help: opens the Baking page of the online documentation in your browser"))
+					]
+					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+					[
+						SNew(SButton).Text(LOCTEXT("BakeButton", "Bake")).ToolTipText(LOCTEXT("BakeButtonTip", "Bake the timeline into the new animation sequence. If the range flags do not cover the whole timeline, only the flagged region is baked (you are asked first)."))
+						.IsEnabled(this, &SAnimStitchBakeDialog::CanBake).OnClicked(this, &SAnimStitchBakeDialog::OnBake)
 				]
 				+ SHorizontalBox::Slot().AutoWidth()
 				[
-					SNew(SButton).Text(LOCTEXT("CloseButton", "Close"))
+					SNew(SButton).Text(LOCTEXT("CloseButton", "Close")).ToolTipText(LOCTEXT("BakeCloseTip", "Close without baking"))
 					.OnClicked_Lambda([this]() { if (TSharedPtr<SWindow> W = Window.Pin()) { W->RequestDestroyWindow(); } return FReply::Handled(); })
 				]
 			]
@@ -270,20 +280,9 @@ FAnimStitchBakeOptions Options;
 
 	if (Baked)
 	{
-		FNotificationInfo Info(FText::Format(LOCTEXT("BakeDone", "Baked {0}"), FText::FromString(Baked->GetName())));
-		Info.ExpireDuration = 8.f;
-		Info.HyperlinkText = LOCTEXT("ShowInBrowser", "Show in Content Browser");
-		const TWeakObjectPtr<UAnimSequence> WeakBaked = Baked;
-		Info.Hyperlink = FSimpleDelegate::CreateLambda([WeakBaked]()
-		{
-			if (GEditor && WeakBaked.IsValid())
-			{
-				TArray<UObject*> Objects = { WeakBaked.Get() };
-				GEditor->SyncBrowserToObjects(Objects);
-			}
-		});
-		FSlateNotificationManager::Get().AddNotification(Info);
 		if (TSharedPtr<SWindow> W = Window.Pin()) { W->RequestDestroyWindow(); }
+		// Names the new asset and offers Show in Content Browser. Posted one tick later: while this modal window is still open the notification would be parented to it and vanish with it.
+		FAnimStitchBaker::NotifyBakeComplete(Baked);
 	}
 	else
 	{

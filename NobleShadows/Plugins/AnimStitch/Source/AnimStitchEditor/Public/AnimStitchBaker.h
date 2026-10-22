@@ -35,6 +35,9 @@ public:
 	/** Broadcast after every successful bake (the Baked Assets tab listens). */
 	static FSimpleMulticastDelegate& OnAssetBaked();
 
+	/** Editor UI: a notification naming the newly baked asset with a "Show in Content Browser" action (shown one tick later, so it survives a closing dialog). */
+	static void NotifyBakeComplete(UAnimSequence* Baked);
+
 	/** True if an asset package already exists at the path. */
 	static bool AssetExists(const FString& PackagePath);
 };

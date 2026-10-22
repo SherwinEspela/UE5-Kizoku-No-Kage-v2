@@ -51,6 +51,7 @@ TSharedRef<SWidget> SAnimStitchControlProperties::MakeOffsetRow(const FText& Lab
 		+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0.f, 1.f, 6.f, 1.f)
 		[
 			SNew(SSpinBox<float>).Delta(0.25f).MinFractionalDigits(1).MaxFractionalDigits(2)
+			.ToolTipText(FText::Format(LOCTEXT("OffsetRowTip", "Moves only the drawn control along {0} (cm) so overlapping shapes can be told apart. The animation is not affected."), Label))
 			.Value_Lambda([this, Axis]() { return float(GetStyle().Offset[Axis]); })
 			.OnBeginSliderMovement_Lambda([this]() { SliderTransaction = MakeShared<FScopedTransaction>(LOCTEXT("DragControlStyleTx", "Edit Control Properties")); })
 			.OnEndSliderMovement_Lambda([this](float) { SliderTransaction.Reset(); })
@@ -105,6 +106,7 @@ void SAnimStitchControlProperties::Construct(const FArguments& InArgs)
 				+ SHorizontalBox::Slot().FillWidth(1.f)
 				[
 					SNew(SSpinBox<float>).MinValue(0.02f).MaxValue(1.f).Delta(0.02f)
+					.ToolTipText(LOCTEXT("PropOpacityTip", "Opacity of this control's shape (needs the Opacity override ticked)"))
 					.IsEnabled_Lambda([this]() { return GetStyle().bOverrideOpacity; })
 					.Value_Lambda([this]() { const FAnimStitchControlStyle S = GetStyle(); return S.bOverrideOpacity ? S.Opacity : Preview->GetControlOpacity(); })
 					.OnBeginSliderMovement_Lambda([this]() { SliderTransaction = MakeShared<FScopedTransaction>(LOCTEXT("DragControlStyleTx2", "Edit Control Properties")); })
@@ -130,6 +132,7 @@ void SAnimStitchControlProperties::Construct(const FArguments& InArgs)
 				+ SHorizontalBox::Slot().FillWidth(1.f)
 				[
 					SNew(SSpinBox<float>).MinValue(0.1f).MaxValue(8.f).Delta(0.1f)
+					.ToolTipText(LOCTEXT("PropSizeTip", "Size of this control's shape (needs the Size override ticked)"))
 					.IsEnabled_Lambda([this]() { return GetStyle().bOverrideSize; })
 					.Value_Lambda([this]() { const FAnimStitchControlStyle S = GetStyle(); return S.bOverrideSize ? S.Size : Preview->GetControlDrawSize(); })
 					.OnBeginSliderMovement_Lambda([this]() { SliderTransaction = MakeShared<FScopedTransaction>(LOCTEXT("DragControlStyleTx3", "Edit Control Properties")); })
@@ -146,6 +149,7 @@ void SAnimStitchControlProperties::Construct(const FArguments& InArgs)
 				+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 2.f, 0.f)
 				[
 					SNew(SCheckBox).Style(FAppStyle::Get(), "ToggleButtonCheckbox")
+					.ToolTipText(LOCTEXT("ShapeBoxTip", "Draw this control as a box"))
 					.IsChecked_Lambda([this]() { return GetStyle().Shape == EAnimStitchControlShape::Box ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
 					.OnCheckStateChanged_Lambda([this](ECheckBoxState) { Edit([](FAnimStitchControlStyle& S) { S.Shape = EAnimStitchControlShape::Box; }); })
 					[SNew(STextBlock).Text(LOCTEXT("ShapeBox", "Box")).Margin(FMargin(10.f, 2.f))]
@@ -153,6 +157,7 @@ void SAnimStitchControlProperties::Construct(const FArguments& InArgs)
 				+ SHorizontalBox::Slot().AutoWidth()
 				[
 					SNew(SCheckBox).Style(FAppStyle::Get(), "ToggleButtonCheckbox")
+					.ToolTipText(LOCTEXT("ShapeSphereTip", "Draw this control as a sphere"))
 					.IsChecked_Lambda([this]() { return GetStyle().Shape == EAnimStitchControlShape::Sphere ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
 					.OnCheckStateChanged_Lambda([this](ECheckBoxState) { Edit([](FAnimStitchControlStyle& S) { S.Shape = EAnimStitchControlShape::Sphere; }); })
 					[SNew(STextBlock).Text(LOCTEXT("ShapeSphere", "Sphere")).Margin(FMargin(10.f, 2.f))]

@@ -19,6 +19,35 @@ struct ANIMSTITCHEDITOR_API FAnimStitchFootBones
 	FName Right;
 };
 
+/** Page slugs of the online documentation, appended to the docs base URL. The ONLY place the docs targets are defined: fix them here when the website pages land. */
+USTRUCT()
+struct ANIMSTITCHEDITOR_API FAnimStitchDocsPages
+{
+	GENERATED_BODY()
+
+	/** Landing page (empty = the base URL itself). */
+	UPROPERTY(config, EditAnywhere, Category = "Help")
+	FString Overview;
+
+	UPROPERTY(config, EditAnywhere, Category = "Help")
+	FString QuickStart = TEXT("quick-start");
+
+	UPROPERTY(config, EditAnywhere, Category = "Help")
+	FString Timeline = TEXT("timeline");
+
+	UPROPERTY(config, EditAnywhere, Category = "Help")
+	FString Baking = TEXT("baking");
+
+	UPROPERTY(config, EditAnywhere, Category = "Help")
+	FString BatchBaking = TEXT("batch-baking");
+
+	UPROPERTY(config, EditAnywhere, Category = "Help")
+	FString FootLock = TEXT("foot-lock");
+
+	UPROPERTY(config, EditAnywhere, Category = "Help")
+	FString Corrections = TEXT("corrections");
+};
+
 /** Per-user AnimStitch settings (Editor Preferences > Plugins > AnimStitch). */
 UCLASS(config = EditorPerProjectUserSettings, meta = (DisplayName = "AnimStitch"))
 class ANIMSTITCHEDITOR_API UAnimStitchSettings : public UDeveloperSettings
@@ -57,6 +86,13 @@ public:
 	/** Animation sequences baked by AnimStitch (shown in the Baked Assets tab). */
 	UPROPERTY(config)
 	TArray<FSoftObjectPath> BakedAssets;
+
+	/** Online documentation: the Help menu and the Help buttons open BaseUrl + "/" + the page slug in the browser. */
+	UPROPERTY(config, EditAnywhere, Category = "Help")
+	FString DocsBaseUrl = TEXT("https://cybermash-interactive.ca/animstitch");
+
+	UPROPERTY(config, EditAnywhere, Category = "Help")
+	FAnimStitchDocsPages DocsPages;
 
 	/** Timeline projects opened or saved most recently, newest first (Open Recent keeps 5). */
 	UPROPERTY(config)

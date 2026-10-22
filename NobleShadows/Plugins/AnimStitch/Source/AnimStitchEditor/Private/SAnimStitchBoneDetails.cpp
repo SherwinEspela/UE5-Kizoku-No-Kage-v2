@@ -112,7 +112,7 @@ TSharedRef<SWidget> SAnimStitchBoneDetails::MakeGroup(const FText& Title, ESpace
 				]
 				+ SHorizontalBox::Slot().FillWidth(1.f)
 				[
-					SNew(SEditableTextBox).IsReadOnly(true).Text_Lambda([this, Space, Part, Axis]() { return GetValue(Space, Part, Axis); })
+					SNew(SEditableTextBox).IsReadOnly(true).ToolTipText(LOCTEXT("BoneValueTip", "Read-only: this bone's transform as shown in the preview, including foot lock and manual corrections. Edit it with a bone track.")).Text_Lambda([this, Space, Part, Axis]() { return GetValue(Space, Part, Axis); })
 				]
 			];
 		}

@@ -27,12 +27,20 @@ public:
 
 	// Selection (an overlap selection refers to the crossfade INTO clip SelectedClip).
 	int32 GetSelectedClip() const { return SelectedClip; }
+	/** Shift+click builds a multi-selection of clips; the primary clip (GetSelectedClip) is one of them. */
+	bool IsClipSelected(int32 Index) const { return Asset && Asset->Timeline.Clips.IsValidIndex(Index) && (Index == SelectedClip || SelectedClipIds.Contains(Asset->Timeline.Clips[Index].ClipId)); }
+	int32 GetNumSelectedClips() const { return GetSelectedClipIndices().Num(); }
+	TArray<int32> GetSelectedClipIndices() const;
 	bool IsOverlapSelected() const { return bOverlapSelected; }
 
 	void DeleteSelected();
 	void DuplicateSelected();
 	void SetSelectedBlendCurve(EAnimStitchBlendCurve Curve);
 	void ZoomToFit();
+	/** Fits the view to the range flags: the start flag at the left edge, the end flag at the right edge (a full-span range behaves like Zoom to Fit). */
+	void ZoomToRange();
+	/** Moves the range START (bStart) or END flag to the playhead (one undo step). */
+	void SetRangeFlagToPlayhead(bool bStart);
 
 	/** Latest foot-lock analysis shown in the plant lanes (null = none). */
 	void SetPlants(TSharedPtr<const FAnimStitchFootLockResult> InPlants) { Plants = InPlants; }
@@ -63,6 +71,7 @@ public:
 	{
 		Asset = NewAsset;
 		SelectedClip = INDEX_NONE;
+		SelectedClipIds.Reset();
 		bOverlapSelected = false;
 		Playhead = 0.0;
 		OnSelectionChangedDelegate.ExecuteIfBound();
@@ -148,6 +157,7 @@ public:
 	virtual FReply OnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override;
 	virtual FReply OnMouseButtonUp(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override;
 	virtual FReply OnMouseMove(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override;
+	virtual void OnMouseLeave(const FPointerEvent& MouseEvent) override { HoverLocal = FVector2f(-1.f, -1.f); }
 	virtual FReply OnMouseWheel(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override;
 	virtual FCursorReply OnCursorQuery(const FGeometry& MyGeometry, const FPointerEvent& CursorEvent) const override;
 	virtual FReply OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent) override;
@@ -174,6 +184,9 @@ private:
 enum class EDrag : uint8 { None, Scrub, Move, TrimLeft, TrimRight, RateLeft, RateRight, Overlap, Pan, MarkerStart, MarkerEnd, FootLane, KeyMove, Marquee, Splitter, FootHandle, FootRegion };
 
 	void AddSequencesAt(const TArray<UAnimSequence*>& Sequences, int32 Index);
+	/** The custom-painted parts (clips, flags, lanes, lane buttons, keys) have no widgets of their own: one tooltip follows the hovered part. */
+	FText GetHoverTipText() const;
+	FVector2f HoverLocal = FVector2f(-1.f, -1.f);
 	bool bPendingZoomFit = false;
 	float LastFitWidth = 0.f;
 	bool IsFootLaneVisible() const { return Asset->Timeline.FootLock.bEnabled; }
@@ -271,6 +284,10 @@ enum class EDrag : uint8 { None, Scrub, Move, TrimLeft, TrimRight, RateLeft, Rat
 
 	// Selection
 	int32 SelectedClip = INDEX_NONE;
+	/** Ids of every selected clip (stable while clips are reordered). */
+	TArray<FGuid> SelectedClipIds;
+	bool bCollapseOnRelease = false;
+	void ToggleClipInSelection(int32 Index);
 	bool bOverlapSelected = false;
 
 	// Drag

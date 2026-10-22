@@ -234,6 +234,68 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 	// Phase 16 test: -P16Test with -A=<landing> -B=<run>. Absolute bone tracks (replace the animation across the keyed range, no pops, bake == evaluation)
 	// and the Root offset track (evaluated with the blend before foot lock: planted feet stay glued on the corrected path).
 	// Hotfix Set 2 test: per-channel keys and channel locks on a bone track (data level, no editor UI).
+	// Hotfix Set 3 test: absolute tracks fill new clip spans with per-frame baseline keys; clip block move / multi remove.
+	if (FParse::Param(*Params, TEXT("S3Test")))
+	{
+		int32 Fails = 0;
+		auto Check = [&Fails](bool b, const TCHAR* What) { UE_LOG(LogAnimStitchSpike, Display, TEXT("S3 %s: %s"), b ? TEXT("PASS") : TEXT("FAIL"), What); if (!b) { ++Fails; } };
+		UAnimStitchTimelineAsset* TLAsset = NewObject<UAnimStitchTimelineAsset>(GetTransientPackage());
+		TArray<FText> W;
+		TLAsset->AddSequences({ const_cast<UAnimSequence*>(A) }, INDEX_NONE, W);
+		FAnimStitchTrack Track;
+		Track.Kind = EAnimStitchTrackKind::Bone;
+		Track.Bone = TEXT("pelvis");
+		Track.Mode = EAnimStitchTrackMode::Absolute;
+		Track.bKeepFeetPlanted = false;
+		const int32 TI = TLAsset->AddTrack(Track);
+		const double OldTotal = TLAsset->Timeline.GetTotalLength();
+		// Edit a key in the old span.
+		FAnimStitchTrackKey Edit = FAnimStitchManualEdits::Sample(TLAsset->Timeline.Tracks[TI], OldTotal * 0.5);
+		Edit.Time = OldTotal * 0.5;
+		Edit.Translation += FVector(0, 0, 30);
+		TLAsset->SetTrackKey(TI, Edit);
+		const int32 EditIndex = FAnimStitchManualEdits::FindKey(TLAsset->Timeline.Tracks[TI], Edit.Time);
+		const FVector EditedT = TLAsset->Timeline.Tracks[TI].Keys[EditIndex].Translation;
+		const int32 KeysBefore = TLAsset->Timeline.Tracks[TI].Keys.Num();
+		TLAsset->AddSequences({ const_cast<UAnimSequence*>(B) }, INDEX_NONE, W);
+		const double NewTotal = TLAsset->Timeline.GetTotalLength();
+		const FAnimStitchTrack& T = TLAsset->Timeline.Tracks[TI];
+		double Rate = A->GetDataModel()->GetFrameRate().AsDecimal(); if (Rate < 1.0 || Rate > 120.0) { Rate = 30.0; }
+		int32 Uncovered = 0;
+		for (double t = OldTotal; t <= NewTotal; t += 1.0 / Rate)
+		{
+			bool bNear = false;
+			for (const FAnimStitchTrackKey& K : T.Keys) { bNear |= FMath::Abs(K.Time - t) <= 0.75 / Rate; }
+			Uncovered += bNear ? 0 : 1;
+		}
+		Check(NewTotal > OldTotal + 0.1 && T.Keys.Num() > KeysBefore + 5, TEXT("adding a clip adds per-frame keys"));
+		Check(Uncovered == 0, TEXT("no frame of the new span is without a key"));
+		Check(FAnimStitchManualEdits::FindKey(T, Edit.Time) != INDEX_NONE && T.Keys[FAnimStitchManualEdits::FindKey(T, Edit.Time)].Translation.Equals(EditedT, 1e-4), TEXT("the earlier edit is untouched"));
+		// New-span keys == evaluated underlying animation.
+		FAnimStitchEvaluator Eval; FString Err; Eval.Initialize(TLAsset->Timeline, Err);
+		const FReferenceSkeleton& Ref = Eval.GetSkeleton()->GetReferenceSkeleton();
+		const int32 Pelvis = Ref.FindBoneIndex(TEXT("pelvis"));
+		double MaxDiff = 0.0; TArray<FTransform> Pose;
+		for (const FAnimStitchTrackKey& K : T.Keys)
+		{
+			if (K.Time <= OldTotal + 0.5 / Rate) { continue; }
+			Eval.EvaluatePose(K.Time, Pose);
+			const FTransform Rel = FAnimStitchFootLock::GetComponentSpace(Ref, Pose, Pelvis).GetRelativeTransform(FAnimStitchFootLock::GetComponentSpace(Ref, Pose, 0));
+			MaxDiff = FMath::Max(MaxDiff, (Rel.GetTranslation() - K.Translation).Size());
+		}
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("S3 new-span keys vs evaluated animation: max difference %.5f cm"), MaxDiff);
+		Check(MaxDiff < 1e-3, TEXT("filled keys reproduce the new clip's motion"));
+		// Block move and multi remove.
+		TLAsset->AddSequences({ const_cast<UAnimSequence*>(A), const_cast<UAnimSequence*>(B) }, INDEX_NONE, W); // clips: A B A B
+		TLAsset->EnsureClipIds();
+		const FGuid Id0 = TLAsset->Timeline.Clips[0].ClipId, Id2 = TLAsset->Timeline.Clips[2].ClipId, Id1 = TLAsset->Timeline.Clips[1].ClipId, Id3 = TLAsset->Timeline.Clips[3].ClipId;
+		TLAsset->MoveClipBlock({ 0, 2 }, 2);
+		Check(TLAsset->Timeline.Clips[0].ClipId == Id1 && TLAsset->Timeline.Clips[1].ClipId == Id3 && TLAsset->Timeline.Clips[2].ClipId == Id0 && TLAsset->Timeline.Clips[3].ClipId == Id2, TEXT("moving clips 0 and 2 to the end keeps their order as a block"));
+		TLAsset->RemoveClips({ 0, 1, 2 });
+		Check(TLAsset->Timeline.Clips.Num() == 1 && TLAsset->Timeline.Clips[0].ClipId == Id2, TEXT("removing several clips at once leaves the right one"));
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("S3 RESULT: %d failures"), Fails);
+		return Fails;
+	}
 	if (FParse::Param(*Params, TEXT("S2Test")))
 	{
 		UAnimStitchTimelineAsset* TLAsset = NewObject<UAnimStitchTimelineAsset>(GetTransientPackage());

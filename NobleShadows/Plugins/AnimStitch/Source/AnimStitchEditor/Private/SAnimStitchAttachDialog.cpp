@@ -63,7 +63,7 @@ void SAnimStitchAttachDialog::Construct(const FArguments& InArgs)
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 3, 0)[SNew(STextBlock).Text(Label)]
 			+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0, 0, 8, 0)
 			[
-				SNew(SSpinBox<float>).Value_Lambda([&Value]() { return Value; }).OnValueChanged_Lambda([&Value](float V) { Value = V; }).OnValueCommitted_Lambda([&Value](float V, ETextCommit::Type) { Value = V; })
+				SNew(SSpinBox<float>).ToolTipText(FText::Format(LOCTEXT("AttachScaleTip", "{0} of the prop (1 = original size)"), Label)).Value_Lambda([&Value]() { return Value; }).OnValueChanged_Lambda([&Value](float V) { Value = V; }).OnValueCommitted_Lambda([&Value](float V, ETextCommit::Type) { Value = V; })
 			];
 	};
 	auto SpinD = [](double& Value, const FText& Label)
@@ -72,7 +72,7 @@ void SAnimStitchAttachDialog::Construct(const FArguments& InArgs)
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 3, 0)[SNew(STextBlock).Text(Label)]
 			+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0, 0, 8, 0)
 			[
-				SNew(SSpinBox<double>).Value_Lambda([&Value]() { return Value; }).OnValueChanged_Lambda([&Value](double V) { Value = V; }).OnValueCommitted_Lambda([&Value](double V, ETextCommit::Type) { Value = V; })
+				SNew(SSpinBox<double>).ToolTipText(FText::Format(LOCTEXT("AttachOffsetTip", "{0} offset of the prop from its socket or bone (cm / degrees)"), Label)).Value_Lambda([&Value]() { return Value; }).OnValueChanged_Lambda([&Value](double V) { Value = V; }).OnValueCommitted_Lambda([&Value](double V, ETextCommit::Type) { Value = V; })
 			];
 	};
 
@@ -85,6 +85,7 @@ void SAnimStitchAttachDialog::Construct(const FArguments& InArgs)
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 10)
 			[
 				SNew(SObjectPropertyEntryBox)
+				.ToolTipText(LOCTEXT("AttachAssetTip", "The static or skeletal mesh to show on the preview character. It is preview only and never baked."))
 				.AllowedClass(UObject::StaticClass())
 				.ObjectPath_Lambda([this]() { return AssetPath; })
 				.OnObjectChanged_Lambda([this](const FAssetData& Data) { AssetPath = Data.GetObjectPathString(); })
@@ -99,6 +100,7 @@ void SAnimStitchAttachDialog::Construct(const FArguments& InArgs)
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 10)
 			[
 				SNew(SSearchableComboBox)
+				.ToolTipText(LOCTEXT("AttachSocketTip", "The socket (or any bone) of the preview mesh the prop is attached to"))
 				.OptionsSource(&SocketItems)
 				.OnGenerateWidget_Lambda([](TSharedPtr<FString> Item) { return SNew(STextBlock).Text(FText::FromString(*Item)); })
 				.OnSelectionChanged_Lambda([this](TSharedPtr<FString> Item, ESelectInfo::Type) { SelectedSocket = Item; })
@@ -131,13 +133,13 @@ void SAnimStitchAttachDialog::Construct(const FArguments& InArgs)
 				SNew(SHorizontalBox)
 				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
 				[
-					SNew(SButton).Text(LOCTEXT("AttachButton", "Attach"))
+					SNew(SButton).Text(LOCTEXT("AttachButton", "Attach")).ToolTipText(LOCTEXT("AttachButtonTip", "Attach the prop to the preview character (needs a mesh and a socket)"))
 					.IsEnabled_Lambda([this]() { return !AssetPath.IsEmpty() && SelectedSocket.IsValid(); })
 					.OnClicked(this, &SAnimStitchAttachDialog::OnAttach)
 				]
 				+ SHorizontalBox::Slot().AutoWidth()
 				[
-					SNew(SButton).Text(LOCTEXT("AttachClose", "Close"))
+					SNew(SButton).Text(LOCTEXT("AttachClose", "Close")).ToolTipText(LOCTEXT("AttachCloseTip", "Close without attaching"))
 					.OnClicked_Lambda([this]() { if (TSharedPtr<SWindow> W = Window.Pin()) { W->RequestDestroyWindow(); } return FReply::Handled(); })
 				]
 			]

@@ -1,6 +1,7 @@
 ﻿#include "AnimStitchPreview.h"
 #include "AnimStitchPoseComponent.h"
 #include "AnimStitchManualEdits.h"
+#include "AnimStitchShortcuts.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/StaticMesh.h"
@@ -843,17 +844,17 @@ bool FAnimStitchViewportClient::InputKey(const FInputKeyEventArgs& EventArgs)
 	if (Pinned && EventArgs.Event == IE_Pressed && !EventArgs.Viewport->KeyState(EKeys::LeftControl) && !EventArgs.Viewport->KeyState(EKeys::LeftAlt) && !EventArgs.Viewport->KeyState(EKeys::LeftShift))
 	{
 		// W / E / R: translate / rotate / scale gizmo, like the standard editor widget.
-		if (EventArgs.Key == EKeys::G) { Pinned->ToggleHelpers(); return true; }
-		if (EventArgs.Key == EKeys::T) { Pinned->SetCoordSpace(Pinned->GetCoordSpace() == EAnimStitchCoordSpace::World ? EAnimStitchCoordSpace::Local : EAnimStitchCoordSpace::World); return true; }
-		if (EventArgs.Key == EKeys::F)
+		if (FAnimStitchShortcuts::Matches(EAnimStitchShortcut::ToggleHelpers, EventArgs.Key, false, false, false)) { Pinned->ToggleHelpers(); return true; }
+		if (FAnimStitchShortcuts::Matches(EAnimStitchShortcut::GizmoSpace, EventArgs.Key, false, false, false)) { Pinned->SetCoordSpace(Pinned->GetCoordSpace() == EAnimStitchCoordSpace::World ? EAnimStitchCoordSpace::Local : EAnimStitchCoordSpace::World); return true; }
+		if (FAnimStitchShortcuts::Matches(EAnimStitchShortcut::FrameSelection, EventArgs.Key, false, false, false))
 		{
 			FBox Box;
 			if (Pinned->GetFocusBox(Box)) { FocusViewportOnBox(Box, false); }
 			return true;
 		}
-		if (EventArgs.Key == EKeys::W) { Pinned->SetGizmoMode(EAnimStitchGizmoMode::Translate); return true; }
-		if (EventArgs.Key == EKeys::E) { Pinned->SetGizmoMode(EAnimStitchGizmoMode::Rotate); return true; }
-		if (EventArgs.Key == EKeys::R) { Pinned->SetGizmoMode(EAnimStitchGizmoMode::Scale); return true; }
+		if (FAnimStitchShortcuts::Matches(EAnimStitchShortcut::GizmoMove, EventArgs.Key, false, false, false)) { Pinned->SetGizmoMode(EAnimStitchGizmoMode::Translate); return true; }
+		if (FAnimStitchShortcuts::Matches(EAnimStitchShortcut::GizmoRotate, EventArgs.Key, false, false, false)) { Pinned->SetGizmoMode(EAnimStitchGizmoMode::Rotate); return true; }
+		if (FAnimStitchShortcuts::Matches(EAnimStitchShortcut::GizmoScale, EventArgs.Key, false, false, false)) { Pinned->SetGizmoMode(EAnimStitchGizmoMode::Scale); return true; }
 	}
 	return FEditorViewportClient::InputKey(EventArgs);
 }
@@ -886,11 +887,11 @@ FReply SAnimStitchViewport::OnKeyDown(const FGeometry& MyGeometry, const FKeyEve
 	if (Preview.IsValid() && !InKeyEvent.IsControlDown() && !InKeyEvent.IsAltDown() && !InKeyEvent.IsShiftDown() && !InKeyEvent.IsRepeat())
 	{
 		const FKey Key = InKeyEvent.GetKey();
-		if (Key == EKeys::W) { Preview->SetGizmoMode(EAnimStitchGizmoMode::Translate); return FReply::Handled(); }
-		if (Key == EKeys::E) { Preview->SetGizmoMode(EAnimStitchGizmoMode::Rotate); return FReply::Handled(); }
-		if (Key == EKeys::R) { Preview->SetGizmoMode(EAnimStitchGizmoMode::Scale); return FReply::Handled(); }
-		if (Key == EKeys::G) { Preview->ToggleHelpers(); return FReply::Handled(); }
-		if (Key == EKeys::T) { Preview->SetCoordSpace(Preview->GetCoordSpace() == EAnimStitchCoordSpace::World ? EAnimStitchCoordSpace::Local : EAnimStitchCoordSpace::World); return FReply::Handled(); }
+		if (FAnimStitchShortcuts::Matches(EAnimStitchShortcut::GizmoMove, Key, false, false, false)) { Preview->SetGizmoMode(EAnimStitchGizmoMode::Translate); return FReply::Handled(); }
+		if (FAnimStitchShortcuts::Matches(EAnimStitchShortcut::GizmoRotate, Key, false, false, false)) { Preview->SetGizmoMode(EAnimStitchGizmoMode::Rotate); return FReply::Handled(); }
+		if (FAnimStitchShortcuts::Matches(EAnimStitchShortcut::GizmoScale, Key, false, false, false)) { Preview->SetGizmoMode(EAnimStitchGizmoMode::Scale); return FReply::Handled(); }
+		if (FAnimStitchShortcuts::Matches(EAnimStitchShortcut::ToggleHelpers, Key, false, false, false)) { Preview->ToggleHelpers(); return FReply::Handled(); }
+		if (FAnimStitchShortcuts::Matches(EAnimStitchShortcut::GizmoSpace, Key, false, false, false)) { Preview->SetCoordSpace(Preview->GetCoordSpace() == EAnimStitchCoordSpace::World ? EAnimStitchCoordSpace::Local : EAnimStitchCoordSpace::World); return FReply::Handled(); }
 	}
 	return SEditorViewport::OnKeyDown(MyGeometry, InKeyEvent);
 }

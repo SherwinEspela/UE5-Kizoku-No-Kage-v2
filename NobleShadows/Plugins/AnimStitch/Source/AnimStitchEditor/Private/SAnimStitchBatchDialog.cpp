@@ -16,6 +16,8 @@
 #include "Widgets/Text/STextBlock.h"
 #include "Styling/AppStyle.h"
 
+#include "AnimStitchHelp.h"
+
 #define LOCTEXT_NAMESPACE "AnimStitch"
 
 void SAnimStitchBatchDialog::Show(UAnimStitchTimelineAsset* Template, TFunction<TArray<FAssetData>()> GetBrowserSelection, const FString& InitialFolder, int32 InitialFrameRate)
@@ -85,6 +87,7 @@ void SAnimStitchBatchDialog::Construct(const FArguments& InArgs)
 					+ SHorizontalBox::Slot().AutoWidth()
 					[
 						SNew(SButton).Text(LOCTEXT("ClearSlot", "Clear"))
+						.ToolTipText(LOCTEXT("ClearSlotTip", "Remove all source clips from this slot"))
 						.OnClicked_Lambda([this, k]() { SlotClips[k].Reset(); return FReply::Handled(); })
 					]
 				]
@@ -136,12 +139,14 @@ void SAnimStitchBatchDialog::Construct(const FArguments& InArgs)
 						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0, 0, 10, 0)
 						[
 							SNew(SEditableTextBox).Text_Lambda([this]() { return FText::FromString(Options.Prefix); })
+							.ToolTipText(LOCTEXT("PrefixTip", "Text put in front of every output asset name (the rest of the name comes from the source clips)"))
 							.OnTextChanged_Lambda([this](const FText& T) { Options.Prefix = T.ToString(); })
 						]
 						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)[SNew(STextBlock).Text(LOCTEXT("Suffix", "suffix"))]
 						+ SHorizontalBox::Slot().FillWidth(1.f)
 						[
 							SNew(SEditableTextBox).Text_Lambda([this]() { return FText::FromString(Options.Suffix); })
+							.ToolTipText(LOCTEXT("SuffixTip", "Text put after every output asset name"))
 							.OnTextChanged_Lambda([this](const FText& T) { Options.Suffix = T.ToString(); })
 						]
 					]
@@ -154,6 +159,7 @@ void SAnimStitchBatchDialog::Construct(const FArguments& InArgs)
 							SNew(SBox).WidthOverride(80.f)
 							[
 								SNew(SSpinBox<int32>).MinValue(0).MaxValue(240)
+								.ToolTipText(LOCTEXT("BatchFpsTip", "Frame rate of every baked output. 0 uses the first clip's source rate of each output."))
 								.Value_Lambda([this]() { return Options.FrameRate; })
 								.OnValueChanged_Lambda([this](int32 V) { Options.FrameRate = V; })
 							]
@@ -162,6 +168,7 @@ void SAnimStitchBatchDialog::Construct(const FArguments& InArgs)
 					+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
 					[
 						SNew(SCheckBox)
+						.ToolTipText(LOCTEXT("FullLengthTip", "On: each source clip plays in full. Off: the template slot's trim points are used, clamped to the source clip's length."))
 						.IsChecked_Lambda([this]() { return Options.bFullLengthForBatchSlots ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
 						.OnCheckStateChanged_Lambda([this](ECheckBoxState S) { Options.bFullLengthForBatchSlots = S == ECheckBoxState::Checked; })
 						[
@@ -183,7 +190,12 @@ void SAnimStitchBatchDialog::Construct(const FArguments& InArgs)
 					SNew(SHorizontalBox)
 					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 12, 0)
 					[
+						FAnimStitchHelp::MakeHelpButton(EAnimStitchHelpPage::BatchBaking, LOCTEXT("BatchHelpTip", "Help: opens the Batch Baking page of the online documentation in your browser"))
+					]
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 12, 0)
+					[
 						SNew(SCheckBox)
+						.ToolTipText(LOCTEXT("BatchOverwriteTip", "Replace output assets that already exist. Off: an existing output is left untouched and reported as a failure."))
 						.IsChecked_Lambda([this]() { return Options.bOverwriteExisting ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
 						.OnCheckStateChanged_Lambda([this](ECheckBoxState S) { Options.bOverwriteExisting = S == ECheckBoxState::Checked; })
 						[
@@ -192,12 +204,12 @@ void SAnimStitchBatchDialog::Construct(const FArguments& InArgs)
 					]
 					+ SHorizontalBox::Slot().AutoWidth()
 					[
-						SNew(SButton).Text(LOCTEXT("BakeAll", "Bake")).IsEnabled(this, &SAnimStitchBatchDialog::CanBake).OnClicked(this, &SAnimStitchBatchDialog::OnBake)
+						SNew(SButton).Text(LOCTEXT("BakeAll", "Bake")).ToolTipText(LOCTEXT("BakeAllTip", "Bake one output per source clip set, using this timeline as the template")).IsEnabled(this, &SAnimStitchBatchDialog::CanBake).OnClicked(this, &SAnimStitchBatchDialog::OnBake)
 					]
 				]
 				+ SHorizontalBox::Slot().AutoWidth()
 				[
-					SNew(SButton).Text(LOCTEXT("Close", "Close"))
+					SNew(SButton).Text(LOCTEXT("Close", "Close")).ToolTipText(LOCTEXT("BatchCloseTip", "Close without baking"))
 					.OnClicked_Lambda([this]() { if (TSharedPtr<SWindow> W = Window.Pin()) { W->RequestDestroyWindow(); } return FReply::Handled(); })
 				]
 			]

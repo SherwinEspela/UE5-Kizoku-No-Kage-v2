@@ -1,5 +1,7 @@
 ﻿#include "SAnimStitchTransportBar.h"
 #include "SAnimStitchTimeline.h"
+#include "AnimStitchHelp.h"
+#include "AnimStitchShortcuts.h"
 #include "AnimStitchTimelineAsset.h"
 #include "Rendering/DrawElements.h"
 #include "Styling/AppStyle.h"
@@ -165,7 +167,7 @@ void SAnimStitchTransportBar::Construct(const FArguments& InArgs)
 			+ SHorizontalBox::Slot().AutoWidth()[Button(Static("Animation.Backward_Step"), LOCTEXT("PrevKeyTip", "Previous key (of the selected track, or of all tracks)"), OnPreviousKey)]
 			+ SHorizontalBox::Slot().AutoWidth()
 			[
-				Button(TAttribute<const FSlateBrush*>::CreateLambda([IsPlaying]() { return FAppStyle::GetBrush(IsPlaying && IsPlaying() ? "Animation.Pause" : "Animation.Forward"); }), LOCTEXT("PlayPauseTip", "Play / Pause (Space)"), OnPlayPause)
+				Button(TAttribute<const FSlateBrush*>::CreateLambda([IsPlaying]() { return FAppStyle::GetBrush(IsPlaying && IsPlaying() ? "Animation.Pause" : "Animation.Forward"); }), FText::Format(LOCTEXT("PlayPauseTip", "Play / Pause ({0})"), FAnimStitchShortcuts::GetKeysText(EAnimStitchShortcut::PlayPause)), OnPlayPause)
 			]
 			+ SHorizontalBox::Slot().AutoWidth()[Button(Static("Animation.Forward_Step"), LOCTEXT("NextKeyTip", "Next key (of the selected track, or of all tracks)"), OnNextKey)]
 			+ SHorizontalBox::Slot().AutoWidth()[Button(Static("Animation.Forward_End"), LOCTEXT("GoEndTip", "Go to the end of the playback range"), OnGoToEnd)]
@@ -173,6 +175,25 @@ void SAnimStitchTransportBar::Construct(const FArguments& InArgs)
 			+ SHorizontalBox::Slot().AutoWidth().Padding(4.f, 0.f, 8.f, 0.f)
 			[
 				Button(TAttribute<const FSlateBrush*>::CreateLambda([IsLooping]() { return FAppStyle::GetBrush(IsLooping && IsLooping() ? "Animation.Loop.Enabled" : "Animation.Loop.Disabled"); }), LOCTEXT("LoopTip2", "Toggle looping of the playback range"), OnToggleLoop)
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 1.f, 0.f)
+			[
+				// Range flag placement, Sequencer style: the green start flag / red end flag jump to the playhead (they stay draggable).
+				SNew(SButton).ButtonStyle(FAppStyle::Get(), "SimpleButton").ContentPadding(FMargin(7.f, 3.f))
+				.ToolTipText(LOCTEXT("SetRangeStartTip", "Set the range START flag (green) to the playhead. Playback and Bake start here; you can still drag the flag."))
+				.OnClicked_Lambda([this]() { Timeline->SetRangeFlagToPlayhead(true); return FReply::Handled(); })
+				[
+					SNew(STextBlock).Text(LOCTEXT("SetRangeStartGlyph", "[")).Font(FAppStyle::GetFontStyle("BoldFont")).ColorAndOpacity(FLinearColor(0.35f, 0.9f, 0.4f))
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 8.f, 0.f)
+			[
+				SNew(SButton).ButtonStyle(FAppStyle::Get(), "SimpleButton").ContentPadding(FMargin(7.f, 3.f))
+				.ToolTipText(LOCTEXT("SetRangeEndTip", "Set the range END flag (red) to the playhead. Playback and Bake stop here; you can still drag the flag."))
+				.OnClicked_Lambda([this]() { Timeline->SetRangeFlagToPlayhead(false); return FReply::Handled(); })
+				[
+					SNew(STextBlock).Text(LOCTEXT("SetRangeEndGlyph", "]")).Font(FAppStyle::GetFontStyle("BoldFont")).ColorAndOpacity(FLinearColor(1.f, 0.3f, 0.3f))
+				]
 			]
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 4.f, 0.f)
 			[
@@ -226,6 +247,10 @@ void SAnimStitchTransportBar::Construct(const FArguments& InArgs)
 				[
 					SNew(STextBlock).Text_Lambda([this]() { double S, E; Timeline->GetVisibleTimeRange(S, E); return FormatTime(E); })
 				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6.f, 0.f, 0.f, 0.f)
+			[
+				FAnimStitchHelp::MakeHelpButton(EAnimStitchHelpPage::Timeline, LOCTEXT("TimelineHelpTip", "Help: opens the Timeline page of the online documentation in your browser"))
 			]
 		]
 	];
