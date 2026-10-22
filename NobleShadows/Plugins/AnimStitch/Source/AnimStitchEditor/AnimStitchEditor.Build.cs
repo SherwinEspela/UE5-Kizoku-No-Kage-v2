@@ -27,6 +27,7 @@ public class AnimStitchEditor : ModuleRules
 			"WorkspaceMenuStructure",
 			"AdvancedPreviewScene",
 			"DeveloperSettings",
+			"Json",
 			"PropertyEditor",
 			"ContentBrowser",
 			"AssetTools",

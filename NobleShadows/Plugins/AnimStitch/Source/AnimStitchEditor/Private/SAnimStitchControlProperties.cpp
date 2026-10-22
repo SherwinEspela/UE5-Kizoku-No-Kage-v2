@@ -84,6 +84,23 @@ void SAnimStitchControlProperties::Construct(const FArguments& InArgs)
 		[
 			SNew(STextBlock).AutoWrapText(true).ColorAndOpacity(FSlateColor::UseSubduedForeground())
 			.Text(LOCTEXT("ControlPropsHint", "Values you override here win over the global Show > Controls settings, for this control only."))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(8.f, 2.f)
+			[
+				SNew(SCheckBox)
+				.IsEnabled_Lambda(HasTarget)
+				.ToolTipText(LOCTEXT("ShowTrailTip", "Show this control's motion trail in the viewport (the G helper switch still hides every trail)"))
+				.IsChecked_Lambda([this]() { UAnimStitchTimelineAsset* A = nullptr; int32 T = INDEX_NONE; bool bP = false; return GetTarget(A, T, bP) && !A->Timeline.Tracks[T].bShowTrail ? ECheckBoxState::Unchecked : ECheckBoxState::Checked; })
+				.OnCheckStateChanged_Lambda([this](ECheckBoxState State)
+				{
+					UAnimStitchTimelineAsset* A = nullptr; int32 T = INDEX_NONE; bool bP = false;
+					if (!GetTarget(A, T, bP)) { return; }
+					const FScopedTransaction Tx(LOCTEXT("ShowTrailTx", "Show / Hide Motion Trail"));
+					A->SetTrackShowTrail(T, State == ECheckBoxState::Checked);
+				})
+				[
+					SNew(STextBlock).Text(LOCTEXT("ShowTrail", "Show motion trail"))
+				]
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(8.f, 2.f)
 		[

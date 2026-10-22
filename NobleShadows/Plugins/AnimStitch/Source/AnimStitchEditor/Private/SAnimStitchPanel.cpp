@@ -18,6 +18,8 @@
 #include "Framework/Docking/TabManager.h"
 #include "Framework/Docking/LayoutService.h"
 #include "Widgets/Docking/SDockTab.h"
+#include "Serialization/JsonSerializer.h"
+#include "Dom/JsonObject.h"
 #include "AnimStitchBaker.h"
 #include "AnimStitchEditorModule.h"
 #include "AssetThumbnail.h"
@@ -283,7 +285,21 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 			]
 			+ SWrapBox::Slot().Padding(0, 0, 6, 3)
 			[
-				ToggleButton(LOCTEXT("PredictFeet", "Predict Feet (experimental)"),
+				SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+					[
+						ToggleButton(LOCTEXT("GroundFeet", "Ground Feet"),
+							LOCTEXT("GroundFeetTip", "One click, whole timeline: every planted foot is seated on the ground (sole at floor height, no floating or sinking), and planted feet that are only slightly tilted (within about 25 degrees, an accident of the animation) are levelled flat while keeping their heading. Deliberate toe / heel plants keep their rotation and are only seated by height. Swinging feet are untouched. Runs after Foot Lock and before manual corrections, so manual edits still win. Click again to switch it off."),
+							[this]() { return Asset->Timeline.bGroundFeet; },
+							[this](bool bOn)
+							{
+								const FScopedTransaction Tx(LOCTEXT("GroundFeetTx", "Ground Feet"));
+								Asset->SetGroundFeet(bOn);
+							})
+					]
+					+ SHorizontalBox::Slot().AutoWidth()
+					[
+					ToggleButton(LOCTEXT("PredictFeet", "Predict Feet (experimental)"),
 					LOCTEXT("PredictFeetTip", "EXPERIMENTAL. Makes crossfades plant-aware: plants are detected on each source clip on its own, then inside every crossfade the outgoing clip's planted feet are held and the feet settle onto the incoming clip's stance. The pelvis is never moved. Works with Foot Lock (prediction first, Foot Lock cleans up). Uses the foot bones and thresholds from the Foot Lock settings."),
 					[this]() { return Asset->Timeline.bPredictFeet; },
 					[this](bool bOn)
@@ -291,6 +307,7 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 						const FScopedTransaction Tx(LOCTEXT("PredictFeetTx", "Toggle Predict Feet"));
 						Asset->SetPredictFeet(bOn);
 					})
+					]
 			]
 			+ SWrapBox::Slot().Padding(0, 0, 2, 3)
 			[
@@ -378,7 +395,10 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 					ToggleButton(LOCTEXT("RootPath", "Root Path"), LOCTEXT("RootPathTip", "Draw the root bone's path across the timeline on the ground"),
 						[this]() { return bShowRootPath; }, [this](bool b) { bShowRootPath = b; Preview->SetShowRootPath(b); })
 				]
-		]
+		];
+
+	// Second toolbar line: lives at the top of the Timeline panel.
+	TSharedRef<SVerticalBox> TimelineToolbarRows = SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight().Padding(6.f, 2.f, 6.f, 4.f)
 		[
 			SNew(SWrapBox).UseAllottedSize(true)
@@ -472,7 +492,7 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 		];
 
 	// The toolbar reflows (wraps) to whatever width its panel has, and scrolls when even that is too short.
-	ToolbarSection = SNew(SScrollBox) + SScrollBox::Slot()[ToolbarRows];
+	ToolbarSection = SNew(SBorder).BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder")).Padding(0)[ToolbarRows]; // fixed bar above the docking area (not a panel); the rows wrap to the editor width
 
 	TSharedRef<SWidget> TimelineBorder = SNew(SBorder).Padding(0)
 		[
@@ -517,6 +537,7 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 
 	// The timeline and its bottom bar (transport, time, scroll / zoom) are ONE dockable unit: they always move together.
 	TimelineSection = SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight()[TimelineToolbarRows]
 		+ SVerticalBox::Slot().FillHeight(1.f)[TimelineBorder]
 		+ SVerticalBox::Slot().AutoHeight()[TransportBar];
 
@@ -789,7 +810,7 @@ void SAnimStitchPanel::SyncPreviewToTimeline()
 
 void SAnimStitchPanel::UpdatePlantLanes(double Now)
 {
-	if (!Asset->Timeline.FootLock.bEnabled && !Asset->Timeline.bPredictFeet)
+	if (!Asset->Timeline.FootLock.bEnabled && !Asset->Timeline.bPredictFeet && !Asset->Timeline.bGroundFeet)
 	{
 		Preview->ClearCorrectedPoses();
 		Preview->ClearLockInfo();
@@ -855,6 +876,7 @@ void SAnimStitchPanel::UpdatePlantLanes(double Now)
 			{
 				FAnimStitchPinOutput PinOutput;
 				FAnimStitchFootLock::Pin(*Evaluator, Poses, *Result, &PinOutput);
+				if (Evaluator->GetTimeline().bGroundFeet) { FAnimStitchFootLock::GroundFeet(*Evaluator, Poses, *Result); }
 				FAnimStitchFootLockResult LockCopy = *Result;
 				Preview->SetLockInfo(MoveTemp(LockCopy), MoveTemp(PinOutput), AnalysisFps);
 			}
@@ -865,7 +887,12 @@ void SAnimStitchPanel::UpdatePlantLanes(double Now)
 		}
 		if (bOk)
 		{
-			Preview->SetCorrectedPoses(MoveTemp(Poses), AnalysisFps);
+			if (!Evaluator->GetTimeline().FootLock.bEnabled && Evaluator->GetTimeline().bGroundFeet)
+				{
+					const FAnimStitchFootLockResult GroundDetection = FAnimStitchFootLock::Detect(*Evaluator, Poses, AnalysisFps);
+					if (GroundDetection.bValid) { FAnimStitchFootLock::GroundFeet(*Evaluator, Poses, GroundDetection); }
+				}
+				Preview->SetCorrectedPoses(MoveTemp(Poses), AnalysisFps);
 		}
 		else
 		{
@@ -1376,26 +1403,87 @@ bool SAnimStitchPanel::bSkipLayoutPersist = false;
 
 namespace
 {
-	const FName ToolbarTabId(TEXT("AnimStitch.Toolbar"));
+	// The Toolbar used to be a dockable panel; layouts saved by older versions still name it (see StripLegacyToolbarTab).
+	const FName LegacyToolbarTabId(TEXT("AnimStitch.Toolbar"));
 	const FName ViewportTabId(TEXT("AnimStitch.Viewport"));
 	const FName TimelineTabId(TEXT("AnimStitch.Timeline"));
 	const FName InspectorTabId(TEXT("AnimStitch.Inspector"));
 	const FName AssetLibraryTabId(TEXT("AnimStitch.AssetLibrary"));
 }
 
-TSharedRef<FTabManager::FLayout> SAnimStitchPanel::MakeDefaultLayout() const
+// Removes every tab entry named TabName from the layout JSON (and stacks left empty), so layouts saved by older versions load without a missing-panel placeholder.
+static void StripTabFromJson(const TSharedPtr<FJsonObject>& Node, const FString& TabName)
 {
+	if (!Node.IsValid()) { return; }
+	const TArray<TSharedPtr<FJsonValue>>* Tabs = nullptr;
+	if (Node->TryGetArrayField(TEXT("Tabs"), Tabs))
+	{
+		TArray<TSharedPtr<FJsonValue>> Kept;
+		for (const TSharedPtr<FJsonValue>& Tab : *Tabs)
+		{
+			const TSharedPtr<FJsonObject>* TabObj = nullptr;
+			FString Id;
+			if (Tab.IsValid() && Tab->TryGetObject(TabObj) && (*TabObj)->TryGetStringField(TEXT("TabId"), Id) && Id == TabName) { continue; }
+			Kept.Add(Tab);
+		}
+		Node->SetArrayField(TEXT("Tabs"), Kept);
+		FString Foreground;
+		if (Node->TryGetStringField(TEXT("ForegroundTab"), Foreground) && Foreground == TabName) { Node->RemoveField(TEXT("ForegroundTab")); }
+	}
+	for (const TCHAR* Key : { TEXT("Nodes"), TEXT("nodes") })
+	{
+		const TArray<TSharedPtr<FJsonValue>>* Children = nullptr;
+		if (!Node->TryGetArrayField(Key, Children)) { continue; }
+		TArray<TSharedPtr<FJsonValue>> Kept;
+		for (const TSharedPtr<FJsonValue>& Child : *Children)
+		{
+			const TSharedPtr<FJsonObject>* ChildObj = nullptr;
+			if (Child.IsValid() && Child->TryGetObject(ChildObj))
+			{
+				StripTabFromJson(*ChildObj, TabName);
+				FString Type;
+				const TArray<TSharedPtr<FJsonValue>>* ChildTabs = nullptr;
+				if ((*ChildObj)->TryGetStringField(TEXT("Type"), Type) && Type == TEXT("Stack") && (*ChildObj)->TryGetArrayField(TEXT("Tabs"), ChildTabs) && ChildTabs->Num() == 0) { continue; }
+			}
+			Kept.Add(Child);
+		}
+		Node->SetArrayField(Key, Kept);
+	}
+}
+
+TSharedRef<FTabManager::FLayout> SAnimStitchPanel::StripLegacyToolbarTab(const TSharedRef<FTabManager::FLayout>& Layout) const
+{
+	const FString Text = Layout->ToString();
+	if (!Text.Contains(LegacyToolbarTabId.ToString())) { return Layout; }
+	TSharedPtr<FJsonObject> Root;
+	if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Root) || !Root.IsValid()) { return MakeDefaultLayout(); }
+	const TArray<TSharedPtr<FJsonValue>>* Areas = nullptr;
+	if (Root->TryGetArrayField(TEXT("Areas"), Areas))
+	{
+		for (const TSharedPtr<FJsonValue>& Area : *Areas)
+		{
+			const TSharedPtr<FJsonObject>* AreaObj = nullptr;
+			if (Area.IsValid() && Area->TryGetObject(AreaObj)) { StripTabFromJson(*AreaObj, LegacyToolbarTabId.ToString()); }
+		}
+	}
+	FString Out;
+	if (!FJsonSerializer::Serialize(Root.ToSharedRef(), TJsonWriterFactory<>::Create(&Out))) { return MakeDefaultLayout(); }
+	const TSharedPtr<FTabManager::FLayout> Cleaned = FTabManager::FLayout::NewFromString(Out);
+	return Cleaned.IsValid() ? Cleaned.ToSharedRef() : MakeDefaultLayout();
+}
+
+TSharedRef<FTabManager::FLayout> SAnimStitchPanel::MakeDefaultLayout() const{
 	// Layout name bumped to v3 so previously auto-saved layouts do not mask this default (author's "Default" layout).
-	return FTabManager::NewLayout("AnimStitchLayout_v3")
+	return FTabManager::NewLayout("AnimStitchLayout_v4")
 		->AddArea
 		(
 			FTabManager::NewPrimaryArea()->SetOrientation(Orient_Horizontal)
 			->Split
 			(
 				FTabManager::NewSplitter()->SetOrientation(Orient_Vertical)->SetSizeCoefficient(1.6112f)
-				->Split(FTabManager::NewStack()->SetSizeCoefficient(0.14f)->AddTab(ToolbarTabId, ETabState::OpenedTab))
-				->Split(FTabManager::NewStack()->SetSizeCoefficient(0.5253f)->AddTab(ViewportTabId, ETabState::OpenedTab))
-				->Split(FTabManager::NewStack()->SetSizeCoefficient(0.3347f)->AddTab(TimelineTabId, ETabState::OpenedTab))
+				
+				->Split(FTabManager::NewStack()->SetSizeCoefficient(0.6f)->AddTab(ViewportTabId, ETabState::OpenedTab))
+				->Split(FTabManager::NewStack()->SetSizeCoefficient(0.4f)->AddTab(TimelineTabId, ETabState::OpenedTab))
 			)
 			->Split
 			(
@@ -1422,7 +1510,7 @@ void SAnimStitchPanel::InitializeDocking(const TSharedRef<SDockTab>& Tab)
 		})).SetDisplayName(Name);
 	};
 	// The toolbar (it holds the Layout menu) and the viewport cannot be closed; the other sections can, and come back from Layout.
-	Register(ToolbarTabId, LOCTEXT("ToolbarTab", "Toolbar"), ToolbarSection, false);
+	// (the toolbar is not a tab: it is fixed above the docking area)
 	Register(ViewportTabId, LOCTEXT("ViewportTab", "Viewport"), ViewportSection, false);
 	Register(TimelineTabId, LOCTEXT("TimelineTab", "Timeline"), TimelineSection, true);
 	Register(InspectorTabId, LOCTEXT("InspectorTab", "Inspector"), InspectorSection, true);
@@ -1434,7 +1522,7 @@ void SAnimStitchPanel::InitializeDocking(const TSharedRef<SDockTab>& Tab)
 		if (!bSkipLayoutPersist) { FLayoutSaveRestore::SaveToConfig(GEditorLayoutIni, InLayout); }
 	}));
 
-	TSharedRef<FTabManager::FLayout> Layout = FLayoutSaveRestore::LoadFromConfig(GEditorLayoutIni, MakeDefaultLayout());
+	TSharedRef<FTabManager::FLayout> Layout = StripLegacyToolbarTab(FLayoutSaveRestore::LoadFromConfig(GEditorLayoutIni, MakeDefaultLayout()));
 	TSharedPtr<SWidget> Restored = TabManager->RestoreFrom(Layout, TSharedPtr<SWindow>(), false);
 	if (!Restored.IsValid())
 	{
@@ -1442,7 +1530,9 @@ void SAnimStitchPanel::InitializeDocking(const TSharedRef<SDockTab>& Tab)
 	}
 	ChildSlot
 	[
-		Restored.IsValid() ? Restored.ToSharedRef() : SNullWidget::NullWidget
+		SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight()[ToolbarSection.ToSharedRef()]
+		+ SVerticalBox::Slot().FillHeight(1.f)[Restored.IsValid() ? Restored.ToSharedRef() : SNullWidget::NullWidget]
 	];
 }
 
@@ -1524,8 +1614,9 @@ void SAnimStitchPanel::LoadSavedLayout(const FString& Name)
 {
 	const FString* Text = GetDefault<UAnimStitchSettings>()->SavedLayouts.Find(Name);
 	if (!Text) { return; }
-	const TSharedPtr<FTabManager::FLayout> Layout = FTabManager::FLayout::NewFromString(*Text);
+	TSharedPtr<FTabManager::FLayout> Layout = FTabManager::FLayout::NewFromString(*Text);
 	if (!Layout.IsValid()) { return; }
+	Layout = StripLegacyToolbarTab(Layout.ToSharedRef());
 	// The chosen layout becomes the current one (and keeps auto-saving from there): write it as the current layout, then re-open the tab.
 	bSkipLayoutPersist = true;
 	FLayoutSaveRestore::SaveToConfig(GEditorLayoutIni, Layout.ToSharedRef());
@@ -1541,7 +1632,7 @@ void SAnimStitchPanel::DeleteSavedLayout(const FString& Name)
 
 void SAnimStitchPanel::ResetLayout()
 {
-	if (FMessageDialog::Open(EAppMsgType::YesNo, LOCTEXT("ResetLayoutConfirm", "Reset all sections (toolbar, viewport, timeline, inspector, asset library) to the default layout?\n\nYour timeline stays as it is.")) != EAppReturnType::Yes)
+	if (FMessageDialog::Open(EAppMsgType::YesNo, LOCTEXT("ResetLayoutConfirm", "Reset all sections (viewport, timeline, inspector, asset library) to the default layout?\n\nYour timeline stays as it is.")) != EAppReturnType::Yes)
 	{
 		return;
 	}

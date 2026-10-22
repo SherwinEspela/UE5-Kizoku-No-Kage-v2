@@ -413,7 +413,7 @@ void SAnimStitchTimeline::PickOtherBone()
 				.Visibility_Lambda([Chosen, Mode, IsRoot]() { return Chosen->IsValid() && !IsRoot(**Chosen) && *Mode != 2 ? EVisibility::Visible : EVisibility::Collapsed; })
 				+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 3)[SNew(STextBlock).Text(LOCTEXT("TrackModeHint", "Track mode (fixed for the life of the track):"))]
 				+ SVerticalBox::Slot().AutoHeight()[TrackModeButton(LOCTEXT("ModeAdditive", "Additive: keys are offsets on the animation"), LOCTEXT("ModeAdditiveTip", "The animation keeps playing; keys add offsets to it (default)"), 0)]
-				+ SVerticalBox::Slot().AutoHeight()[TrackModeButton(LOCTEXT("ModeAbsolute", "Absolute: keys are full transforms"), LOCTEXT("ModeAbsoluteTip", "Keys hold the bone's full transform and replace the animation between the first and last key"), 1)]
+				+ SVerticalBox::Slot().AutoHeight()[TrackModeButton(LOCTEXT("ModeAbsolute", "Absolute: keys are full transforms"), LOCTEXT("ModeAbsoluteTip", "Keys hold the bone's full transform and replace the animation for the whole timeline (they interpolate between keys and hold the first / last key at the edges)"), 1)]
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 10)
 			[
@@ -461,7 +461,7 @@ void SAnimStitchTimeline::BuildCoreBoneMenu(FMenuBuilder& Menu)
 		Menu.AddSubMenu(FText::FromName(Name), FText::GetEmpty(), FNewMenuDelegate::CreateLambda([this, Name](FMenuBuilder& Choice)
 		{
 			Choice.AddMenuEntry(LOCTEXT("CoreModeAdditive", "Additive: keys are offsets on the animation"), LOCTEXT("CoreModeAdditiveTip", "The animation keeps playing and your keys add offsets on top of it (default)"), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, Name]() { AddBoneTrack(Name, false, 0, EAnimStitchTrackMode::Additive); })));
-			Choice.AddMenuEntry(LOCTEXT("CoreModeAbsolute", "Absolute: keys are full transforms"), LOCTEXT("CoreModeAbsoluteTip", "Your keys hold the bone's full transform relative to the root and replace the animation between the first and last key"), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, Name]() { AddBoneTrack(Name, false, 0, EAnimStitchTrackMode::Absolute); })));
+			Choice.AddMenuEntry(LOCTEXT("CoreModeAbsolute", "Absolute: keys are full transforms"), LOCTEXT("CoreModeAbsoluteTip", "Your keys hold the bone's full transform relative to the root and replace the animation for the whole timeline (they interpolate between keys and hold the first / last key at the edges)"), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([this, Name]() { AddBoneTrack(Name, false, 0, EAnimStitchTrackMode::Absolute); })));
 		}));
 	}
 	Menu.AddSeparator();
@@ -515,6 +515,14 @@ void SAnimStitchTimeline::OpenTrackMenu(const FPointerEvent& Event, int32 TrackI
 	Menu.AddMenuEntry(LOCTEXT("CollapseAllTracks", "Collapse All"), LOCTEXT("CollapseAllTip", "Close the value panel of every bone track"), FSlateIcon(),
 		FUIAction(FExecuteAction::CreateLambda([this]() { CollapseAllTracks(); }), FCanExecuteAction::CreateLambda([this]() { return ExpandedCount() > 0; })));
 	Menu.EndSection();
+	Menu.AddMenuEntry(LOCTEXT("ShowTrailMenu", "Show Motion Trail"), LOCTEXT("ShowTrailMenuTip", "Show or hide this control's motion trail in the viewport (the G helper switch still hides every trail)"), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateLambda([this, TrackIndex]()
+		{
+			if (!Asset->Timeline.Tracks.IsValidIndex(TrackIndex)) { return; }
+			const FScopedTransaction Tx(LOCTEXT("ShowTrailTx2", "Show / Hide Motion Trail"));
+			Asset->SetTrackShowTrail(TrackIndex, !Asset->Timeline.Tracks[TrackIndex].bShowTrail);
+		}), FCanExecuteAction(), FGetActionCheckState::CreateLambda([this, TrackIndex]() { return Asset->Timeline.Tracks.IsValidIndex(TrackIndex) && Asset->Timeline.Tracks[TrackIndex].bShowTrail ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })),
+		NAME_None, EUserInterfaceActionType::ToggleButton);
 	Menu.BeginSection("KeyClipboard", LOCTEXT("KeysSection2", "Keys"));
 	Menu.AddMenuEntry(LOCTEXT("CopyKeysMenu", "Copy Keys (Ctrl+C)"), LOCTEXT("CopyKeysTip", "Copy the selected keys (drag a rectangle over the lanes to select several)"), FSlateIcon(),
 		FUIAction(FExecuteAction::CreateLambda([this]() { CopySelectedKeys(); }), FCanExecuteAction::CreateLambda([this]() { return HasSelectedKeys(); })));

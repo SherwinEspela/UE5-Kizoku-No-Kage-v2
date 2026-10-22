@@ -14,6 +14,9 @@
 #include "UObject/SavePackage.h"
 #include "Animation/AnimData/IAnimationDataModel.h"
 #include "ReferenceSkeleton.h"
+#include "Editor.h"
+#include "Editor/Transactor.h"
+#include "ScopedTransaction.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogAnimStitchSpike, Log, All);
 
@@ -235,6 +238,282 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 	// and the Root offset track (evaluated with the blend before foot lock: planted feet stay glued on the corrected path).
 	// Hotfix Set 2 test: per-channel keys and channel locks on a bone track (data level, no editor UI).
 	// Hotfix Set 3 test: absolute tracks fill new clip spans with per-frame baseline keys; clip block move / multi remove.
+	// Hotfix Set 4 test: -S4Test. Absolute tracks interpolate / hold (never fall back to the clip); per-control trail toggle.
+	if (FParse::Param(*Params, TEXT("S4Test")))
+	{
+		int32 Fails = 0;
+		auto Check = [&Fails](bool b, const TCHAR* What) { UE_LOG(LogAnimStitchSpike, Display, TEXT("S4 %s: %s"), b ? TEXT("PASS") : TEXT("FAIL"), What); if (!b) { ++Fails; } };
+		UAnimStitchTimelineAsset* TLAsset = NewObject<UAnimStitchTimelineAsset>(GetTransientPackage());
+		TArray<FText> W;
+		TLAsset->AddSequences({ const_cast<UAnimSequence*>(B), const_cast<UAnimSequence*>(B) }, INDEX_NONE, W);
+		FAnimStitchTrack Abs; Abs.Kind = EAnimStitchTrackKind::Bone; Abs.Bone = TEXT("pelvis"); Abs.Mode = EAnimStitchTrackMode::Absolute; Abs.bKeepFeetPlanted = false;
+		const int32 AbsTrack = TLAsset->AddTrack(Abs);
+		// Two surviving keys (everything between and around them "deleted").
+		FAnimStitchTrack& AT = TLAsset->Timeline.Tracks[AbsTrack];
+		AT.Keys.Reset();
+		for (const double Time : { 0.5, 2.0 })
+		{
+			FAnimStitchTrackKey K; K.Time = Time; K.Channels = AnimStitchChannel::All;
+			K.Translation = Time < 1.0 ? FVector(0, 0, 100) : FVector(40, 0, 140);
+			AT.Keys.Add(K);
+		}
+		FAnimStitchEvaluator Eval; FString Err;
+		if (!Eval.Initialize(TLAsset->Timeline, Err)) { UE_LOG(LogAnimStitchSpike, Error, TEXT("S4: evaluator failed: %s"), *Err); return 51; }
+		const FReferenceSkeleton& Ref = Eval.GetSkeleton()->GetReferenceSkeleton();
+		const int32 Pelvis = Ref.FindBoneIndex(TEXT("pelvis"));
+		auto RelAt = [&](double Time)
+		{
+			TArray<FTransform> Pose;
+			Eval.EvaluatePose(Time, Pose);
+			FAnimStitchManualEdits::Apply(Ref, TLAsset->Timeline.Tracks, Time, Pose);
+			return FAnimStitchFootLock::GetComponentSpace(Ref, Pose, Pelvis).GetRelativeTransform(FAnimStitchFootLock::GetComponentSpace(Ref, Pose, 0)).GetTranslation();
+		};
+		const FVector Head = RelAt(0.1), Mid = RelAt(1.25), Tail = RelAt(2.8);
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("S4 head %s, middle %s, tail %s"), *Head.ToCompactString(), *Mid.ToCompactString(), *Tail.ToCompactString());
+		Check(Head.Equals(FVector(0, 0, 100), 0.01), TEXT("the head span holds the first surviving key"));
+		Check(Mid.Equals(FVector(20, 0, 120), 0.5), TEXT("the gap glides between the two surviving keys (midpoint)"));
+		Check(Tail.Equals(FVector(40, 0, 140), 0.01), TEXT("the tail span holds the last surviving key"));
+		Check(FAnimStitchManualEdits::IsActiveAt(AT, 0.0) && FAnimStitchManualEdits::IsActiveAt(AT, 3.2), TEXT("the track is active over the whole timeline"));
+
+		// Per-control trail toggle.
+		USkeletalMesh* PreviewMesh = Eval.GetSkeleton()->GetPreviewMesh(true);
+		if (!PreviewMesh) { UE_LOG(LogAnimStitchSpike, Error, TEXT("S4: no preview mesh")); return 52; }
+		FAnimStitchTrack IK; IK.Kind = EAnimStitchTrackKind::IKLimb; IK.Bone = TEXT("foot_l"); IK.bShowTrail = true;
+		const int32 IKTrack = TLAsset->AddTrack(IK);
+		for (const double Time : { 0.2, 0.6, 1.0 }) { FAnimStitchTrackKey K; K.Time = Time; K.Weight = 1.f; K.Translation = FVector(Time * 100.0, 10.0, 20.0); K.Pole = FVector(Time * 100.0, 40.0, 50.0); TLAsset->SetTrackKey(IKTrack, K); }
+		FAnimStitchTrack Root; Root.Kind = EAnimStitchTrackKind::RootOffset; Root.Bone = Ref.GetBoneName(0); Root.bShowTrail = true;
+		const int32 RootTrack = TLAsset->AddTrack(Root);
+		for (const double Time : { 0.0, 0.5, 1.0 }) { FAnimStitchTrackKey K; K.Time = Time; K.Translation = FVector(0.0, Time * 50.0, 0.0); TLAsset->SetTrackKey(RootTrack, K); }
+		TSharedRef<FAnimStitchPreview> Preview = MakeShared<FAnimStitchPreview>();
+		Preview->SetMesh(PreviewMesh);
+		Preview->SetAsset(TLAsset);
+		Preview->SetTimeline(TLAsset->Timeline);
+		const FAnimStitchControlId IKId = { EAnimStitchControlKind::IKEffector, IKTrack, INDEX_NONE };
+		const FAnimStitchControlId RootId = { EAnimStitchControlKind::Bone, RootTrack, INDEX_NONE };
+		Check(Preview->GetNumTrailKeysFor(IKId) > 0 && Preview->GetNumTrailKeysFor(RootId) > 0, TEXT("two controls show trails at once"));
+		TLAsset->SetTrackShowTrail(IKTrack, false);
+		Preview->SetManualTracks(TLAsset->Timeline.Tracks);
+		Check(Preview->GetNumTrailKeysFor(IKId) == 0 && Preview->GetNumTrailKeysFor(RootId) > 0, TEXT("switching one control's trail off leaves the other visible"));
+		Preview->ToggleHelpers();
+		Check(Preview->GetNumTrailKeysFor(RootId) == 0, TEXT("G hides every trail"));
+		Preview->ToggleHelpers();
+		Check(Preview->GetNumTrailKeysFor(RootId) > 0 && Preview->GetNumTrailKeysFor(IKId) == 0, TEXT("G restores the trails that are switched on"));
+		TLAsset->SetTrackShowTrail(IKTrack, true);
+		Preview->SetManualTracks(TLAsset->Timeline.Tracks);
+		Check(Preview->GetNumTrailKeysFor(IKId) > 0, TEXT("switching it back on shows it again"));
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("S4 RESULT: %d failures"), Fails);
+		return Fails;
+	}
+	// Phase 20 test: -P20Test with -A=<landing> -B=<run>. Ground Feet pass, motion-trail points, undo.
+	if (FParse::Param(*Params, TEXT("P20Test")))
+	{
+		int32 Fails = 0;
+		auto Check = [&Fails](bool b, const TCHAR* What) { UE_LOG(LogAnimStitchSpike, Display, TEXT("P20 %s: %s"), b ? TEXT("PASS") : TEXT("FAIL"), What); if (!b) { ++Fails; } };
+		UAnimStitchTimelineAsset* TLAsset = NewObject<UAnimStitchTimelineAsset>(GetTransientPackage());
+		TLAsset->SetFlags(RF_Transactional);
+		TArray<FText> W;
+		TLAsset->AddSequences({ const_cast<UAnimSequence*>(B), const_cast<UAnimSequence*>(B) }, INDEX_NONE, W); // a run: plenty of plants
+		TLAsset->Timeline.FootLock.HeightThreshold = 15.f;
+		TLAsset->Timeline.FootLock.VelocityThreshold = 150.f;
+		// Plants are forced with manual locks (the run clip itself barely plants): the test is of the pass, not of detection.
+		for (const int32 Foot : { 0, 1 }) { TLAsset->AddFootEvent(Foot, 0.3, EAnimStitchFootAction::Lock); TLAsset->AddFootEvent(Foot, 0.9, EAnimStitchFootAction::Unlock); }
+		TLAsset->AddFootEvent(0, 2.0, EAnimStitchFootAction::Lock); TLAsset->AddFootEvent(0, 2.6, EAnimStitchFootAction::Unlock);
+		FAnimStitchEvaluator Eval; FString Err;
+		if (!Eval.Initialize(TLAsset->Timeline, Err)) { UE_LOG(LogAnimStitchSpike, Error, TEXT("P20: evaluator failed: %s"), *Err); return 41; }
+		const FReferenceSkeleton& Ref = Eval.GetSkeleton()->GetReferenceSkeleton();
+		constexpr double Fps = 30.0;
+		const int32 NumFrames = FMath::RoundToInt(TLAsset->Timeline.GetTotalLength() * Fps) + 1;
+		TArray<TArray<FTransform>> Poses; Poses.SetNum(NumFrames);
+		for (int32 f = 0; f < NumFrames; ++f) { Eval.EvaluatePose(f / Fps, Poses[f]); }
+		const FAnimStitchFootLockResult Det = FAnimStitchFootLock::Detect(Eval, Poses, Fps);
+		Check(Det.bValid, TEXT("plant detection runs"));
+		if (!Det.bValid) { return 42; }
+
+		const TArray<FTransform>& RefPose = Ref.GetRefBonePose();
+		const double RefAnkleZ = FMath::Min(FAnimStitchFootLock::GetComponentSpace(Ref, RefPose, Det.Chains[0].Foot).GetTranslation().Z, FAnimStitchFootLock::GetComponentSpace(Ref, RefPose, Det.Chains[1].Foot).GetTranslation().Z);
+		const double FloorZ = Det.GroundZ - RefAnkleZ;
+		// Lowest sole point of a foot (foot bone + toe bones, each with the reference floor point below it).
+		auto LowestSole = [&](const TArray<FTransform>& Pose, int32 Foot)
+		{
+			double Lowest = TNumericLimits<double>::Max();
+			for (int32 Bone = Det.Chains[Foot].Foot; Bone < Ref.GetNum(); ++Bone)
+			{
+				const int32 Parent = Ref.GetParentIndex(Bone);
+				if (Bone != Det.Chains[Foot].Foot && !(Parent == Det.Chains[Foot].Foot || (Parent != INDEX_NONE && Ref.GetParentIndex(Parent) == Det.Chains[Foot].Foot))) { continue; }
+				const FTransform RefCS = FAnimStitchFootLock::GetComponentSpace(Ref, RefPose, Bone);
+				const FVector Local = RefCS.InverseTransformPosition(FVector(RefCS.GetTranslation().X, RefCS.GetTranslation().Y, 0.0));
+				Lowest = FMath::Min(Lowest, FAnimStitchFootLock::GetComponentSpace(Ref, Pose, Bone).TransformPosition(Local).Z);
+			}
+			return Lowest;
+		};
+		auto TiltDegrees = [&](const TArray<FTransform>& Pose, int32 Foot)
+		{
+			const FTransform RefCS = FAnimStitchFootLock::GetComponentSpace(Ref, RefPose, Det.Chains[Foot].Foot);
+			const FVector Up = FAnimStitchFootLock::GetComponentSpace(Ref, Pose, Det.Chains[Foot].Foot).GetRotation().RotateVector(RefCS.GetRotation().UnrotateVector(FVector::UpVector));
+			return FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(Up.Z, -1.0, 1.0)));
+		};
+		auto HeadingOf = [&](const TArray<FTransform>& Pose, int32 Foot)
+		{
+			const FTransform RefCS = FAnimStitchFootLock::GetComponentSpace(Ref, RefPose, Det.Chains[Foot].Foot);
+			const FVector Forward = FAnimStitchFootLock::GetComponentSpace(Ref, Pose, Det.Chains[Foot].Foot).GetRotation().RotateVector(RefCS.GetRotation().UnrotateVector(FVector::ForwardVector));
+			return FMath::RadiansToDegrees(FMath::Atan2(Forward.Y, Forward.X));
+		};
+		// The first sustained plant of each foot (the run has several per foot).
+		auto FindPlant = [&](int32 Foot, int32 After, int32& OutStart, int32& OutEnd)
+		{
+			for (int32 f = After; f < NumFrames; ++f)
+			{
+				if (!AnimStitchPlant::IsPlanted(Det.Mask[Foot][f])) { continue; }
+				int32 E = f; while (E + 1 < NumFrames && Det.Mask[Foot][E + 1] == Det.Mask[Foot][f]) { ++E; }
+				if (E - f >= 4) { OutStart = f; OutEnd = E; return true; }
+				f = E;
+			}
+			return false;
+		};
+		int32 LS = 0, LE = 0, RS = 0, RE = 0;
+		int32 PlantedL = 0, PlantedR = 0;
+		for (int32 f = 0; f < NumFrames; ++f) { PlantedL += AnimStitchPlant::IsPlanted(Det.Mask[0][f]); PlantedR += AnimStitchPlant::IsPlanted(Det.Mask[1][f]); }
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("P20 planted frames: left %d, right %d of %d (ground z %.2f)"), PlantedL, PlantedR, NumFrames, Det.GroundZ);
+		const bool bHavePlants = FindPlant(0, 0, LS, LE) && FindPlant(1, 0, RS, RE);
+		Check(bHavePlants, TEXT("the run has sustained plants on both feet"));
+		if (!bHavePlants) { return 43; }
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("P20 plants: left %d-%d, right %d-%d, ground z %.2f, floor z %.2f"), LS, LE, RS, RE, Det.GroundZ, FloorZ);
+
+		// Perturb: a 15 degree tilt on the left plant (accidental), a 40 degree tilt on the right plant (deliberate toe/heel), and a second left plant floating 6 cm.
+		int32 FS = 0, FE = 0;
+		const bool bHaveFloater = FindPlant(0, LE + 1, FS, FE);
+		Check(bHaveFloater, TEXT("a second left plant exists for the floating case"));
+		TArray<TArray<FTransform>> Perturbed = Poses;
+		const FTransform RefFootCS[2] = { FAnimStitchFootLock::GetComponentSpace(Ref, RefPose, Det.Chains[0].Foot), FAnimStitchFootLock::GetComponentSpace(Ref, RefPose, Det.Chains[1].Foot) };
+		// Absolute set-up: a foot at the reference (level) orientation, tilted by Degrees about the forward axis, ankle Lift cm above the ground height.
+		auto SetFoot = [&](int32 Foot, int32 From, int32 To, double Degrees, double Lift)
+		{
+			for (int32 f = From; f <= To; ++f)
+			{
+				const FVector Now = FAnimStitchFootLock::GetComponentSpace(Ref, Perturbed[f], Det.Chains[Foot].Thigh).GetTranslation(); // straight below the hip: always in reach
+				const FQuat NewRot = FQuat(FVector::ForwardVector, FMath::DegreesToRadians(Degrees)) * RefFootCS[Foot].GetRotation();
+				FAnimStitchFootLock::SolveLimb(Ref, Perturbed[f], Det.Chains[Foot], FVector(Now.X, Now.Y, Det.GroundZ + Lift), nullptr, 0.0, &NewRot);
+			}
+		};
+		SetFoot(0, LS, LE, 15.0, 3.0);
+		SetFoot(1, RS, RE, 40.0, 3.0);
+		if (bHaveFloater) { SetFoot(0, FS, FE, 0.0, 6.0); }
+		const int32 LM = (LS + LE) / 2, RM = (RS + RE) / 2, FM = (FS + FE) / 2;
+		const double HeadingBefore = HeadingOf(Perturbed[LM], 0);
+		const double RightTiltBefore = TiltDegrees(Perturbed[RM], 1);
+		const double FloaterBefore = bHaveFloater ? LowestSole(Perturbed[FM], 0) - FloorZ : 0.0;
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("P20 set-up: left tilt %.1f (want 15), right tilt %.1f (want 40), floater %.2f cm (want ~6)"), TiltDegrees(Perturbed[LM], 0), RightTiltBefore, FloaterBefore);
+		TArray<TArray<FTransform>> Untouched = Perturbed;
+		const int32 Corrected = FAnimStitchFootLock::GroundFeet(Eval, Perturbed, Det);
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("P20 ground feet: %d foot-frames corrected; left tilt %.1f -> %.1f deg, right tilt %.1f -> %.1f deg, floater height %.2f -> %.2f cm"),
+			Corrected, TiltDegrees(Untouched[LM], 0), TiltDegrees(Perturbed[LM], 0), RightTiltBefore, TiltDegrees(Perturbed[RM], 1), FloaterBefore, bHaveFloater ? LowestSole(Perturbed[FM], 0) - FloorZ : 0.0);
+		Check(Corrected > 0, TEXT("the pass corrected foot-frames"));
+		Check(TiltDegrees(Perturbed[LM], 0) < 1.0, TEXT("the 15 degree plant is levelled"));
+		Check(FMath::Abs(FMath::FindDeltaAngleDegrees(HeadingBefore, HeadingOf(Perturbed[LM], 0))) < 1.0, TEXT("levelling keeps the heading (yaw)"));
+		Check(FMath::Abs(LowestSole(Perturbed[LM], 0) - FloorZ) < 0.2, TEXT("the levelled plant sits on the floor"));
+		Check(FMath::Abs(TiltDegrees(Perturbed[RM], 1) - RightTiltBefore) < 1.0, TEXT("the 40 degree toe plant keeps its rotation"));
+		Check(FMath::Abs(LowestSole(Perturbed[RM], 1) - FloorZ) < 0.2, TEXT("the toe plant is seated by height"));
+		if (bHaveFloater)
+		{
+			Check(FloaterBefore > 3.0 && FMath::Abs(LowestSole(Perturbed[FM], 0) - FloorZ) < 0.2, TEXT("the floating plant is seated"));
+		}
+		int32 SwingChanged = 0, SwingFrames = 0;
+		for (int32 f = 0; f < NumFrames; ++f)
+		{
+			for (int32 Foot = 0; Foot < 2; ++Foot)
+			{
+				if (AnimStitchPlant::IsPlanted(Det.Mask[Foot][f])) { continue; }
+				++SwingFrames;
+				const int32 Foot0 = Det.Chains[Foot].Foot;
+				const bool bSame = Perturbed[f][Foot0].Equals(Untouched[f][Foot0], 1e-6) && Perturbed[f][Det.Chains[Foot].Calf].Equals(Untouched[f][Det.Chains[Foot].Calf], 1e-6);
+				SwingChanged += bSame ? 0 : 1;
+			}
+		}
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("P20 swing foot-frames %d, changed %d"), SwingFrames, SwingChanged);
+		Check(SwingFrames > 0 && SwingChanged == 0, TEXT("swing feet are untouched"));
+
+		// Flag + undo: one transaction, one Ctrl+Z.
+		if (GEditor && GEditor->Trans)
+		{
+			const int32 Before = GEditor->Trans->GetQueueLength();
+			{
+				const FScopedTransaction Tx(NSLOCTEXT("AnimStitch", "P20GroundTx", "Ground Feet"));
+				TLAsset->SetGroundFeet(true);
+			}
+			Check(TLAsset->Timeline.bGroundFeet && GEditor->Trans->GetQueueLength() == Before + 1, TEXT("Ground Feet is one transaction"));
+			GEditor->UndoTransaction();
+			Check(!TLAsset->Timeline.bGroundFeet, TEXT("one Ctrl+Z switches the pass back off"));
+		}
+		else { UE_LOG(LogAnimStitchSpike, Display, TEXT("P20 SKIP: no transaction buffer in this commandlet")); }
+
+		// ---- Motion trails ----
+		USkeletalMesh* PreviewMesh = Eval.GetSkeleton()->GetPreviewMesh(true);
+		if (!PreviewMesh) { UE_LOG(LogAnimStitchSpike, Error, TEXT("P20: no preview mesh")); return 44; }
+		TSharedRef<FAnimStitchPreview> Preview = MakeShared<FAnimStitchPreview>();
+		Preview->SetMesh(PreviewMesh);
+		Preview->SetAsset(TLAsset);
+		FAnimStitchTrack IK; IK.Kind = EAnimStitchTrackKind::IKLimb; IK.Bone = Ref.GetBoneName(Det.Chains[0].Foot); IK.bShowTrail = true;
+		const int32 IKTrack = TLAsset->AddTrack(IK);
+		for (const double Time : { 0.2, 0.6, 1.0 })
+		{
+			FAnimStitchTrackKey K; K.Time = Time; K.Weight = 1.f; K.Translation = FVector(Time * 100.0, 10.0, 20.0); K.Pole = FVector(Time * 100.0, 40.0, 50.0);
+			TLAsset->SetTrackKey(IKTrack, K);
+		}
+		FAnimStitchTrack Fk; Fk.Kind = EAnimStitchTrackKind::Bone; Fk.Bone = TEXT("spine_01"); Fk.bShowTrail = true;
+		const int32 FkTrack = TLAsset->AddTrack(Fk);
+		FAnimStitchTrackKey FkKey; FkKey.Time = 0.5; FkKey.Rotation = FQuat(FVector::RightVector, 0.2);
+		TLAsset->SetTrackChannelKey(FkTrack, FkKey, AnimStitchChannel::Rotation);
+		FAnimStitchTrack Root; Root.Kind = EAnimStitchTrackKind::RootOffset; Root.Bone = Ref.GetBoneName(0); Root.bShowTrail = true;
+		const int32 RootTrack = TLAsset->AddTrack(Root);
+		for (const double Time : { 0.0, 0.5, 1.0 })
+		{
+			FAnimStitchTrackKey K; K.Time = Time; K.Translation = FVector(0.0, Time * 50.0, 0.0);
+			TLAsset->SetTrackKey(RootTrack, K);
+		}
+		Preview->SetTimeline(TLAsset->Timeline);
+		Preview->SetPlayhead(0.5);
+
+		Preview->SelectControl({ EAnimStitchControlKind::IKEffector, IKTrack, INDEX_NONE });
+		int32 ActiveIKKeys = 0; for (const FAnimStitchTrackKey& K : TLAsset->Timeline.Tracks[IKTrack].Keys) { ActiveIKKeys += K.Weight > 1e-3f ? 1 : 0; }
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("P20 IK track keys %d, with IK on %d, trail points %d"), TLAsset->Timeline.Tracks[IKTrack].Keys.Num(), ActiveIKKeys, Preview->GetNumTrailKeys());
+		Check(Preview->GetNumTrailKeys() == ActiveIKKeys && Preview->GetNumTrailKeys() >= 3 && Preview->IsTrailEditable(), TEXT("selecting a foot IK target draws an editable trail with a point at each of its keys"));
+		const int32 MidKey = FAnimStitchManualEdits::FindKey(TLAsset->Timeline.Tracks[IKTrack], 0.6);
+		const int32 EndKey = FAnimStitchManualEdits::FindKey(TLAsset->Timeline.Tracks[IKTrack], 1.0);
+		const int32 NumIKKeys = TLAsset->Timeline.Tracks[IKTrack].Keys.Num();
+		const FVector MidBefore = TLAsset->Timeline.Tracks[IKTrack].Keys[MidKey].Translation;
+		const FVector EndBefore = TLAsset->Timeline.Tracks[IKTrack].Keys[EndKey].Translation;
+		const int32 Queue = (GEditor && GEditor->Trans) ? GEditor->Trans->GetQueueLength() : 0;
+		const bool bDragged = Preview->DebugDragTrailKey(Preview->FindTrailKey(0.6), FVector(0.0, 0.0, 12.0));
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("P20 trail: dragged=%d keys=%d mid %s -> %s"), bDragged, TLAsset->Timeline.Tracks[IKTrack].Keys.Num(), *MidBefore.ToCompactString(), *TLAsset->Timeline.Tracks[IKTrack].Keys[MidKey].Translation.ToCompactString());
+		const FVector MidAfter = TLAsset->Timeline.Tracks[IKTrack].Keys[MidKey].Translation;
+		Check(bDragged && MidAfter.Equals(MidBefore + FVector(0, 0, 12.0), 1e-3) && TLAsset->Timeline.Tracks[IKTrack].Keys[EndKey].Translation.Equals(EndBefore, 1e-6) && TLAsset->Timeline.Tracks[IKTrack].Keys.Num() == NumIKKeys, TEXT("dragging the mid trail point moves only that key by the drag"));
+		if (GEditor && GEditor->Trans)
+		{
+			Check(GEditor->Trans->GetQueueLength() == Queue + 1, TEXT("the trail drag is one undo transaction"));
+			GEditor->UndoTransaction();
+			Check(TLAsset->Timeline.Tracks[IKTrack].Keys[MidKey].Translation.Equals(MidBefore, 1e-3), TEXT("undo restores the key"));
+		}
+		Preview->SetManualTracks(TLAsset->Timeline.Tracks);
+		int32 PoleTrack = TLAsset->Timeline.Tracks.IndexOfByPredicate([](const FAnimStitchTrack& T) { return T.Kind == EAnimStitchTrackKind::IKPole; });
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("P20 tracks %d, ik %d, pole lane %d, fk %d, root %d"), TLAsset->Timeline.Tracks.Num(), IKTrack, PoleTrack, FkTrack, RootTrack);
+		Preview->SelectControl({ EAnimStitchControlKind::IKPole, PoleTrack != INDEX_NONE ? PoleTrack : IKTrack, INDEX_NONE });
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("P20 pole trail keys %d editable %d (lane keys %d)"), Preview->GetNumTrailKeys(), Preview->IsTrailEditable(), PoleTrack != INDEX_NONE ? TLAsset->Timeline.Tracks[PoleTrack].Keys.Num() : -1);
+		Check(Preview->GetNumTrailKeys() == NumIKKeys && Preview->IsTrailEditable(), TEXT("the pole vector has an editable trail too"));
+		Preview->SelectControl({ EAnimStitchControlKind::Bone, RootTrack, INDEX_NONE });
+		const bool bRootTrail = Preview->GetNumTrailKeys() == TLAsset->Timeline.Tracks[RootTrack].Keys.Num() && Preview->IsTrailEditable();
+		const int32 RootMid = FAnimStitchManualEdits::FindKey(TLAsset->Timeline.Tracks[RootTrack], 0.5);
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("P20 root trail keys %d editable %d (track keys %d, kind %d)"), Preview->GetNumTrailKeys(), Preview->IsTrailEditable(), TLAsset->Timeline.Tracks[RootTrack].Keys.Num(), (int32)TLAsset->Timeline.Tracks[RootTrack].Kind);
+		const FVector RootBefore = TLAsset->Timeline.Tracks[RootTrack].Keys[RootMid].Translation;
+		const bool bRootDrag = bRootTrail && Preview->DebugDragTrailKey(Preview->FindTrailKey(0.5), FVector(5.0, 0.0, 0.0));
+		Check(bRootTrail && bRootDrag && TLAsset->Timeline.Tracks[RootTrack].Keys[RootMid].Translation.Equals(RootBefore + FVector(5.0, 0, 0), 1e-3), TEXT("the Root motion offset trail is editable"));
+		Preview->SelectControl({ EAnimStitchControlKind::Bone, FkTrack, INDEX_NONE });
+		const FQuat FkRotBefore = TLAsset->Timeline.Tracks[FkTrack].Keys.Last().Rotation;
+		Check(Preview->GetNumTrailKeys() >= 1 && !Preview->IsTrailEditable(), TEXT("an FK bone draws a view-only trail"));
+		Check(Preview->FindTrailKey(0.5) != INDEX_NONE && !Preview->DebugDragTrailKey(Preview->FindTrailKey(0.5), FVector(0, 0, 10.0)) && TLAsset->Timeline.Tracks[FkTrack].Keys.Last().Rotation.Equals(FkRotBefore, 1e-6), TEXT("FK trail points refuse dragging"));
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("P20 RESULT: %d failures"), Fails);
+		return Fails;
+	}
+
 	if (FParse::Param(*Params, TEXT("S3Test")))
 	{
 		int32 Fails = 0;
@@ -462,7 +741,7 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 			if (!BakeAll(TEXT("AS_P16LockBase"), LockBase)) { return 64; }
 			FAnimStitchTrack Root;
 			Root.Kind = EAnimStitchTrackKind::RootOffset;
-			Root.Bone = Ref.GetBoneName(0);
+			Root.Bone = Ref.GetBoneName(0); Root.bShowTrail = true;
 			const int32 RI = TLAsset->AddTrack(Root);
 			const int32 RI2 = TLAsset->AddTrack(Root); // a second one is refused
 			FAnimStitchTrackKey End;

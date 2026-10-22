@@ -118,6 +118,7 @@ void FAnimStitchPreview::SetCorrectedPoses(TArray<TArray<FTransform>>&& Poses, d
 {
 	CorrectedPoses = MoveTemp(Poses);
 	CorrectedFps = Fps;
+	bTrailDirty = true;
 	SetPlayhead(Playhead);
 }
 
@@ -180,6 +181,8 @@ void FAnimStitchPreview::RebuildComponents()
 void FAnimStitchPreview::RebuildDerivedData()
 {
 	TrajectoryPoints.Reset();
+	TrajectoryBase.Reset();
+	bTrailDirty = true;
 	GhostPoses.Reset();
 
 	if (bEvaluatorValid && Mesh && Mesh->GetSkeleton() != Evaluator.GetSkeleton())
@@ -220,6 +223,13 @@ void FAnimStitchPreview::RebuildDerivedData()
 	for (double T = 0.0; T < Length + 0.5 / TrajectoryRate; T += 1.0 / TrajectoryRate)
 	{
 		TrajectoryPoints.Add(Evaluator.EvaluateRoot(FMath::Min(T, Length)).GetTranslation());
+		// The same point without the Root offset track: the root-offset motion trail adds the live offset on top.
+		FVector Base = TrajectoryPoints.Last();
+		for (const FAnimStitchTrack& Track : TL.Tracks)
+		{
+			if (Track.Kind == EAnimStitchTrackKind::RootOffset && Track.Keys.Num() > 0) { Base -= FAnimStitchManualEdits::Sample(Track, FMath::Min(T, Length)).Translation; break; }
+		}
+		TrajectoryBase.Add(Base);
 	}
 
 	const int32 NumJoins = FMath::Min(TL.Clips.Num() - 1, MaxGhostJoins);
@@ -272,7 +282,7 @@ void FAnimStitchPreview::SetPlayhead(double Time)
 	if (IsReady() && MainComponent)
 	{
 		TArray<FTransform> Pose;
-		if (CorrectedPoses.Num() > 1 && (Evaluator.GetTimeline().FootLock.bEnabled || Evaluator.GetTimeline().bPredictFeet))
+		if (CorrectedPoses.Num() > 1 && (Evaluator.GetTimeline().FootLock.bEnabled || Evaluator.GetTimeline().bPredictFeet || Evaluator.GetTimeline().bGroundFeet))
 		{
 			// Foot lock is on: play the corrected frames, interpolated between the two nearest.
 			const double Position = FMath::Clamp(Time * CorrectedFps, 0.0, double(CorrectedPoses.Num() - 1));
@@ -544,6 +554,7 @@ void FAnimStitchPreview::Draw(const FSceneView* View, FPrimitiveDrawInterface* P
 	if (View)
 	{
 		DrawControls(*View, PDI);
+		DrawTrail(*View, PDI);
 	}
 	if (bHelpersVisible && AttachmentComponents.IsValidIndex(SelectedAttachment) && AttachmentComponents[SelectedAttachment])
 	{
@@ -777,7 +788,12 @@ void FAnimStitchViewportClient::ProcessClick(FSceneView& View, HHitProxy* HitPro
 	}
 	if (const TSharedPtr<FAnimStitchPreview> Pinned = Preview.Pin())
 	{
-		// Control shapes first, then bones.
+		// Motion-trail key points belong to the selected control: clicking one never deselects it (FK trail points just refuse to drag).
+			if (Pinned->PickTrailKey(View, FVector2D(HitX, HitY)) != INDEX_NONE && !Pinned->PickControl(View, FVector2D(HitX, HitY)).IsValid())
+			{
+				return;
+			}
+			// Control shapes first, then bones.
 		const FAnimStitchControlId Control = Pinned->PickControl(View, FVector2D(HitX, HitY));
 		if (Control.IsValid())
 		{
@@ -827,7 +843,7 @@ bool FAnimStitchViewportClient::InputKey(const FInputKeyEventArgs& EventArgs)
 			FSceneViewFamilyContext Family(FSceneViewFamily::ConstructionValues(EventArgs.Viewport, GetScene(), EngineShowFlags).SetRealtimeUpdate(true));
 			if (FSceneView* View = CalcSceneView(&Family))
 			{
-				if (Pinned->BeginGizmoDrag(*View, FVector2D(EventArgs.Viewport->GetMouseX(), EventArgs.Viewport->GetMouseY())))
+				if (Pinned->BeginGizmoDrag(*View, FVector2D(EventArgs.Viewport->GetMouseX(), EventArgs.Viewport->GetMouseY())) || Pinned->BeginTrailDrag(*View, FVector2D(EventArgs.Viewport->GetMouseX(), EventArgs.Viewport->GetMouseY())))
 				{
 					bGizmoDrag = true;
 					return true; // the viewport must not orbit while a gizmo handle is dragged

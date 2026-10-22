@@ -201,6 +201,23 @@ public:
 	EAnimStitchGizmoMode GetGizmoMode() const { return GizmoMode; }
 	void DrawControls(const FSceneView& View, FPrimitiveDrawInterface* PDI) const;
 
+	// ---- Motion trails (Phase 20) ----
+	/** The selected control's evaluated path with a point at every key; follows the G helper toggle. */
+	void DrawTrail(const FSceneView& View, FPrimitiveDrawInterface* PDI) const;
+	/** Trail key point under the cursor (index into the trail's points), or INDEX_NONE. */
+	int32 PickTrailKey(const FSceneView& View, const FVector2D& Pixel) const;
+	/** Draggable trail (IK target, pole, root offset) as opposed to a display-only FK bone trail. */
+	bool IsTrailEditable() const;
+	/** Press on an editable trail point: starts moving that key (one undo transaction until EndGizmoDrag). */
+	bool BeginTrailDrag(const FSceneView& View, const FVector2D& Pixel);
+	int32 GetNumTrailKeys() const;
+	/** Trail points currently shown for one control (0 when its trail is switched off or helpers are hidden with G). */
+	int32 GetNumTrailKeysFor(const FAnimStitchControlId& Id) const;
+	/** Trail point at (nearly) this key time, or INDEX_NONE. */
+	int32 FindTrailKey(double Time) const;
+	/** Test hook: moves one trail point by Translation through the same path as dragging it (opens and closes the transaction). */
+	bool DebugDragTrailKey(int32 TrailKey, const FVector& Translation);
+
 	/** Gizmo dragging: Begin returns true if the press hit a gizmo handle (the viewport must then not orbit). */
 	bool BeginGizmoDrag(const FSceneView& View, const FVector2D& Pixel);
 	void UpdateGizmoDrag(const FSceneView& View, const FVector2D& Pixel);
@@ -305,6 +322,8 @@ private:
 		FVector StartVector = FVector::ZeroVector;
 		FVector2D StartPixel = FVector2D::ZeroVector;
 		FVector LastTranslation = FVector::ZeroVector;
+		/** Dragging a motion-trail key point (screen-plane move) instead of a gizmo handle. */
+		bool bTrail = false;
 		FQuat LastRotation = FQuat::Identity;
 		FVector Axes[3] = { FVector::ForwardVector, FVector::RightVector, FVector::UpVector };
 	} Drag;
@@ -313,6 +332,17 @@ private:
 	int32 DragUpdates = 0;
 	int32 DragWrites = 0;
 	TArray<FVector> TrajectoryPoints;
+	/** TrajectoryPoints without the Root offset track (so the root-offset trail can follow live edits). */
+	TArray<FVector> TrajectoryBase;
+	struct FTrailKey { FAnimStitchControlId Control; bool bEditable = false; int32 KeyIndex = INDEX_NONE; double Time = 0.0; FVector Pos = FVector::ZeroVector; };
+	struct FTrailSegment { FAnimStitchControlId Control; bool bEditable = false; TArray<FVector> Points; };
+	void BuildTrailFor(const FAnimStitchControlId& Id) const;
+	void RebuildTrail() const;
+	bool IsHeavyTrail() const;
+	bool StartTrailDrag(int32 TrailKey, const FVector& StartHit, const FVector2D& Pixel);
+	mutable bool bTrailDirty = true;
+	mutable TArray<FTrailSegment> TrailSegments;
+	mutable TArray<FTrailKey> TrailKeys;
 	/** Samples per second of TrajectoryPoints (= the timeline's frame rate: one point per frame). */
 	double TrajectoryRate = 30.0;
 	/** One pose per ghost component (outgoing, incoming, outgoing, ...). */

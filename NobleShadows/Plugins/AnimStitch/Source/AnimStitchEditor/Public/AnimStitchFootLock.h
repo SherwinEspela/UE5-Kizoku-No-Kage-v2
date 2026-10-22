@@ -55,6 +55,13 @@ struct ANIMSTITCHEDITOR_API FAnimStitchFootLockResult
 	TArray<FIntPoint> PinEvent[2];
 };
 
+/** Ground Feet pass tuning. */
+namespace AnimStitchGroundFeet
+{
+	/** A plant whose average tilt (pitch/roll from level) is within this many degrees is an accidental tilt and is levelled; beyond it (toe / heel plants) the rotation is kept. */
+	constexpr double AccidentalTiltDegrees = 25.0;
+}
+
 /** Extra results of FAnimStitchFootLock::Pin. */
 struct ANIMSTITCHEDITOR_API FAnimStitchPinOutput
 {
@@ -105,6 +112,13 @@ public:
 
 	/** Pins planted feet by solving the legs; modifies Poses in place. Returns the number of corrected foot-frames. */
 	static int32 Pin(const class FAnimStitchEvaluator& Evaluator, TArray<TArray<FTransform>>& Poses, const FAnimStitchFootLockResult& Detection, FAnimStitchPinOutput* Output = nullptr);
+
+	/**
+	 * Ground Feet pass: for every planted foot (Detection must come from Detect on the same poses) seats the sole on the ground plane and, when the
+	 * plant counts as accidentally tilted (AnimStitchGroundFeet::AccidentalTiltDegrees), levels pitch/roll while keeping the heading. Plants tilted
+	 * beyond that keep their rotation and are only seated by height. Swing feet are untouched. Edges ease in like foot lock. Returns the number of corrected foot-frames.
+	 */
+	static int32 GroundFeet(const class FAnimStitchEvaluator& Evaluator, TArray<TArray<FTransform>>& Poses, const FAnimStitchFootLockResult& Detection, double TiltToleranceDegrees = AnimStitchGroundFeet::AccidentalTiltDegrees);
 
 	/**
 	 * Two-bone IK for one limb (thigh/calf/foot or upper arm/forearm/hand): moves the effector to DesiredEffector, keeping segment lengths

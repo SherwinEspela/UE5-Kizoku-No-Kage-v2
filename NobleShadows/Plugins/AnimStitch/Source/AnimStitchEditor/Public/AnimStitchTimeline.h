@@ -258,6 +258,10 @@ struct ANIMSTITCHEDITOR_API FAnimStitchTrack
 	UPROPERTY()
 	EAnimStitchTrackMode Mode = EAnimStitchTrackMode::Additive;
 
+	/** Show this control's motion trail in the viewport. Off by default; G, the master helper switch, still hides all trails. */
+	UPROPERTY()
+	bool bShowTrail = false;
+
 	/** Tracks created together as the FK joints of one limb share a group (0 = none). */
 	UPROPERTY()
 	int32 GroupId = 0;
@@ -364,6 +368,10 @@ struct ANIMSTITCHEDITOR_API FAnimStitchTimeline
 	/** EXPERIMENTAL: make crossfades plant-aware (pre-blend foot prediction). Uses the foot bones/thresholds of FootLock. */
 	UPROPERTY()
 	bool bPredictFeet = false;
+
+	/** Ground Feet pass: every planted foot is seated on the ground plane (and levelled when its tilt is accidental). Runs after foot lock, before manual corrections. */
+	UPROPERTY()
+	bool bGroundFeet = false;
 
 	/** Smallest allowed clip length after trimming. */
 	static constexpr double MinClipDuration = 0.05;

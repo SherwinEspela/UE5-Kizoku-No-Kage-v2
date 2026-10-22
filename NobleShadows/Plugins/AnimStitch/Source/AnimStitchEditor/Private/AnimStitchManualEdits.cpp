@@ -119,7 +119,6 @@ uint8 FAnimStitchManualEdits::GetEditableChannels(const FAnimStitchTrack& Track)
 
 uint8 FAnimStitchManualEdits::GetActiveChannels(const FAnimStitchTrack& Track, double Time)
 {
-	constexpr double Eps = 1e-6;
 	uint8 Mask = 0;
 	for (const uint8 Bit : { AnimStitchChannel::Translation, AnimStitchChannel::Rotation, AnimStitchChannel::Scale })
 	{
@@ -131,7 +130,8 @@ uint8 FAnimStitchManualEdits::GetActiveChannels(const FAnimStitchTrack& Track, d
 			Last = FMath::Max(Last, K.Time);
 		}
 		if (First > Last) { continue; } // this channel has no keys
-		if (Track.Mode != EAnimStitchTrackMode::Absolute || (Time >= First - Eps && Time <= Last + Eps)) { Mask |= Bit; }
+		// An absolute track owns its bone: a channel with any key is active on the whole timeline. Between keys it interpolates, before the first / after the last it holds that key.
+		Mask |= Bit;
 	}
 	return Mask;
 }

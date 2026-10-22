@@ -367,6 +367,12 @@ void UAnimStitchTimelineAsset::SetTrim(int32 Index, double NewTrimIn, double New
 	FillAbsoluteTracks(); // an extended clip adds timeline span
 }
 
+void UAnimStitchTimelineAsset::SetGroundFeet(bool bGround)
+{
+	Touch();
+	Timeline.bGroundFeet = bGround;
+}
+
 void UAnimStitchTimelineAsset::SetPredictFeet(bool bPredict)
 {
 	Touch();
@@ -772,6 +778,13 @@ void UAnimStitchTimelineAsset::SetTrackControlStyle(int32 TrackIndex, bool bPole
 		TouchManual();
 		(bPole ? Timeline.Tracks[TrackIndex].PoleStyle : Timeline.Tracks[TrackIndex].ControlStyle) = Style;
 	}
+}
+
+void UAnimStitchTimelineAsset::SetTrackShowTrail(int32 TrackIndex, bool bShow)
+{
+	if (!Timeline.Tracks.IsValidIndex(TrackIndex)) { return; }
+	TouchManual();
+	Timeline.Tracks[TrackIndex].bShowTrail = bShow;
 }
 
 void UAnimStitchTimelineAsset::SetPreviewAttachmentVisible(int32 Index, bool bVisible)

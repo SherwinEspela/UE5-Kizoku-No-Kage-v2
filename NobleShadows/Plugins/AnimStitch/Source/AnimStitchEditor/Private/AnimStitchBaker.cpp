@@ -130,8 +130,9 @@ const double Length = Timeline.GetTotalLength();
 	// Foot lock rewrites the leg bones, so they need tracks even if no source animates them.
 	const bool bFootLock = Timeline.FootLock.bEnabled;
 	const bool bPredict = Timeline.bPredictFeet;
+	const bool bGroundFeet = Timeline.bGroundFeet;
 	const bool bManual = Timeline.Tracks.Num() > 0;
-	const bool bKeepPoses = bFootLock || bPredict || bManual;
+	const bool bKeepPoses = bFootLock || bPredict || bGroundFeet || bManual;
 	// Manual corrections change these bones even if no source animates them.
 	for (const FAnimStitchTrack& Track : Timeline.Tracks)
 	{
@@ -168,7 +169,7 @@ const double Length = Timeline.GetTotalLength();
 		}
 		TrackBones.Sort();
 	}
-	if (bFootLock || bPredict)
+	if (bFootLock || bPredict || bGroundFeet)
 	{
 		FName Left, Right;
 		FAnimStitchFootLock::ResolveFootBones(Evaluator.GetSkeleton(), Timeline.FootLock, Left, Right);
@@ -249,6 +250,18 @@ FScopedSlowTask Task(FullFrames + 3, LOCTEXT("BakeProgress", "Baking AnimStitch 
 			}
 			UE_LOG(LogTemp, Display, TEXT("AnimStitch foot prediction: %d crossfade(s), %d foot-frames moved, %d released by reach."), Report.Overlaps, Report.PinnedFootFrames, Report.ReachReleasedFrames);
 		}
+		if (bGroundFeet && !bFootLock)
+		{
+				// Ground Feet without foot lock: plants are still detected (never pinned), then seated / levelled.
+				const FAnimStitchFootLockResult GroundDetection = FAnimStitchFootLock::Detect(Evaluator, FramePoses, FrameRate.AsDecimal());
+				if (!GroundDetection.bValid)
+				{
+					OutError = GroundDetection.Problem.ToString();
+					return nullptr;
+				}
+				const int32 Grounded = FAnimStitchFootLock::GroundFeet(Evaluator, FramePoses, GroundDetection);
+				UE_LOG(LogTemp, Display, TEXT("AnimStitch ground feet: %d foot-frames grounded."), Grounded);
+			}
 		if (bFootLock)
 		{
 			// Post-blend correction: detect plants, pin them, solve the legs, then write the corrected transforms.
@@ -260,6 +273,7 @@ FScopedSlowTask Task(FullFrames + 3, LOCTEXT("BakeProgress", "Baking AnimStitch 
 			}
 			const int32 Corrected = FAnimStitchFootLock::Pin(Evaluator, FramePoses, Detection);
 			UE_LOG(LogTemp, Display, TEXT("AnimStitch foot lock: %d foot-frames pinned (ground z %.2f)."), Corrected, Detection.GroundZ);
+				if (bGroundFeet) { FAnimStitchFootLock::GroundFeet(Evaluator, FramePoses, Detection); }
 		}
 		if (bManual)
 		{

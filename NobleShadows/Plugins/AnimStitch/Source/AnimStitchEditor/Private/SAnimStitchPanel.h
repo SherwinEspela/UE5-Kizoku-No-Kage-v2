@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "Widgets/SCompoundWidget.h"
@@ -70,6 +70,7 @@ private:
 	void LoadSavedLayout(const FString& Name);
 	void DeleteSavedLayout(const FString& Name);
 	TSharedRef<FTabManager::FLayout> MakeDefaultLayout() const;
+	TSharedRef<FTabManager::FLayout> StripLegacyToolbarTab(const TSharedRef<FTabManager::FLayout>& Layout) const;
 	TSharedRef<SWidget> MakeLayoutMenu();
 	void ResetLayout();
 	TSharedPtr<SWidget> ViewportSection, ToolbarSection, TimelineSection, InspectorSection, AssetLibrarySection;

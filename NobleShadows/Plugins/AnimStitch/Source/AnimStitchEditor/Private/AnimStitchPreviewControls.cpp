@@ -113,6 +113,7 @@ namespace
 void FAnimStitchPreview::SetManualTracks(const TArray<FAnimStitchTrack>& Tracks)
 {
 	ManualTracks = Tracks;
+	bTrailDirty = true;
 	if (SelectedControl.IsValid() && SelectedControl.Kind != EAnimStitchControlKind::LockPin && !ManualTracks.IsValidIndex(SelectedControl.A))
 	{
 		SelectControl(FAnimStitchControlId());
@@ -140,6 +141,7 @@ void FAnimStitchPreview::SelectControl(const FAnimStitchControlId& Id)
 	if (!(SelectedControl == Id))
 	{
 		SelectedControl = Id;
+		bTrailDirty = true;
 		OnControlSelectionChanged.Broadcast();
 		RequestRedraw();
 	}
@@ -187,7 +189,7 @@ void FAnimStitchPreview::BuildControls(TArray<FAnimStitchControl>& Out) const
 		// While dragging, the control follows the drag itself (not the pose), so it moves with the cursor every frame.
 		for (FAnimStitchControl& C : Out)
 		{
-			if (C.Id == Drag.Control.Id && C.Id.Kind != EAnimStitchControlKind::LockPin)
+			if (C.Id == Drag.Control.Id && C.Id.Kind != EAnimStitchControlKind::LockPin && !Drag.bTrail)
 			{
 				C.Position = Drag.Control.Position + Drag.LastTranslation;
 				C.Orientation = (Drag.LastRotation * Drag.Control.Orientation).GetNormalized();
@@ -738,10 +740,31 @@ bool FAnimStitchPreview::BeginGizmoDrag(const FSceneView& View, const FVector2D&
 	return true;
 }
 
+bool FAnimStitchPreview::BeginTrailDrag(const FSceneView& View, const FVector2D& Pixel)
+{
+	if (!bHelpersVisible || Drag.bActive || !Asset.IsValid()) { return false; }
+	const int32 Hit = PickTrailKey(View, Pixel);
+	if (Hit == INDEX_NONE || !TrailKeys[Hit].bEditable) { return false; } // display-only (FK bone) trail points refuse dragging
+	FVector RayOrigin, RayDir, StartHit;
+	Deproject(View, Pixel, RayOrigin, RayDir);
+	if (!RayPlane(RayOrigin, RayDir, TrailKeys[Hit].Pos, View.GetViewDirection(), StartHit)) { return false; }
+	return StartTrailDrag(Hit, StartHit, Pixel);
+}
+
 void FAnimStitchPreview::UpdateGizmoDrag(const FSceneView& View, const FVector2D& Pixel)
 {
 	if (!Drag.bActive) { return; }
 	++DragUpdates;
+	if (Drag.bTrail)
+	{
+		FVector TrailOrigin, TrailDir, TrailHit;
+		Deproject(View, Pixel, TrailOrigin, TrailDir);
+		FVector TrailMove = FVector::ZeroVector;
+		if (RayPlane(TrailOrigin, TrailDir, Drag.StartRayHit, View.GetViewDirection(), TrailHit)) { TrailMove = TrailHit - Drag.StartRayHit; }
+		Drag.LastTranslation = TrailMove;
+		ApplyControlEdit(TrailMove, FQuat::Identity, FVector::OneVector);
+		return;
+	}
 	const FAnimStitchControl& C = Drag.Control;
 	const FVector P = C.Position + C.Offset;
 	EAnimStitchGizmoMode Mode = GizmoMode;
@@ -873,6 +896,7 @@ void FAnimStitchPreview::EndGizmoDrag()
 		FSlateThrottleManager::Get().LeaveResponsiveMode(DragThrottle);
 	}
 	Drag.bActive = false;
+	bTrailDirty = true; // rebuild once the edit is done
 	DragTransaction.Reset(); // closes the undo transaction
 }
 
@@ -938,6 +962,7 @@ void FAnimStitchPreview::ApplyControlEdit(const FVector& Translation, const FQua
 	++DragWrites;
 	// Show the result right now (the panel would only pick the change up on its next tick).
 	ManualTracks = AssetPtr->Timeline.Tracks;
+	bTrailDirty = true;
 	SetPlayhead(Playhead);
 }
 

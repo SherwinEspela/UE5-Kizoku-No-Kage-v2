@@ -62,6 +62,8 @@ void SetTrim(int32 Index, double NewTrimIn, double NewTrimOut);
 
 	void SetFootLockSettings(const FAnimStitchFootLockSettings& Settings);
 	void SetPredictFeet(bool bPredict);
+	/** Switches the Ground Feet pass on / off (one undoable change; the whole timeline is re-grounded). */
+	void SetGroundFeet(bool bGround);
 	/** Adds a manual foot event at a timeline time (replacing an event at the same moment). It applies from there forward. */
 	void AddFootEvent(int32 Foot, double TimelineTime, EAnimStitchFootAction Action);
 	/** Drag-paint: Lock at TimelineStart and an explicit Unlock at TimelineEnd; events in between are replaced. */
@@ -92,6 +94,8 @@ void SetTrim(int32 Index, double NewTrimIn, double NewTrimOut);
 	void SetTrackKeepFeet(int32 Track, bool bKeep);
 	/** Sets the per-control look of a track (bPole = the IK pole control, otherwise the bone control / effector). */
 	void SetTrackControlStyle(int32 Track, bool bPole, const FAnimStitchControlStyle& Style);
+	/** Shows / hides the motion trail of a track's control(s). */
+	void SetTrackShowTrail(int32 Track, bool bShow);
 	/** Moves one manual foot-lock event (the start or end handle of a locked region) to another timeline time, keeping its action and pin offset. */
 	void MoveFootEvent(int32 Foot, double FromTime, double ToTime);
 	/** Moves the pin of a manual foot lock (free IK target). */

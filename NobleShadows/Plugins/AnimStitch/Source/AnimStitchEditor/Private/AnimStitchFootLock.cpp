@@ -324,6 +324,120 @@ FTransform FAnimStitchFootLock::GetComponentSpace(const FReferenceSkeleton& RefS
 	return ComponentSpace(RefSkeleton, LocalPose, Bone);
 }
 
+int32 FAnimStitchFootLock::GroundFeet(const FAnimStitchEvaluator& Evaluator, TArray<TArray<FTransform>>& Poses, const FAnimStitchFootLockResult& Detection, double TiltToleranceDegrees)
+{
+	if (!Detection.bValid || Poses.Num() == 0)
+	{
+		return 0;
+	}
+	const FAnimStitchFootLockSettings& S = Evaluator.GetTimeline().FootLock;
+	const FReferenceSkeleton& Ref = Evaluator.GetSkeleton()->GetReferenceSkeleton();
+	const TArray<FTransform>& RefPose = Ref.GetRefBonePose();
+	const int32 NumFrames = Poses.Num();
+	const int32 BlendFrames = FMath::Max(1, FMath::RoundToInt(S.BlendTime * Detection.Fps));
+	const double TiltLimit = FMath::DegreesToRadians(TiltToleranceDegrees);
+
+	// The floor: the ankle sits RefAnkleZ above the sole in the reference pose, and Detection.GroundZ is the height the ankle counts as grounded at.
+	const double RefAnkleZ = FMath::Min(ComponentSpace(Ref, RefPose, Detection.Chains[0].Foot).GetTranslation().Z, ComponentSpace(Ref, RefPose, Detection.Chains[1].Foot).GetTranslation().Z);
+	const double FloorZ = Detection.GroundZ - RefAnkleZ;
+
+	int32 Corrected = 0;
+	for (int32 Foot = 0; Foot < 2; ++Foot)
+	{
+		const FAnimStitchFootChain& Chain = Detection.Chains[Foot];
+		const TArray<uint8>& Mask = Detection.Mask[Foot];
+		if (!Chain.IsValid() || Mask.Num() != NumFrames) { continue; }
+
+		// Sole contact points: the foot bone and its toe bones, each with the point straight below it on the reference floor, kept in the bone local space.
+		struct FContact { int32 Bone; FVector LocalSole; };
+		TArray<FContact> Contacts;
+		const FTransform RefFootCS = ComponentSpace(Ref, RefPose, Chain.Foot);
+		bool bHaveForward = false;
+		FVector ForwardRef = FVector::ZeroVector;
+		double BestForward = 1.0;
+		for (int32 Bone = Chain.Foot; Bone < Ref.GetNum(); ++Bone)
+		{
+			const int32 Parent = Ref.GetParentIndex(Bone);
+			const bool bIsFoot = Bone == Chain.Foot;
+			bool bUnderFoot = bIsFoot;
+			if (!bIsFoot && Parent != INDEX_NONE)
+			{
+				const int32 GrandParent = Ref.GetParentIndex(Parent);
+				bUnderFoot = Parent == Chain.Foot || GrandParent == Chain.Foot; // toe bones, up to two levels below the foot
+			}
+			if (!bUnderFoot) { continue; }
+			const FTransform RefCS = ComponentSpace(Ref, RefPose, Bone);
+			Contacts.Add({ Bone, RefCS.InverseTransformPosition(FVector(RefCS.GetTranslation().X, RefCS.GetTranslation().Y, 0.0)) });
+			if (!bIsFoot)
+			{
+				FVector Flat = RefCS.GetTranslation() - RefFootCS.GetTranslation();
+				Flat.Z = 0.0;
+				if (Flat.Size() > BestForward) { BestForward = Flat.Size(); ForwardRef = Flat.GetSafeNormal(); bHaveForward = true; }
+			}
+		}
+		const FVector LocalUp = RefFootCS.GetRotation().UnrotateVector(FVector::UpVector);
+		const FVector LocalForward = bHaveForward ? RefFootCS.GetRotation().UnrotateVector(ForwardRef) : FVector::ForwardVector;
+
+		for (int32 Start = 0; Start < NumFrames;)
+		{
+			if (!AnimStitchPlant::IsPlanted(Mask[Start])) { ++Start; continue; }
+			int32 End = Start;
+			while (End + 1 < NumFrames && Mask[End + 1] == Mask[Start]) { ++End; }
+
+			// Whole-plant decision: accidental tilt (levelled) or a deliberate toe / heel plant (rotation kept).
+			double TiltSum = 0.0;
+			for (int32 f = Start; f <= End; ++f)
+			{
+				const FVector Up = ComponentSpace(Ref, Poses[f], Chain.Foot).GetRotation().RotateVector(LocalUp);
+				TiltSum += FMath::Acos(FMath::Clamp(Up.Z, -1.0, 1.0));
+			}
+			const bool bLevel = TiltSum / double(End - Start + 1) <= TiltLimit;
+
+			for (int32 f = Start; f <= End; ++f)
+			{
+				const int32 FromEdge = FMath::Min(f - Start, End - f);
+				const double Alpha = FMath::Clamp((FromEdge + 1.0) / (BlendFrames + 1.0), 0.0, 1.0);
+				const double Weight = Alpha * Alpha * (3.0 - 2.0 * Alpha);
+
+				const FTransform FootCS = ComponentSpace(Ref, Poses[f], Chain.Foot);
+				const FQuat R = FootCS.GetRotation();
+				FQuat NewR = R;
+				if (bLevel)
+				{
+					const FVector Up = R.RotateVector(LocalUp);
+					FQuat Level = FQuat::FindBetweenNormals(Up, FVector::UpVector) * R;
+					// Keep the heading: undo any yaw the levelling swing introduced.
+					const FVector Before = R.RotateVector(LocalForward);
+					const FVector After = Level.RotateVector(LocalForward);
+					if (FVector2D(Before.X, Before.Y).SizeSquared() > 1e-6 && FVector2D(After.X, After.Y).SizeSquared() > 1e-6)
+					{
+						Level = FQuat(FVector::UpVector, FMath::Atan2(Before.Y, Before.X) - FMath::Atan2(After.Y, After.X)) * Level;
+					}
+					NewR = FQuat::Slerp(R, Level, Weight).GetNormalized();
+				}
+
+				// Lowest sole point with the new rotation (ankle position unchanged), measured on a scratch copy of the pose.
+				TArray<FTransform> Scratch = Poses[f];
+				const FTransform ParentCS = Chain.Calf != INDEX_NONE ? ComponentSpace(Ref, Scratch, Chain.Calf) : FTransform::Identity;
+				Scratch[Chain.Foot].SetRotation(FTransform(NewR, FootCS.GetTranslation(), FootCS.GetScale3D()).GetRelativeTransform(ParentCS).GetRotation().GetNormalized());
+				double Lowest = TNumericLimits<double>::Max();
+				for (const FContact& Contact : Contacts)
+				{
+					Lowest = FMath::Min(Lowest, ComponentSpace(Ref, Scratch, Contact.Bone).TransformPosition(Contact.LocalSole).Z);
+				}
+				const double Drop = (Lowest - FloorZ) * Weight; // > 0: floating, < 0: sunk
+				if (FMath::Abs(Drop) < 1e-3 && NewR.Equals(R, 1e-5)) { continue; }
+
+				const FVector Desired = FootCS.GetTranslation() - FVector(0.0, 0.0, Drop);
+				SolveLeg(Ref, Poses[f], Chain, Desired, nullptr, 0.0, &NewR);
+				++Corrected;
+			}
+			Start = End + 1;
+		}
+	}
+	return Corrected;
+}
+
 int32 FAnimStitchFootLock::Pin(const FAnimStitchEvaluator& Evaluator, TArray<TArray<FTransform>>& Poses, const FAnimStitchFootLockResult& Detection, FAnimStitchPinOutput* Output)
 {
 	if (!Detection.bValid)
