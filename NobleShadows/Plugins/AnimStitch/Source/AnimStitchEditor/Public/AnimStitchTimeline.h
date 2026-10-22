@@ -189,6 +189,7 @@ struct ANIMSTITCHEDITOR_API FAnimStitchTrackKey
 	/** Bone tracks: which channels (AnimStitchChannel bits) this key holds. Channels without the bit are not keyed here and their values are fillers. */
 	UPROPERTY()
 	uint8 Channels = AnimStitchChannel::All;
+
 };
 
 /** Shape of a control in the viewport. */

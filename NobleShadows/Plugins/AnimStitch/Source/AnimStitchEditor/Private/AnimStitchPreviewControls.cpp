@@ -301,8 +301,11 @@ void FAnimStitchPreview::BuildControlsFromPose(TArray<FAnimStitchControl>& Out) 
 
 				FAnimStitchControl Effector;
 				Effector.Id = { EAnimStitchControlKind::IKEffector, TrackIndex, INDEX_NONE };
-				Effector.Position = bActive ? Key.Translation : RestFoot.GetTranslation();
-				Effector.Orientation = bActive ? Key.Rotation : RestFoot.GetRotation();
+				// The control shows where the IK is actually pulling the limb: the animated foot blended toward the key target by the IK weight, so it glides while
+				// the weight fades in / out instead of snapping between the animation and the target.
+				const double Blend = bActive ? FMath::Clamp((double)Key.Weight, 0.0, 1.0) : 0.0;
+				Effector.Position = FMath::Lerp(RestFoot.GetTranslation(), bActive ? Key.Translation : RestFoot.GetTranslation(), Blend);
+				Effector.Orientation = FQuat::Slerp(RestFoot.GetRotation(), bActive ? Key.Rotation : RestFoot.GetRotation(), Blend).GetNormalized();
 				Effector.bScale = false;
 				Effector.Style = Style;
 				Effector.Color = SideColors[Style];
@@ -318,7 +321,7 @@ void FAnimStitchPreview::BuildControlsFromPose(TArray<FAnimStitchControl>& Out) 
 					FAnimStitchControl Pole;
 					Pole.Id = { EAnimStitchControlKind::IKPole, TrackIndex, INDEX_NONE };
 					Pole.ParentTrack = TrackIndex;
-					Pole.Position = (bActive && !Key.Pole.IsNearlyZero(1e-3)) ? Key.Pole : RestPole;
+					Pole.Position = (bActive && !Key.Pole.IsNearlyZero(1e-3)) ? FMath::Lerp(RestPole, Key.Pole, FMath::Clamp((double)Key.Weight, 0.0, 1.0)) : RestPole;
 					Pole.bRotate = false;
 					Pole.bScale = false;
 					Pole.Style = Style;
@@ -335,7 +338,10 @@ void FAnimStitchPreview::BuildControlsFromPose(TArray<FAnimStitchControl>& Out) 
 				FAnimStitchControl Pole;
 				Pole.Id = { EAnimStitchControlKind::IKPole, TrackIndex, INDEX_NONE };
 				Pole.ParentTrack = ParentIndex;
-				Pole.Position = Track.Keys.Num() > 0 ? FAnimStitchManualEdits::Sample(Track, Playhead).Translation : RestPole;
+				// The pole is applied with the limb's IK weight, so it glides with it.
+					double LimbWeight = 1.0;
+					if (ManualTracks.IsValidIndex(ParentIndex) && ManualTracks[ParentIndex].Keys.Num() > 0) { LimbWeight = FMath::Clamp((double)FAnimStitchManualEdits::Sample(ManualTracks[ParentIndex], Playhead).Weight, 0.0, 1.0); }
+					Pole.Position = Track.Keys.Num() > 0 ? FMath::Lerp(RestPole, FAnimStitchManualEdits::Sample(Track, Playhead).Translation, LimbWeight) : RestPole;
 				Pole.bRotate = false;
 				Pole.bScale = false;
 				Pole.Style = Style;
@@ -717,7 +723,7 @@ bool FAnimStitchPreview::BeginGizmoDrag(const FSceneView& View, const FVector2D&
 		if (Selected->Id.Kind != EAnimStitchControlKind::Bone)
 		{
 			// IK: what is on screen is the starting point (the key's target when IK is on, the animated limb otherwise).
-			const bool bActive = Drag.StartKey.Weight > 1e-3f;
+			const bool bActive = Drag.StartKey.Weight >= 0.999f; // part-way through a fade the on-screen (blended) control is the starting point
 			for (const FAnimStitchControl& C : Controls)
 			{
 				if (C.Id.A != Selected->Id.A) { continue; }

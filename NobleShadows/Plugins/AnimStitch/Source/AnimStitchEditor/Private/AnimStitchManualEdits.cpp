@@ -47,65 +47,60 @@ bool FAnimStitchManualEdits::IsIdentityKey(const FAnimStitchTrackKey& Key)
 
 namespace
 {
-	/** IK keys are events: the weight holds until the next key, then ramps over this long. */
+	/** IK keys are events: before the first key the weight eases in over this long. */
 	constexpr double IKWeightRamp = 0.1;
 
 	/**
-	 * IK keys: a key's weight is reached AT its own time (the ramp comes just before it) and held until the next key's ramp begins.
-	 * So a key written at the playhead is fully in effect on that very frame (what dragging a control needs).
+	 * IK keys interpolate like every other track: across the FULL span between two keys, the target (translation, rotation, pole) and the weight
+	 * all use the same normalised position, starting at the first key and arriving exactly at the next. A key whose weight is 0 has no target of its
+	 * own, so the span borrows the active neighbour's target while the weight fades (IK released / engaged).
 	 */
 	FAnimStitchTrackKey SampleIK(const FAnimStitchTrack& Track, double Time)
 	{
 		const TArray<FAnimStitchTrackKey>& Keys = Track.Keys;
 		int32 I = INDEX_NONE;
 		for (int32 k = 0; k < Keys.Num() && Keys[k].Time <= Time; ++k) { I = k; }
-		const FAnimStitchTrackKey* K = Keys.IsValidIndex(I) ? &Keys[I] : nullptr;
-		const FAnimStitchTrackKey* Next = Keys.IsValidIndex(I + 1) ? &Keys[I + 1] : nullptr;
-
-		float Weight = K ? K->Weight : 0.f;
-		if (Next)
+		if (!Keys.IsValidIndex(I))
 		{
-			const double Gap = K ? Next->Time - K->Time : Next->Time;
-			const double Ramp = FMath::Max(FMath::Min(IKWeightRamp, Gap), 1e-6);
-			const double RampStart = Next->Time - Ramp;
-			if (Time > RampStart)
+			// Before the first key (unchanged): IK eases in over the last IKWeightRamp seconds.
+			const FAnimStitchTrackKey& First = Keys[0];
+			FAnimStitchTrackKey Out = First;
+			const double Ramp = FMath::Max(FMath::Min(IKWeightRamp, First.Time), 1e-6);
+			const double RampStart = First.Time - Ramp;
+			Out.Weight = Time > RampStart ? FMath::Lerp(0.f, First.Weight, float(FMath::Clamp((Time - RampStart) / Ramp, 0.0, 1.0))) : 0.f;
+			Out.Time = Time;
+			return Out;
+		}
+		const FAnimStitchTrackKey& K = Keys[I];
+		if (!Keys.IsValidIndex(I + 1))
+		{
+			FAnimStitchTrackKey Out = K; // after the last key (unchanged): hold
+			if (K.Weight <= 1e-3f && I > 0 && Keys[I - 1].Weight > 1e-3f)
 			{
-				Weight = FMath::Lerp(Weight, Next->Weight, float(FMath::Clamp((Time - RampStart) / Ramp, 0.0, 1.0)));
+				// A released (weight 0) last key keeps the previous key's target, as before.
+				Out.Translation = Keys[I - 1].Translation;
+				Out.Rotation = Keys[I - 1].Rotation;
+				Out.Pole = Keys[I - 1].Pole;
 			}
+			Out.Time = Time;
+			return Out;
 		}
-
-		const bool bActiveK = K && K->Weight > 1e-3f;
-		const bool bActiveNext = Next && Next->Weight > 1e-3f;
-		FAnimStitchTrackKey Out = K ? *K : Keys[0];
-		if (bActiveK && bActiveNext)
-		{
-			// Between two active keys the target interpolates.
-			const double Span = Next->Time - K->Time;
-			const double T = Span > 1e-9 ? (Time - K->Time) / Span : 0.0;
-			Out.Translation = FMath::Lerp(K->Translation, Next->Translation, T);
-			Out.Rotation = FQuat::Slerp(K->Rotation, Next->Rotation, T).GetNormalized();
-			Out.Pole = FMath::Lerp(K->Pole, Next->Pole, T);
-		}
-		else if (!bActiveK && bActiveNext)
-		{
-			// An inactive key has no target of its own: ease in toward the next key's.
-			Out.Translation = Next->Translation;
-			Out.Rotation = Next->Rotation;
-			Out.Pole = Next->Pole;
-		}
-		else if (!bActiveK && I > 0 && Keys[I - 1].Weight > 1e-3f)
-		{
-			// Released: keep the previous target while the weight eases off.
-			Out.Translation = Keys[I - 1].Translation;
-			Out.Rotation = Keys[I - 1].Rotation;
-			Out.Pole = Keys[I - 1].Pole;
-		}
+		const FAnimStitchTrackKey& Next = Keys[I + 1];
+		const double Span = Next.Time - K.Time;
+		const double T = Span > 1e-9 ? FMath::Clamp((Time - K.Time) / Span, 0.0, 1.0) : 0.0;
+		const bool bActiveK = K.Weight > 1e-3f;
+		const bool bActiveNext = Next.Weight > 1e-3f;
+		const FAnimStitchTrackKey& From = (!bActiveK && bActiveNext) ? Next : K; // the target the span starts from
+		const FAnimStitchTrackKey& To = (bActiveK && !bActiveNext) ? K : Next;   // and the one it arrives at
+		FAnimStitchTrackKey Out = K;
+		Out.Translation = FMath::Lerp(From.Translation, To.Translation, T);
+		Out.Rotation = FQuat::Slerp(From.Rotation, To.Rotation, T).GetNormalized();
+		Out.Pole = FMath::Lerp(From.Pole, To.Pole, T);
+		Out.Weight = FMath::Lerp(K.Weight, Next.Weight, float(T));
 		Out.Time = Time;
-		Out.Weight = Weight;
 		return Out;
 	}
 }
-
 uint8 FAnimStitchManualEdits::GetApplicableChannels(const FAnimStitchTrack& Track)
 {
 	return Track.Kind == EAnimStitchTrackKind::Bone && Track.bRotationOnly ? AnimStitchChannel::Rotation : AnimStitchChannel::All;

@@ -135,8 +135,11 @@ void FAnimStitchPreview::BuildTrailFor(const FAnimStitchControlId& Id) const
 	// The cube is drawn at value + display offset; the trail follows the cube.
 	const FVector DisplayOffset = bPoleInLimb ? Track.PoleStyle.Offset : Track.ControlStyle.Offset;
 
-	const int32 SkelBone = bFkBone ? SkelRef.FindBoneIndex(Track.Bone) : INDEX_NONE;
-	if (bFkBone && SkelBone == INDEX_NONE)
+	// An IK effector's trail is where the foot / hand actually ends up (animation -> IK blend -> animation), so it is one continuous path that joins the animated
+	// motion; the key points sit on it. FK bones are traced the same way.
+	const bool bTraceBone = bFkBone || bEffector;
+	const int32 SkelBone = bTraceBone ? SkelRef.FindBoneIndex(Track.Bone) : INDEX_NONE;
+	if (bTraceBone && SkelBone == INDEX_NONE)
 	{
 		return;
 	}
@@ -144,7 +147,7 @@ void FAnimStitchPreview::BuildTrailFor(const FAnimStitchControlId& Id) const
 	{
 		return;
 	}
-	if (bFkBone && !bPlantFeetResolved)
+	if (bTraceBone && !bPlantFeetResolved)
 	{
 		FAnimStitchFootLock::ResolveFootBones(Evaluator.GetSkeleton(), Evaluator.GetTimeline().FootLock, PlantFeet[0], PlantFeet[1]);
 		bPlantFeetResolved = true;
@@ -160,7 +163,7 @@ void FAnimStitchPreview::BuildTrailFor(const FAnimStitchControlId& Id) const
 	// The value shown at a time; false where the control has no value (IK off / no pole yet).
 	auto ValueAt = [&](double Time, FVector& Out) -> bool
 	{
-		if (bFkBone)
+		if (bTraceBone)
 		{
 			if (CorrectedPoses.Num() > 1 && (Evaluator.GetTimeline().FootLock.bEnabled || Evaluator.GetTimeline().bPredictFeet || Evaluator.GetTimeline().bGroundFeet))
 			{
@@ -176,7 +179,7 @@ void FAnimStitchPreview::BuildTrailFor(const FAnimStitchControlId& Id) const
 		}
 		const FAnimStitchTrackKey Key = FAnimStitchManualEdits::Sample(Track, Time);
 		if (bRootOffset) { Out = BaseRootAt(Time) + Key.Translation + DisplayOffset; return true; }
-		if (bEffector) { Out = Key.Translation + DisplayOffset; return Key.Weight > 1e-3f; }
+		
 		if (bPoleLane) { Out = Key.Translation + DisplayOffset; return true; }
 		Out = Key.Pole + DisplayOffset;
 		return !Key.Pole.IsNearlyZero(1e-3);
@@ -185,7 +188,8 @@ void FAnimStitchPreview::BuildTrailFor(const FAnimStitchControlId& Id) const
 	// The path: one sample per frame between the first and last key, thinned out for very long spans.
 	const double T0 = Track.Keys[0].Time, T1 = Track.Keys.Last().Time;
 	const int32 Wanted = FMath::Max(2, FMath::CeilToInt32((T1 - T0) * TrailSampleRate) + 1);
-	const int32 Count = FMath::Min(Wanted, MaxTrailSamples);
+	// While a point is being dragged the path is sampled more coarsely so it can follow the mouse.
+	const int32 Count = FMath::Min(Wanted, Drag.bActive ? 90 : MaxTrailSamples);
 	FTrailSegment* Segment = nullptr;
 	for (int32 i = 0; i < Count; ++i)
 	{
@@ -236,6 +240,15 @@ int32 FAnimStitchPreview::GetNumTrailKeysFor(const FAnimStitchControlId& Id) con
 	return bHelpersVisible ? N : 0; // G is the master switch
 }
 
+void FAnimStitchPreview::GetTrailGeometry(const FAnimStitchControlId& Id, TArray<TArray<FVector>>& OutSegments, TArray<FVector>& OutKeyPoints) const
+{
+	EnsureTrail();
+	OutSegments.Reset();
+	OutKeyPoints.Reset();
+	for (const FTrailSegment& S : TrailSegments) { if (S.Control == Id) { OutSegments.Add(S.Points); } }
+	for (const FTrailKey& K : TrailKeys) { if (K.Control == Id) { OutKeyPoints.Add(K.Pos); } }
+}
+
 int32 FAnimStitchPreview::GetNumTrailKeys() const
 {
 	return GetNumTrailKeysFor(SelectedControl);
@@ -270,12 +283,16 @@ void FAnimStitchPreview::DrawTrail(const FSceneView& View, FPrimitiveDrawInterfa
 	if (TrailSegments.Num() == 0 && TrailKeys.Num() == 0) { return; }
 
 	// Draggable trails (IK, pole, root offset) are orange; display-only FK bone trails are cyan.
-	auto ColorFor = [](bool bEditable) { return bEditable ? FLinearColor(1.f, 0.55f, 0.1f) : FLinearColor(0.25f, 0.8f, 1.f); };
+	auto ColorFor = [](bool bEditable, const FAnimStitchControlId& Id)
+	{
+		if (Id.Kind == EAnimStitchControlKind::IKPole) { return FLinearColor(0.75f, 0.45f, 1.f); } // pole vector trails are purple, like the pole lane
+		return bEditable ? FLinearColor(1.f, 0.55f, 0.1f) : FLinearColor(0.25f, 0.8f, 1.f);
+	};
 	for (const FTrailSegment& Segment : TrailSegments)
 	{
 		for (int32 i = 1; i < Segment.Points.Num(); ++i)
 		{
-			PDI->DrawLine(Segment.Points[i - 1], Segment.Points[i], ColorFor(Segment.bEditable), SDPG_Foreground, 1.5f, 0.f, true);
+			PDI->DrawLine(Segment.Points[i - 1], Segment.Points[i], ColorFor(Segment.bEditable, Segment.Control), SDPG_Foreground, 1.5f, 0.f, true);
 		}
 	}
 	const FVector CamRight = View.GetViewRight();
@@ -287,7 +304,7 @@ void FAnimStitchPreview::DrawTrail(const FSceneView& View, FPrimitiveDrawInterfa
 		const float W = View.WorldToScreen(Point.Pos).W;
 		const float Radius = 4.5f * 2.f * FMath::Max(W, 0.01f) / (ViewWidth * FMath::Max(ProjScale, 0.01f));
 		const bool bDragged = Drag.bActive && Drag.bTrail && Point.Control == Drag.Control.Id && FMath::IsNearlyEqual(Point.Time, Drag.Time, 1e-6);
-		const FLinearColor LineColor = ColorFor(Point.bEditable);
+		const FLinearColor LineColor = ColorFor(Point.bEditable, Point.Control);
 		const FLinearColor DotColor = bDragged ? FLinearColor(1.f, 0.95f, 0.25f) : FLinearColor::White;
 		for (const float Fraction : { 1.f, 0.66f, 0.33f })
 		{

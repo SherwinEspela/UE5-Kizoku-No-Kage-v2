@@ -213,6 +213,8 @@ public:
 	int32 GetNumTrailKeys() const;
 	/** Trail points currently shown for one control (0 when its trail is switched off or helpers are hidden with G). */
 	int32 GetNumTrailKeysFor(const FAnimStitchControlId& Id) const;
+	/** Test hook: the drawn geometry of one control's trail (polyline segments and key points). */
+	void GetTrailGeometry(const FAnimStitchControlId& Id, TArray<TArray<FVector>>& OutSegments, TArray<FVector>& OutKeyPoints) const;
 	/** Trail point at (nearly) this key time, or INDEX_NONE. */
 	int32 FindTrailKey(double Time) const;
 	/** Test hook: moves one trail point by Translation through the same path as dragging it (opens and closes the transaction). */

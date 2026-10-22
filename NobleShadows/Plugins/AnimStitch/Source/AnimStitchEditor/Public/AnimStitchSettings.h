@@ -71,6 +71,10 @@ public:
 	UPROPERTY(config, EditAnywhere, Category = "Timeline", meta = (ClampMin = "0.0"))
 	float DefaultCrossfadeLength = 0.25f;
 
+	/** IK: how long (seconds) "Release IK Here" takes to fade the IK out. */
+	UPROPERTY(config, EditAnywhere, Category = "Timeline", meta = (ClampMin = "0.03", ClampMax = "3.0"))
+	float IKBlendTime = 0.3f;
+
 	/** Blend curve applied to new crossfades. */
 	UPROPERTY(config, EditAnywhere, Category = "Timeline")
 	EAnimStitchBlendCurve DefaultCrossfadeCurve = EAnimStitchBlendCurve::Smoothstep;

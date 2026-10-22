@@ -1,6 +1,7 @@
 // Manual bone correction lanes of the timeline widget (Phase 9): painting, "Add Bone Track" and lane menus.
 
 #include "SAnimStitchTimeline.h"
+#include "AnimStitchSettings.h"
 #include "AnimStitchManualEdits.h"
 #include "AnimStitchFootLock.h"
 #include "Editor.h"
@@ -575,16 +576,16 @@ void SAnimStitchTimeline::OpenTrackMenu(const FPointerEvent& Event, int32 TrackI
 		}
 		if (bIK && Track.Keys.Num() > 0)
 	{
-		Menu.AddMenuEntry(LOCTEXT("ReleaseIK", "Release IK Here"), LOCTEXT("ReleaseIKTip", "Hold the target here, then ease the IK off over the next 0.1 s so the limb returns to the animation"), FSlateIcon(),
+		Menu.AddMenuEntry(LOCTEXT("ReleaseIK", "Release IK Here"), LOCTEXT("ReleaseIKTip", "Hold the target here, then fade the IK off over the IK blend time (plugin setting, 0.3 s by default) so the limb returns to the animation"), FSlateIcon(),
 			FUIAction(FExecuteAction::CreateLambda([this, TrackIndex]()
 			{
 				const FScopedTransaction Tx(LOCTEXT("ReleaseIKTx", "Release IK"));
-				// Hold the current target here, then ease the weight to 0 over the next 0.1 s.
+				// Hold the current target here, then fade the weight to 0 over the IK blend time.
 				FAnimStitchTrackKey Hold = FAnimStitchManualEdits::Sample(Asset->Timeline.Tracks[TrackIndex], Playhead);
 				Hold.Time = Playhead;
 				Asset->SetTrackKey(TrackIndex, Hold);
 				FAnimStitchTrackKey Off = Hold;
-				Off.Time = Playhead + 0.1;
+				Off.Time = Playhead + FMath::Max(0.03, (double)GetDefault<UAnimStitchSettings>()->IKBlendTime);
 				Off.Weight = 0.f;
 				Asset->SetTrackKey(TrackIndex, Off);
 			})));
