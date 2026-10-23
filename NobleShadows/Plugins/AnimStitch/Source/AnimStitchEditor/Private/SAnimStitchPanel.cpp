@@ -1,4 +1,4 @@
-﻿#include "SAnimStitchPanel.h"
+#include "SAnimStitchPanel.h"
 #include "SAnimStitchTimeline.h"
 #include "SAnimStitchKeyPanel.h"
 #include "SAnimStitchTransportBar.h"
@@ -477,7 +477,14 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 				.ButtonContent()[SNew(STextBlock).Text(LOCTEXT("AddLimb", "Add Limb"))]
 				.OnGetMenuContent_Lambda([this]() -> TSharedRef<SWidget> { FMenuBuilder Menu(true, nullptr); Timeline->BuildLimbMenu(Menu); return Menu.MakeWidget(); })
 			]
-			+ SWrapBox::Slot().VAlign(VAlign_Center).Padding(0, 0, 6, 3)
+			+ SWrapBox::Slot().Padding(0, 0, 18, 3)
+				[
+					SNew(SButton).ButtonStyle(FAppStyle::Get(), "SimpleButton").ContentPadding(FMargin(5.f, 4.f))
+					.ToolTipText(LOCTEXT("BakeToRigTip", "Bake to Control Rig: reveals every control of the skeleton and converts all keys to Absolute, so the whole rig is editable. The result is unchanged; one undo step."))
+					.OnClicked_Lambda([this]() { Timeline->BakeToControlRig(); return FReply::Handled(); })
+					[SNew(STextBlock).Text(LOCTEXT("BakeToRig", "Bake to Control Rig"))]
+				]
+				+ SWrapBox::Slot().VAlign(VAlign_Center).Padding(0, 0, 6, 3)
 			[
 				SNew(STextBlock).Text(LOCTEXT("CrossfadeCurve", "Crossfade curve:"))
 			]

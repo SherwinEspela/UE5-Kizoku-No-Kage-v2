@@ -135,7 +135,7 @@ void SAnimStitchTimeline::PaintLeftColumn(FSlateWindowElementList& Out, int32 La
 	{
 		for (int32 Foot = 0; Foot < 2; ++Foot)
 		{
-			FSlateDrawElement::MakeText(Out, Layer + 3, G.ToPaintGeometry(Size, FSlateLayoutTransform(FVector2f(10.f, GetLaneTop(Foot) - 2.f))), Foot == 0 ? FString(TEXT("Left foot lock")) : FString(TEXT("Right foot lock")), Font, ESlateDrawEffect::None, FLinearColor(1.f, 1.f, 1.f, 0.55f));
+			FSlateDrawElement::MakeText(Out, Layer + 3, G.ToPaintGeometry(Size, FSlateLayoutTransform(FVector2f(10.f, GetLaneTop(Foot) - 2.f))), GetFootLaneLabel(Foot, true), Font, ESlateDrawEffect::None, FLinearColor(1.f, 1.f, 1.f, 0.55f));
 		}
 	}
 
@@ -296,13 +296,12 @@ void SAnimStitchTimeline::AddLimbForEffector(FName Effector, bool bIK, EAnimStit
 		Track.Bone = Effector;
 		SelectedTrack = Asset->AddTrack(Track);
 		++TrackSelectionSerial;
-		// The pole vector gets its own lane right under the IK track; its control defaults to a sphere.
+		// The pole vector gets its own lane right under the IK track; its control defaults to the Epic-style diamond (Auto by role).
 		if (!HasTrackFor(Effector, EAnimStitchTrackKind::IKPole))
 		{
 			FAnimStitchTrack PoleTrack;
 			PoleTrack.Kind = EAnimStitchTrackKind::IKPole;
 			PoleTrack.Bone = Effector;
-			PoleTrack.ControlStyle.Shape = EAnimStitchControlShape::Sphere;
 			Asset->AddTrack(PoleTrack);
 		}
 	}
@@ -359,7 +358,7 @@ void SAnimStitchTimeline::PickOtherBone()
 	}
 	TSharedRef<TSharedPtr<FString>> Chosen = MakeShared<TSharedPtr<FString>>();
 	TSharedRef<int32> Mode = MakeShared<int32>(0); // 0 = single bone, 1 = FK limb, 2 = IK limb
-	TSharedRef<int32> TrackMode = MakeShared<int32>(0); // 0 = additive offsets, 1 = absolute transforms
+	TSharedRef<int32> TrackMode = MakeShared<int32>(1); // 0 = additive offsets, 1 = absolute transforms (default: the baked keys are already in place)
 	const FName RootBone = GetRootBoneName();
 	auto IsRoot = [RootBone](const FString& Name) { return !RootBone.IsNone() && FName(*Name) == RootBone; };
 
@@ -454,6 +453,22 @@ void SAnimStitchTimeline::PickOtherBone()
 	FSlateApplication::Get().AddModalWindow(Window, FSlateApplication::Get().GetActiveTopLevelWindow());
 }
 
+void SAnimStitchTimeline::BakeToControlRig()
+{
+	if (!Asset->GetSkeleton()) { return; }
+	int32 Changed = 0;
+	{
+		const FScopedTransaction Tx(LOCTEXT("BakeToRigTx", "Bake to Control Rig"));
+		Changed = Asset->BakeToControlRig();
+	}
+	++TrackSelectionSerial;
+	SelectedKey = INDEX_NONE;
+	SelectedKeys.Reset();
+	FNotificationInfo Info(Changed > 0 ? FText::Format(LOCTEXT("BakedToRig", "Bake to Control Rig: {0} controls revealed or converted to Absolute keys."), Changed) : LOCTEXT("BakedToRigNothing", "Bake to Control Rig: the timeline could not be evaluated, nothing was changed."));
+	Info.ExpireDuration = 5.f;
+	FSlateNotificationManager::Get().AddNotification(Info);
+}
+
 void SAnimStitchTimeline::BuildCoreBoneMenu(FMenuBuilder& Menu)
 {
 	const USkeleton* Skeleton = Asset->GetSkeleton();
@@ -502,10 +517,12 @@ void SAnimStitchTimeline::OpenAddTrackMenu(const FPointerEvent& Event)
 {
 	FMenuBuilder Menu(true, nullptr);
 	Menu.BeginSection("BoneTracks", LOCTEXT("AddBoneTrackSection", "Add Bone Track"));
-	Menu.AddSubMenu(LOCTEXT("CoreBoneMenu", "Core Bone"), LOCTEXT("CoreBoneMenuTip", "Pelvis, spine, head...: one control per bone, additive offsets"), FNewMenuDelegate::CreateSP(this, &SAnimStitchTimeline::BuildCoreBoneMenu));
+	Menu.AddSubMenu(LOCTEXT("CoreBoneMenu", "Core Bone"), LOCTEXT("CoreBoneMenuTip", "Pelvis, spine, head...: one control per bone, with the animation already baked onto it (Absolute keys)"), FNewMenuDelegate::CreateSP(this, &SAnimStitchTimeline::BuildCoreBoneMenu));
 	Menu.AddSubMenu(LOCTEXT("LimbMenu", "Limb"), LOCTEXT("LimbMenuTip", "Arms and legs, FK (rotate each joint) or IK (effector + pole vector)"), FNewMenuDelegate::CreateSP(this, &SAnimStitchTimeline::BuildLimbMenu));
 	Menu.AddMenuEntry(LOCTEXT("RootOffsetEntry", "Root - motion offset"), LOCTEXT("RootOffsetEntryTip", "One keyframe lane of additive translation + yaw on the root, applied with the blend before foot lock (planted feet follow the corrected path)"), FSlateIcon(),
 		FUIAction(FExecuteAction::CreateLambda([this]() { AddRootOffsetTrack(); }), FCanExecuteAction::CreateLambda([this]() { return Asset->GetSkeleton() != nullptr && !HasRootOffsetTrack(); })));
+	Menu.AddMenuEntry(LOCTEXT("BakeToRigEntry", "Bake to Control Rig"), LOCTEXT("BakeToRigEntryTip", "Reveal every control of the skeleton and convert all keys to Absolute (one undo step). The result is unchanged."), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateLambda([this]() { BakeToControlRig(); }), FCanExecuteAction::CreateLambda([this]() { return Asset->GetSkeleton() != nullptr; })));
 	Menu.EndSection();
 	const FWidgetPath Path = Event.GetEventPath() != nullptr ? *Event.GetEventPath() : FWidgetPath();
 	FSlateApplication::Get().PushMenu(AsShared(), Path, Menu.MakeWidget(), Event.GetScreenSpacePosition(), FPopupTransitionEffect(FPopupTransitionEffect::ContextMenu));

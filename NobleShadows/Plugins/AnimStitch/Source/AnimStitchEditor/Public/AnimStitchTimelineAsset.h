@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
@@ -17,8 +17,18 @@ class ANIMSTITCHEDITOR_API UAnimStitchTimelineAsset : public UObject
 public:
 	UAnimStitchTimelineAsset();
 
+	/** Project format version. 0 = saved before the 2.0 line (the field did not exist), 2 = 2.0: derived control hierarchy, curve control shapes, baked-rig reveal model. Older projects are migrated on load. */
+	UPROPERTY()
+	int32 ProjectFormatVersion = 0;
+	static constexpr int32 CurrentFormatVersion = 2;
+
 	UPROPERTY()
 	FAnimStitchTimeline Timeline;
+
+	virtual void PostInitProperties() override;
+	virtual void PostLoad() override;
+	/** Brings a project saved by an older version up to the current format (idempotent). Called on load; public so tests can run it on a constructed project. */
+	void MigrateToCurrentFormat();
 
 	/** Playback range start (seconds). Only affects preview playback, never the bake. */
 	UPROPERTY()
@@ -104,6 +114,31 @@ void SetTrim(int32 Index, double NewTrimIn, double NewTrimOut);
 	void RemovePreviewAttachment(int32 Index);
 	void SetPreviewAttachmentVisible(int32 Index, bool bVisible);
 	void SetPreviewAttachmentScale(int32 Index, const FVector& Scale);
+	// ---- Internal baked control rig (2.0) ----
+	// A complete Epic-style rig for the skeleton exists behind the scenes: the timeline's evaluated result baked per frame onto every rig node (one per
+	// body bone). Nothing of it is displayed or editable until the user adds the control (a track); adding one reveals its node with the keys already in place.
+	// "Bake to Control Rig" reveals all nodes at once. The bake is derived from the clips, so it is rebuilt when they change and is never saved.
+	struct FRigBake
+	{
+		double Rate = 30.0;
+		double TotalLength = 0.0;
+		/** Skeleton-local blended pose per frame (frame f = f / Rate; the last sample is at TotalLength). */
+		TArray<TArray<FTransform>> Poses;
+	};
+	/** The baked rig (rebuilt when stale); false when the timeline cannot be evaluated. */
+	bool GetRigBake(FRigBake& Out) const;
+	/** Rig nodes of the skeleton: the bones that get a control in the rig (body bones, root excluded: the root has its own offset lane). */
+	TArray<FName> GetRigNodes() const;
+	/** True once the node's control has been added (revealed). */
+	bool IsRigNodeRevealed(FName Bone) const;
+	/** A rig node's baked transform relative to the root bone at a frame of the bake; false for an unknown bone / frame. */
+	bool GetRigNodeTransform(FName Bone, int32 Frame, FTransform& Out) const;
+	/**
+	 * Bake to Control Rig: reveals every node and converts every bone-track key to Absolute (per-frame keys that reproduce the current result).
+	 * One undoable change when called inside a transaction. Returns the number of controls revealed or converted.
+	 */
+	int32 BakeToControlRig();
+
 	/** Bumped by every track/key edit (and undo/redo): the preview re-applies the manual corrections. */
 	uint32 GetManualCounter() const { return ManualCounter; }
 
@@ -164,6 +199,8 @@ private:
 	friend struct FKeyFollowScope;
 
 	bool bUnsavedChanges = false;
+	mutable FRigBake CachedRig;
+	mutable uint32 CachedRigStamp = MAX_uint32;
 	uint32 EditCounter = 0;
 	uint32 ManualCounter = 0;
 };

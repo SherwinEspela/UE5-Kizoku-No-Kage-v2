@@ -1,10 +1,11 @@
-﻿// Manual correction controls (Phase 9): control shapes in the preview viewport, a translate/rotate/scale gizmo and the
+// Manual correction controls (Phase 9): control shapes in the preview viewport, a translate/rotate/scale gizmo and the
 // key-writing that dragging does. Kept apart from AnimStitchPreview.cpp.
 
 #include "AnimStitchPreview.h"
 #include "AnimStitchPoseComponent.h"
 #include "AnimStitchTimelineAsset.h"
 #include "AnimStitchManualEdits.h"
+#include "AnimStitchControlShapes.h"
 #include "Engine/SkeletalMesh.h"
 #include "ScopedTransaction.h"
 #include "SceneManagement.h"
@@ -240,13 +241,29 @@ void FAnimStitchPreview::BuildControlsFromPose(TArray<FAnimStitchControl>& Out) 
 	const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
 	if (Component.Num() != Ref.GetNum()) { return; }
 
-	auto ApplyStyle = [](FAnimStitchControl& Control, const FAnimStitchControlStyle& Style)
+	auto ApplyStyle = [](FAnimStitchControl& Control, const FAnimStitchControlStyle& Style, FName Bone, EAnimStitchTrackKind Kind)
 	{
 		Control.Opacity = Style.bOverrideOpacity ? Style.Opacity : -1.f;
 		Control.SizeMul = Style.bOverrideSize ? Style.Size : -1.f;
-		Control.bSphere = Style.Shape == EAnimStitchControlShape::Sphere;
+		Control.Shape = AnimStitchControlShapes::Resolve(Style, Bone, Kind);
 		Control.Offset = Style.Offset;
 	};
+	// Circles ring the bone: the outline faces along the bone, towards its first child (the control orientation itself stays the joint's, for the manipulator).
+	auto BoneShapeOrientation = [&Ref, &Component](int32 Bone)
+	{
+		for (int32 Child = Bone + 1; Child < Ref.GetNum(); ++Child)
+		{
+			if (Ref.GetParentIndex(Child) == Bone)
+			{
+				const FVector Along = Component[Child].GetTranslation() - Component[Bone].GetTranslation();
+				if (Along.SizeSquared() > 1e-4) { return FQuat::FindBetweenNormals(FVector::ForwardVector, Along.GetSafeNormal()); }
+				break;
+			}
+		}
+		return Component[Bone].GetRotation();
+	};
+	// IK targets and poles lie flat on the ground plane, like Epic's IK controls.
+	const FQuat FlatOrientation = FQuat::FindBetweenNormals(FVector::ForwardVector, FVector::UpVector);
 
 	// Left / right colour coding (blue / red), centre neutral.
 	static const FLinearColor SideColors[3] = { FLinearColor(0.85f, 0.85f, 0.85f), FLinearColor(0.2f, 0.45f, 1.f), FLinearColor(1.f, 0.25f, 0.25f) };
@@ -271,7 +288,8 @@ void FAnimStitchPreview::BuildControlsFromPose(TArray<FAnimStitchControl>& Out) 
 			C.Color = SideColors[Style];
 			C.BaseSize = GetBoneControlSize(Bone);
 			C.Label = Track.Kind == EAnimStitchTrackKind::RootOffset ? FString(TEXT("Root offset")) : Track.Bone.ToString();
-			ApplyStyle(C, Track.ControlStyle);
+			ApplyStyle(C, Track.ControlStyle, Track.Bone, Track.Kind);
+				C.ShapeOrientation = Track.Kind == EAnimStitchTrackKind::RootOffset ? FlatOrientation : BoneShapeOrientation(Bone);
 			Out.Add(C);
 		}
 		else
@@ -311,7 +329,8 @@ void FAnimStitchPreview::BuildControlsFromPose(TArray<FAnimStitchControl>& Out) 
 				Effector.Color = SideColors[Style];
 				Effector.BaseSize = EffectorSize;
 				Effector.Label = Track.Bone.ToString() + TEXT(" IK");
-				ApplyStyle(Effector, Track.ControlStyle);
+				ApplyStyle(Effector, Track.ControlStyle, Track.Bone, EAnimStitchTrackKind::IKLimb);
+				Effector.ShapeOrientation = FlatOrientation;
 				Out.Add(Effector);
 
 				// Older timelines keep the pole inside the IK key; newer ones give it its own lane (below).
@@ -328,7 +347,8 @@ void FAnimStitchPreview::BuildControlsFromPose(TArray<FAnimStitchControl>& Out) 
 					Pole.Color = SideColors[Style];
 					Pole.BaseSize = EffectorSize * 0.6f;
 					Pole.Label = Track.Bone.ToString() + TEXT(" pole");
-					ApplyStyle(Pole, Track.PoleStyle);
+					ApplyStyle(Pole, Track.PoleStyle, Track.Bone, EAnimStitchTrackKind::IKPole);
+						Pole.ShapeOrientation = FlatOrientation;
 					Out.Add(Pole);
 				}
 			}
@@ -348,7 +368,8 @@ void FAnimStitchPreview::BuildControlsFromPose(TArray<FAnimStitchControl>& Out) 
 				Pole.Color = SideColors[Style];
 				Pole.BaseSize = EffectorSize * 0.6f;
 				Pole.Label = Track.Bone.ToString() + TEXT(" pole");
-				ApplyStyle(Pole, Track.ControlStyle);
+				ApplyStyle(Pole, Track.ControlStyle, Track.Bone, EAnimStitchTrackKind::IKPole);
+				Pole.ShapeOrientation = FlatOrientation;
 				Out.Add(Pole);
 			}
 		}
@@ -365,10 +386,12 @@ void FAnimStitchPreview::BuildControlsFromPose(TArray<FAnimStitchControl>& Out) 
 				Pin.Position = LockOutput.ManualTarget[Foot][Frame];
 				Pin.bRotate = false;
 				Pin.bScale = false;
-				Pin.Style = Foot == 0 ? 1 : 2;
+				Pin.Style = Foot % 2 == 0 ? 1 : 2;
 				Pin.Color = SideColors[Pin.Style];
 				Pin.BaseSize = 3.f;
-				Pin.Label = Foot == 0 ? TEXT("L foot lock pin") : TEXT("R foot lock pin");
+				Pin.Shape = EAnimStitchControlShape::Triangle;
+					Pin.ShapeOrientation = FlatOrientation;
+					Pin.Label = Foot == 0 ? TEXT("L foot lock pin") : Foot == 1 ? TEXT("R foot lock pin") : (LockResult.FootBones.IsValidIndex(Foot) ? LockResult.FootBones[Foot].ToString() : FString::FromInt(Foot + 1)) + TEXT(" lock pin");
 				Out.Add(Pin);
 			}
 		}
@@ -384,9 +407,17 @@ namespace
 		return C.BaseSize * Multiplier * (bSelected ? 1.12 : 1.0);
 	}
 
-	FVector CubeCorner(const FAnimStitchControl& C, double Half, int32 Corner)
+	/** World-space point of a shape vertex (unit space) of a control. */
+	FVector ShapePoint(const FAnimStitchControl& C, double Half, const FVector& Unit)
 	{
-		return C.Position + C.Offset + C.Orientation.RotateVector(FVector((Corner & 1) ? Half : -Half, (Corner & 2) ? Half : -Half, (Corner & 4) ? Half : -Half));
+		return C.Position + C.Offset + C.ShapeOrientation.RotateVector(Unit * Half);
+	}
+
+	/** Brightness of a control's outline: the Opacity setting scales how strongly it reads (lines cannot be blended, so it fades toward the background). */
+	float OutlineStrength(const FAnimStitchControl& C, float GlobalOpacity)
+	{
+		const float Opacity = C.Opacity >= 0.f ? C.Opacity : GlobalOpacity;
+		return FMath::Clamp(0.4f + Opacity * 2.4f, 0.3f, 1.f);
 	}
 }
 
@@ -400,18 +431,35 @@ FAnimStitchControlId FAnimStitchPreview::PickControl(const FSceneView& View, con
 	for (const FAnimStitchControl& C : Controls)
 	{
 		const double Half = ControlHalfSize(C, ControlDrawSize, C.Id == SelectedControl);
-		FVector2D Min(TNumericLimits<double>::Max(), TNumericLimits<double>::Max()), Max(-TNumericLimits<double>::Max(), -TNumericLimits<double>::Max());
+		// Hit the outline itself (a few pixels of forgiveness), or anywhere inside it.
+		double LineDistance = TNumericLimits<double>::Max();
+		bool bInside = false;
 		bool bAll = true;
-		for (int32 Corner = 0; Corner < 8 && bAll; ++Corner)
+		FVector2D Min(TNumericLimits<double>::Max(), TNumericLimits<double>::Max()), Max(-TNumericLimits<double>::Max(), -TNumericLimits<double>::Max());
+		const TArray<TArray<FVector>>& Loops = AnimStitchControlShapes::GetLoops(C.Shape);
+		for (int32 LoopIndex = 0; LoopIndex < Loops.Num() && bAll; ++LoopIndex)
 		{
-			FVector2D Screen;
-			bAll = Project(View, CubeCorner(C, Half, Corner), Screen);
-			Min.X = FMath::Min(Min.X, Screen.X); Min.Y = FMath::Min(Min.Y, Screen.Y);
-			Max.X = FMath::Max(Max.X, Screen.X); Max.Y = FMath::Max(Max.Y, Screen.Y);
+			const TArray<FVector>& Loop = Loops[LoopIndex];
+			TArray<FVector2D> Screen;
+			Screen.SetNum(Loop.Num());
+			for (int32 i = 0; i < Loop.Num() && bAll; ++i)
+			{
+				bAll = Project(View, ShapePoint(C, Half, Loop[i]), Screen[i]);
+				Min.X = FMath::Min(Min.X, Screen[i].X); Min.Y = FMath::Min(Min.Y, Screen[i].Y);
+				Max.X = FMath::Max(Max.X, Screen[i].X); Max.Y = FMath::Max(Max.Y, Screen[i].Y);
+			}
+			if (!bAll) { break; }
+			bool bLoopInside = false;
+			for (int32 i = 0, j = Screen.Num() - 1; i < Screen.Num(); j = i++)
+			{
+				LineDistance = FMath::Min(LineDistance, DistanceToSegment(Pixel, Screen[j], Screen[i]));
+				if (((Screen[i].Y > Pixel.Y) != (Screen[j].Y > Pixel.Y)) && (Pixel.X < (Screen[j].X - Screen[i].X) * (Pixel.Y - Screen[i].Y) / (Screen[j].Y - Screen[i].Y) + Screen[i].X)) { bLoopInside = !bLoopInside; }
+			}
+			bInside |= bLoopInside;
 		}
 		if (!bAll) { continue; }
-		constexpr double Pad = 6.0; // a little forgiveness around the cube (and a minimum target for tiny cubes)
-		if (Pixel.X < Min.X - Pad || Pixel.X > Max.X + Pad || Pixel.Y < Min.Y - Pad || Pixel.Y > Max.Y + Pad) { continue; }
+		constexpr double Pad = 8.0;
+		if (!bInside && LineDistance > Pad) { continue; }
 		const double Distance = FVector2D::Distance((Min + Max) * 0.5, Pixel);
 		if (Distance < BestDistance) { BestDistance = Distance; Best = C.Id; }
 	}
@@ -420,78 +468,8 @@ FAnimStitchControlId FAnimStitchPreview::PickControl(const FSceneView& View, con
 
 void FAnimStitchPreview::DrawControlsCanvas(const FSceneView& View, FCanvas& Canvas, float DPIScale) const
 {
-	if (!bShowControls || !bHelpersVisible) { return; }
-	TArray<FAnimStitchControl> Controls;
-	BuildControls(Controls);
-	const FMatrix WorldToClip = View.ViewMatrices.GetWorldToClip();
-	const FVector CameraOrigin = View.ViewMatrices.GetViewOrigin();
-	const double Scale = 1.0 / FMath::Max(DPIScale, 0.1f);
-	static const int32 Faces[6][4] = { { 0, 1, 3, 2 }, { 4, 5, 7, 6 }, { 0, 1, 5, 4 }, { 2, 3, 7, 6 }, { 0, 2, 6, 4 }, { 1, 3, 7, 5 } };
-	for (const FAnimStitchControl& C : Controls)
-	{
-		const bool bSelected = C.Id == SelectedControl;
-		const double Half = ControlHalfSize(C, ControlDrawSize, bSelected);
-		const float BaseOpacity = C.Opacity >= 0.f ? C.Opacity : ControlOpacity;
-		FLinearColor Fill = bSelected ? FLinearColor(1.f, 0.9f, 0.2f) : C.Color;
-		Fill.A = FMath::Clamp(BaseOpacity + (bSelected ? 0.12f : 0.f), 0.f, 1.f);
-
-		if (C.bSphere)
-		{
-			// A filled disc facing the camera: the projected sphere.
-			const FVector Centre = C.Position + C.Offset;
-			FVector2D CentrePixel, EdgePixel;
-			if (!FSceneView::ProjectWorldToScreen(Centre, View.UnconstrainedViewRect, WorldToClip, CentrePixel)
-				|| !FSceneView::ProjectWorldToScreen(Centre + View.GetViewRight() * Half, View.UnconstrainedViewRect, WorldToClip, EdgePixel))
-			{
-				continue;
-			}
-			const double Radius = FVector2D::Distance(CentrePixel, EdgePixel);
-			constexpr int32 Segments = 28;
-			for (int32 i = 0; i < Segments; ++i)
-			{
-				const double A0 = 2.0 * PI * i / Segments, A1 = 2.0 * PI * (i + 1) / Segments;
-				FCanvasTriangleItem Triangle(CentrePixel * Scale, (CentrePixel + FVector2D(FMath::Cos(A0), FMath::Sin(A0)) * Radius) * Scale, (CentrePixel + FVector2D(FMath::Cos(A1), FMath::Sin(A1)) * Radius) * Scale, GWhiteTexture);
-				Triangle.SetColor(Fill);
-				Triangle.BlendMode = SE_BLEND_Translucent;
-				Canvas.DrawItem(Triangle);
-			}
-			continue;
-		}
-
-		FVector World[8];
-		FVector2D Screen[8];
-		bool bAll = true;
-		for (int32 k = 0; k < 8 && bAll; ++k)
-		{
-			World[k] = CubeCorner(C, Half, k);
-			bAll = FSceneView::ProjectWorldToScreen(World[k], View.UnconstrainedViewRect, WorldToClip, Screen[k]);
-			Screen[k] *= Scale;
-		}
-		if (!bAll) { continue; }
-		// Far faces first, so the blend reads correctly.
-		TArray<TPair<double, int32>, TInlineAllocator<6>> Order;
-		for (int32 f = 0; f < 6; ++f)
-		{
-			FVector Centre = FVector::ZeroVector;
-			for (int32 k = 0; k < 4; ++k) { Centre += World[Faces[f][k]]; }
-			Order.Add({ FVector::DistSquared(Centre * 0.25, CameraOrigin), f });
-		}
-		Order.Sort([](const TPair<double, int32>& A, const TPair<double, int32>& B) { return A.Key > B.Key; });
-		for (const TPair<double, int32>& Entry : Order)
-		{
-			const int32* F = Faces[Entry.Value];
-			for (const int32 Tri : { 0, 1 })
-			{
-				const int32 I0 = F[0], I1 = F[Tri == 0 ? 1 : 2], I2 = F[Tri == 0 ? 2 : 3];
-				FCanvasTriangleItem Triangle(FVector2D(Screen[I0]), FVector2D(Screen[I1]), FVector2D(Screen[I2]), GWhiteTexture);
-				Triangle.SetColor(Fill);
-				Triangle.BlendMode = SE_BLEND_Translucent;
-				Canvas.DrawItem(Triangle);
-			}
-		}
-	}
+	// Controls are Epic Control Rig style outlines drawn as lines in DrawControls: there is no translucent solid fill any more.
 }
-
 void FAnimStitchPreview::DrawControls(const FSceneView& View, FPrimitiveDrawInterface* PDI) const
 {
 	if (!bShowControls || !bHelpersVisible) { return; }
@@ -503,16 +481,18 @@ void FAnimStitchPreview::DrawControls(const FSceneView& View, FPrimitiveDrawInte
 	{
 		const bool bSelected = C.Id == SelectedControl;
 		const double Half = ControlHalfSize(C, ControlDrawSize, bSelected);
-		const FLinearColor Color = bSelected ? FLinearColor(1.f, 0.9f, 0.2f) : C.Color;
+		FLinearColor Color = bSelected ? FLinearColor(1.f, 0.9f, 0.2f) : C.Color;
+		Color *= OutlineStrength(C, ControlOpacity);
+		Color.A = 1.f;
 		const FVector Display = C.Position + C.Offset;
-		// The translucent fill is drawn on the canvas; here only the crisp edges, rotated with the control.
-		if (C.bSphere)
+		// Epic Control Rig style: a line-drawn curve (circle, square...), never a solid cube or sphere.
+		const float Thickness = bSelected ? 3.5f : 2.f;
+		for (const TArray<FVector>& Loop : AnimStitchControlShapes::GetLoops(C.Shape))
 		{
-			DrawWireSphere(PDI, Display, Color, Half, 16, SDPG_Foreground);
-		}
-		else
-		{
-			DrawWireBox(PDI, FQuatRotationTranslationMatrix(C.Orientation, Display), FBox(FVector(-Half), FVector(Half)), Color, SDPG_Foreground);
+			for (int32 i = 0; i < Loop.Num(); ++i)
+			{
+				PDI->DrawLine(ShapePoint(C, Half, Loop[i]), ShapePoint(C, Half, Loop[(i + 1) % Loop.Num()]), Color, SDPG_Foreground, Thickness, 0.f, true);
+			}
 		}
 		if (C.Id.Kind == EAnimStitchControlKind::IKPole && MainComponent && Mesh && ManualTracks.IsValidIndex(C.Id.A))
 		{

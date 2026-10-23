@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "Widgets/SLeafWidget.h"
@@ -88,6 +88,8 @@ public:
 
 	// ---- Adding bone tracks (shared by the lane right-click menu and the main toolbar) ----
 	void BuildCoreBoneMenu(class FMenuBuilder& Menu);
+	/** Bake to Control Rig: reveals every control and converts every key to Absolute, as one undo step. A deliberate command, never run implicitly. */
+	void BakeToControlRig();
 	void BuildLimbMenu(class FMenuBuilder& Menu);
 	/** Opens the bone picker window (bones already on the track list are not offered; hands and feet offer FK / IK). */
 	void PickOtherBone();
@@ -191,7 +193,17 @@ enum class EDrag : uint8 { None, Scrub, Move, TrimLeft, TrimRight, RateLeft, Rat
 	float LastFitWidth = 0.f;
 	bool IsFootLaneVisible() const { return Asset->Timeline.FootLock.bEnabled; }
 	float GetLaneTop(int32 Foot) const { return RulerHeight + 4.f + Foot * (LaneHeight + 2.f); }
-	float GetTrackTop() const { return RulerHeight + 8.f + (IsFootLaneVisible() ? 2.f * (LaneHeight + 2.f) + 2.f : 0.f); }
+	float GetTrackTop() const { return RulerHeight + 8.f + (IsFootLaneVisible() ? GetNumFootLanes() * (LaneHeight + 2.f) + 2.f : 0.f); }
+	/** One lane per designated ground contact (2 until the first plant detection has run). */
+	int32 GetNumFootLanes() const { return Plants.IsValid() && Plants->bValid ? Plants->Chains.Num() : 2; }
+	/** Lane label: L / R for the first two contacts (the feet), else the contact bone name (or its number). */
+	FString GetFootLaneLabel(int32 Foot, bool bLong) const
+	{
+		if (Foot == 0) { return bLong ? TEXT("Left foot lock") : TEXT("L"); }
+		if (Foot == 1) { return bLong ? TEXT("Right foot lock") : TEXT("R"); }
+		const FString Name = (Plants.IsValid() && Plants->FootBones.IsValidIndex(Foot)) ? Plants->FootBones[Foot].ToString() : FString::FromInt(Foot + 1);
+		return bLong ? Name + TEXT(" lock") : Name;
+	}
 	void ToggleFootPlantAt(int32 Foot, double Time);
 
 	// ---- Manual bone correction lanes (Phase 9) ----
@@ -204,15 +216,15 @@ enum class EDrag : uint8 { None, Scrub, Move, TrimLeft, TrimRight, RateLeft, Rat
 	float VScroll = 0.f;
 	bool HasTrackFor(FName Bone, EAnimStitchTrackKind Kind) const;
 	bool LimbTrackExists(bool bLeft, bool bLeg, bool bIK) const;
-	void AddLimbForEffector(FName Effector, bool bIK, EAnimStitchTrackMode Mode = EAnimStitchTrackMode::Additive);
-	bool bShowFrames = false;
+	void AddLimbForEffector(FName Effector, bool bIK, EAnimStitchTrackMode Mode = EAnimStitchTrackMode::Absolute);
+	bool bShowFrames = true;
 	void PaintLeftColumn(FSlateWindowElementList& Out, int32 Layer, const FGeometry& G) const;
 	mutable float CachedWidth = 600.f;
 	bool GetLaneButton(float X, float Y, int32 Track, EHit& OutType) const;
 	void PaintTrackLanes(FSlateWindowElementList& Out, int32 Layer, const FGeometry& G) const;
 	void OpenAddTrackMenu(const FPointerEvent& Event);
 	void OpenTrackMenu(const FPointerEvent& Event, int32 Track, int32 Key, double Time, uint8 Channel = 0);
-	void AddBoneTrack(FName Bone, bool bRotationOnly, int32 GroupId, EAnimStitchTrackMode Mode = EAnimStitchTrackMode::Additive);
+	void AddBoneTrack(FName Bone, bool bRotationOnly, int32 GroupId, EAnimStitchTrackMode Mode = EAnimStitchTrackMode::Absolute);
 	/** The single Root offset track (additive translation + yaw on the root). Both entry points (menu entry and bone picker) land here. */
 	void AddRootOffsetTrack();
 	bool HasRootOffsetTrack() const;

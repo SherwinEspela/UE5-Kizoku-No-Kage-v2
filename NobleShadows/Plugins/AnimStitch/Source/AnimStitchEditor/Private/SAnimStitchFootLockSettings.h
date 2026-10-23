@@ -24,9 +24,12 @@ public:
 private:
 	void Apply(TFunctionRef<void(FAnimStitchFootLockSettings&)> Edit, const FText& Label);
 	const FAnimStitchFootLockSettings& Current() const;
+	/** Rebuilds the chips of the extra ground contacts (paws, other end effectors beyond the left/right pair). */
+	void RebuildContactChips();
 
 	TObjectPtr<UAnimStitchTimelineAsset> Timeline;
 	TArray<TSharedPtr<FString>> BoneItems;
 	TSharedPtr<FString> LeftSelected;
 	TSharedPtr<FString> RightSelected;
+	TSharedPtr<class SWrapBox> ContactChips;
 };

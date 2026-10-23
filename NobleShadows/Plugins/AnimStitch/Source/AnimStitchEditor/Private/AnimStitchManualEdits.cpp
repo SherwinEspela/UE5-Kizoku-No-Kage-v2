@@ -40,6 +40,29 @@ int32 FAnimStitchManualEdits::GetBoneSide(FName Bone)
 	return 0;
 }
 
+bool FAnimStitchManualEdits::IsRigBone(FName Bone)
+{
+	static const TCHAR* Excluded[] = { TEXT("twist"), TEXT("corrective"), TEXT("roll"), TEXT("helper"), TEXT("_ik"), TEXT("ik_"), TEXT("_end"), TEXT("jaw"), TEXT("eye"), TEXT("tongue"), TEXT("teeth"), TEXT("hair"), TEXT("brow"), TEXT("lip"), TEXT("cheek"), TEXT("nose"), TEXT("ear"), TEXT("facial"), TEXT("pole"), TEXT("attach"), TEXT("socket") };
+	const FString Lower = Bone.ToString().ToLower();
+	if (Lower.StartsWith(TEXT("ik")) && Lower.Len() > 2) { return false; }
+	for (const TCHAR* Word : Excluded) { if (Lower.Contains(Word)) { return false; } }
+	return true;
+}
+
+int32 FAnimStitchManualEdits::ResolveParentTrack(const FReferenceSkeleton& Ref, const TArray<FAnimStitchTrack>& Tracks, int32 TrackIndex)
+{
+	if (!Tracks.IsValidIndex(TrackIndex) || Tracks[TrackIndex].Kind != EAnimStitchTrackKind::Bone) { return INDEX_NONE; }
+	const int32 Bone = Ref.FindBoneIndex(Tracks[TrackIndex].Bone);
+	if (Bone == INDEX_NONE) { return INDEX_NONE; }
+	for (int32 Parent = Ref.GetParentIndex(Bone); Parent != INDEX_NONE; Parent = Ref.GetParentIndex(Parent))
+	{
+		const FName ParentName = Ref.GetBoneName(Parent);
+		const int32 Found = Tracks.IndexOfByPredicate([ParentName](const FAnimStitchTrack& T) { return T.Kind == EAnimStitchTrackKind::Bone && T.Bone == ParentName; });
+		if (Found != INDEX_NONE) { return Found; }
+	}
+	return INDEX_NONE;
+}
+
 bool FAnimStitchManualEdits::IsIdentityKey(const FAnimStitchTrackKey& Key)
 {
 	return Key.Translation.IsNearlyZero(1e-4) && Key.Rotation.Equals(FQuat::Identity, 1e-5) && Key.Scale.Equals(FVector::OneVector, 1e-5);
@@ -330,7 +353,7 @@ FVector FAnimStitchManualEdits::DefaultPoleForPose(const FReferenceSkeleton& Ref
 	return K + Out.GetSafeNormal() * 40.0;
 }
 
-void FAnimStitchManualEdits::Apply(const FReferenceSkeleton& Ref, const TArray<FAnimStitchTrack>& Tracks, double Time, TArray<FTransform>& Local, const FName* PlantFootBones)
+void FAnimStitchManualEdits::Apply(const FReferenceSkeleton& Ref, const TArray<FAnimStitchTrack>& Tracks, double Time, TArray<FTransform>& Local, const TArray<FName>* PlantFootBones)
 {
 	if (Tracks.Num() == 0) { return; }
 
@@ -351,14 +374,14 @@ void FAnimStitchManualEdits::Apply(const FReferenceSkeleton& Ref, const TArray<F
 	TArray<FPlant> Plants;
 	if (PlantFootBones)
 	{
-		for (int32 f = 0; f < 2; ++f)
+		for (int32 f = 0; f < PlantFootBones->Num(); ++f)
 		{
-			const FAnimStitchFootChain Chain = ChainFor(Ref, PlantFootBones[f]);
+			const FAnimStitchFootChain Chain = ChainFor(Ref, (*PlantFootBones)[f]);
 			if (!Chain.IsValid()) { continue; }
 			bool bIKOwned = false;
 			for (const FAnimStitchTrack& T : Tracks)
 			{
-				if (T.Kind == EAnimStitchTrackKind::IKLimb && T.Bone == PlantFootBones[f] && T.Keys.Num() > 0 && Sample(T, Time).Weight > 1e-3f) { bIKOwned = true; }
+				if (T.Kind == EAnimStitchTrackKind::IKLimb && T.Bone == (*PlantFootBones)[f] && T.Keys.Num() > 0 && Sample(T, Time).Weight > 1e-3f) { bIKOwned = true; }
 			}
 			bool bMoved = false;
 			for (const TPair<int32, const FAnimStitchTrack*>& Entry : BoneTracks)
@@ -376,6 +399,10 @@ void FAnimStitchManualEdits::Apply(const FReferenceSkeleton& Ref, const TArray<F
 	// The pose before any control touches it: additive deltas are expressed in ITS axes (see below), and parented Absolute controls follow their parent's change from it.
 	TArray<FTransform> Original;
 	if (BoneTracks.Num() > 0) { Original = Local; }
+	// The control hierarchy is derived from the skeleton, not stored: a control's parent is the control on its nearest ancestor bone.
+	TArray<uint8> HasControl;
+	HasControl.Init(0, Ref.GetNum());
+	for (const TPair<int32, const FAnimStitchTrack*>& Entry : BoneTracks) { HasControl[Ref.FindBoneIndex(Entry.Value->Bone)] = 1; }
 
 	for (const TPair<int32, const FAnimStitchTrack*>& Entry : BoneTracks)
 	{
@@ -392,25 +419,27 @@ void FAnimStitchManualEdits::Apply(const FReferenceSkeleton& Ref, const TArray<F
 			// It replaces the blended result outright; the bone is re-expressed relative to its (already corrected) parent so children simply follow.
 			// Per channel: only the channels keyed here replace the blend, the others keep what the animation produces.
 			const uint8 Active = GetActiveChannels(Track, Time);
+			// The channels this key does not hold stay as the animation produces them (taken from the pose before any control), so the parent's motion below carries them too.
 			FTransform KeyRel(Key.Rotation.GetNormalized(), Key.Translation, Key.Scale);
 			if (Active != AnimStitchChannel::All)
 			{
-				KeyRel = FAnimStitchFootLock::GetComponentSpace(Ref, Local, Bone).GetRelativeTransform(Local[0]);
+				KeyRel = FAnimStitchFootLock::GetComponentSpace(Ref, Original, Bone).GetRelativeTransform(Original[0]);
 				if (Active & AnimStitchChannel::Translation) { KeyRel.SetTranslation(Key.Translation); }
 				if (Active & AnimStitchChannel::Rotation) { KeyRel.SetRotation(Key.Rotation.GetNormalized()); }
 				if (Active & AnimStitchChannel::Scale) { KeyRel.SetScale3D(Key.Scale); }
 			}
 			FTransform Target = KeyRel * Local[0];
-			if (Original.Num() > 0 && !Track.ParentBone.IsNone() && Active == AnimStitchChannel::All)
+			int32 ParentControlBone = INDEX_NONE;
+			for (int32 Ancestor = Parent; Ancestor != INDEX_NONE; Ancestor = Ref.GetParentIndex(Ancestor))
 			{
-				const int32 ParentControlBone = Ref.FindBoneIndex(Track.ParentBone);
-				if (ParentControlBone != INDEX_NONE)
-				{
-					const FTransform ParentBefore = FAnimStitchFootLock::GetComponentSpace(Ref, Original, ParentControlBone);
-					const FTransform ParentAfter = FAnimStitchFootLock::GetComponentSpace(Ref, Local, ParentControlBone);
-					const FTransform ParentMove = ParentBefore.Inverse() * ParentAfter; // the parent bone's own motion, in its frame
-					if (!ParentMove.Equals(FTransform::Identity, 1e-4f)) { Target = Target * ParentMove; }
-				}
+				if (HasControl[Ancestor]) { ParentControlBone = Ancestor; break; }
+			}
+			if (Original.Num() > 0 && ParentControlBone != INDEX_NONE)
+			{
+				const FTransform ParentBefore = FAnimStitchFootLock::GetComponentSpace(Ref, Original, ParentControlBone);
+				const FTransform ParentAfter = FAnimStitchFootLock::GetComponentSpace(Ref, Local, ParentControlBone);
+				const FTransform ParentMove = ParentBefore.Inverse() * ParentAfter; // the parent bone's own motion, in its frame
+				if (!ParentMove.Equals(FTransform::Identity, 1e-4f)) { Target = Target * ParentMove; }
 			}
 			const FTransform Relative = Target.GetRelativeTransform(ParentCS);
 			if (!Track.bRotationOnly)
@@ -471,3 +500,55 @@ void FAnimStitchManualEdits::Apply(const FReferenceSkeleton& Ref, const TArray<F
 	}
 }
 
+void FAnimStitchManualEdits::ConvertTracksToAbsolute(const FReferenceSkeleton& Ref, TArray<FAnimStitchTrack>& Tracks, const TArray<TArray<FTransform>>& BlendPoses, double Rate, double TotalLength, const TArray<FName>* PlantFootBones)
+{
+	(void)PlantFootBones; // the plant / IK stages run after the bone stage that is captured here, so they are not part of the keys
+	if (BlendPoses.Num() == 0 || Rate <= 0.0) { return; }
+
+	TArray<FAnimStitchTrack> BoneOnly;
+	for (const FAnimStitchTrack& Track : Tracks) { if (Track.Kind == EAnimStitchTrackKind::Bone) { BoneOnly.Add(Track); } }
+
+	struct FConvert { int32 Track; int32 Bone; int32 ParentBone; TArray<FAnimStitchTrackKey> Keys; };
+	TArray<FConvert> Converts;
+	for (int32 i = 0; i < Tracks.Num(); ++i)
+	{
+		if (Tracks[i].Kind != EAnimStitchTrackKind::Bone || Tracks[i].Mode != EAnimStitchTrackMode::Additive) { continue; }
+		const int32 Bone = Ref.FindBoneIndex(Tracks[i].Bone);
+		if (Bone == INDEX_NONE) { continue; }
+		const int32 ParentTrack = ResolveParentTrack(Ref, Tracks, i);
+		Converts.Add({ i, Bone, ParentTrack != INDEX_NONE ? Ref.FindBoneIndex(Tracks[ParentTrack].Bone) : INDEX_NONE, {} });
+	}
+	if (Converts.Num() == 0) { return; }
+
+	const int32 NumFrames = BlendPoses.Num();
+	for (int32 f = 0; f < NumFrames; ++f)
+	{
+		const double Time = f == NumFrames - 1 ? TotalLength : f / Rate;
+		const TArray<FTransform>& Orig = BlendPoses[f];
+		TArray<FTransform> Stage = Orig;
+		Apply(Ref, BoneOnly, Time, Stage, nullptr);
+		for (FConvert& C : Converts)
+		{
+			FTransform ParentMove = FTransform::Identity;
+			if (C.ParentBone != INDEX_NONE)
+			{
+				ParentMove = FAnimStitchFootLock::GetComponentSpace(Ref, Orig, C.ParentBone).Inverse() * FAnimStitchFootLock::GetComponentSpace(Ref, Stage, C.ParentBone);
+			}
+			const FTransform Wanted = FAnimStitchFootLock::GetComponentSpace(Ref, Stage, C.Bone) * ParentMove.Inverse();
+			const FTransform Basis = C.Bone == 0 ? Orig[0] : Stage[0]; // the root frame the key is relative to, as it is when Apply reaches this track
+			const FTransform Rel = Wanted.GetRelativeTransform(Basis);
+			FAnimStitchTrackKey Key;
+			Key.Time = Time;
+			Key.Translation = Rel.GetTranslation();
+			Key.Rotation = Rel.GetRotation().GetNormalized();
+			Key.Scale = Rel.GetScale3D();
+			C.Keys.Add(Key);
+		}
+	}
+	for (FConvert& C : Converts)
+	{
+		FAnimStitchTrack& Track = Tracks[C.Track];
+		Track.Mode = EAnimStitchTrackMode::Absolute;
+		Track.Keys = MoveTemp(C.Keys);
+	}
+}

@@ -27,6 +27,7 @@ private:
 	FAnimStitchControlStyle GetStyle() const;
 	void Edit(TFunctionRef<void(FAnimStitchControlStyle&)> Mutator);
 	TSharedRef<SWidget> MakeOffsetRow(const FText& Label, int32 Axis);
+	TSharedRef<SWidget> MakeShapeRow();
 
 	TSharedPtr<FAnimStitchPreview> Preview;
 	TSharedPtr<SAnimStitchTimeline> Timeline;

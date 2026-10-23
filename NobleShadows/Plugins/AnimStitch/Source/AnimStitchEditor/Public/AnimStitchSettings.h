@@ -17,6 +17,10 @@ struct ANIMSTITCHEDITOR_API FAnimStitchFootBones
 
 	UPROPERTY(config, EditAnywhere, Category = "Foot Lock")
 	FName Right;
+
+	/** Full designated ground-contact set (feet / paws). Empty = just Left and Right (settings saved before 2.0). */
+	UPROPERTY(config, EditAnywhere, Category = "Foot Lock")
+	TArray<FName> Contacts;
 };
 
 /** Page slugs of the online documentation, appended to the docs base URL. The ONLY place the docs targets are defined: fix them here when the website pages land. */

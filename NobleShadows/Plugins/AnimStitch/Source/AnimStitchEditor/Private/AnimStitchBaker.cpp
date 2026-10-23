@@ -1,4 +1,4 @@
-﻿#include "AnimStitchBaker.h"
+#include "AnimStitchBaker.h"
 #include "AnimStitchFootLock.h"
 #include "AnimStitchManualEdits.h"
 #include "AnimStitchProvenance.h"
@@ -155,12 +155,12 @@ const double Length = Timeline.GetTotalLength();
 	}
 	TrackBones.Sort();
 	// Pelvis-style corrections re-plant the feet with leg IK, so the legs need tracks too.
-	FName PlantFeet[2];
+	TArray<FName> PlantFeet;
 	bool bPlantFeet = false;
 	for (const FAnimStitchTrack& Track : Timeline.Tracks) { bPlantFeet |= Track.Kind == EAnimStitchTrackKind::Bone && Track.bKeepFeetPlanted && FAnimStitchManualEdits::IsPelvisBone(Track.Bone); }
 	if (bPlantFeet)
 	{
-		FAnimStitchFootLock::ResolveFootBones(Evaluator.GetSkeleton(), Timeline.FootLock, PlantFeet[0], PlantFeet[1]);
+		PlantFeet = FAnimStitchFootLock::ResolveGroundContacts(Evaluator.GetSkeleton(), Timeline.FootLock);
 		for (const FName FootBone : PlantFeet)
 		{
 			const FAnimStitchFootChain Chain = FAnimStitchFootLock::BuildChain(RefSkel, FootBone);
@@ -171,14 +171,12 @@ const double Length = Timeline.GetTotalLength();
 	}
 	if (bFootLock || bPredict || bGroundFeet)
 	{
-		FName Left, Right;
-		FAnimStitchFootLock::ResolveFootBones(Evaluator.GetSkeleton(), Timeline.FootLock, Left, Right);
-		for (const FName FootBone : { Left, Right })
+		for (const FName FootBone : FAnimStitchFootLock::ResolveGroundContacts(Evaluator.GetSkeleton(), Timeline.FootLock))
 		{
 			const FAnimStitchFootChain Chain = FAnimStitchFootLock::BuildChain(RefSkel, FootBone);
 			if (!Chain.IsValid())
 			{
-				OutError = FText::Format(LOCTEXT("ErrFootLockBone", "Foot lock is on, but the foot bone '{0}' was not found or has no thigh/calf above it. Pick the foot bones in the Bake window."), FText::FromName(FootBone)).ToString();
+				OutError = FText::Format(LOCTEXT("ErrFootLockBone", "Foot lock is on, but the foot bone '{0}' was not found or has no two bones above it. Pick the ground contacts in the Foot Lock settings."), FText::FromName(FootBone)).ToString();
 				return nullptr;
 			}
 			for (const int32 LegBone : { Chain.Thigh, Chain.Calf, Chain.Foot })
@@ -280,7 +278,7 @@ FScopedSlowTask Task(FullFrames + 3, LOCTEXT("BakeProgress", "Baking AnimStitch 
 			// Manual edits come last: they win over foot prediction and foot lock. Same function the preview uses.
 			for (int32 f = 0; f < FramePoses.Num(); ++f)
 			{
-				FAnimStitchManualEdits::Apply(RefSkel, Timeline.Tracks, f / FrameRate.AsDecimal(), FramePoses[f], bPlantFeet ? PlantFeet : nullptr);
+				FAnimStitchManualEdits::Apply(RefSkel, Timeline.Tracks, f / FrameRate.AsDecimal(), FramePoses[f], bPlantFeet ? &PlantFeet : nullptr);
 			}
 		}
 for (int32 FrameIndex = FirstFrame; FrameIndex <= LastFrame; ++FrameIndex)

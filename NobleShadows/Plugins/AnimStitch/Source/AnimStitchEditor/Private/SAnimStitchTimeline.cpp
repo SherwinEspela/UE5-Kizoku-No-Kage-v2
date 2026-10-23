@@ -1,4 +1,4 @@
-﻿#include "SAnimStitchTimeline.h"
+#include "SAnimStitchTimeline.h"
 #include "Editor.h"
 #include "ScopedTransaction.h"
 #include "DragAndDrop/AssetDragDropOp.h"
@@ -105,11 +105,11 @@ int32 SAnimStitchTimeline::OnPaint(const FPaintArgs& Args, const FGeometry& G, c
 	if (IsFootLaneVisible())
 	{
 		const bool bHavePlants = Plants.IsValid() && Plants->bValid;
-		for (int32 Foot = 0; Foot < 2; ++Foot)
+		for (int32 Foot = 0; Foot < GetNumFootLanes(); ++Foot)
 		{
 			const float LaneY = GetLaneTop(Foot);
 			DrawRect(Out, Layer + 2, G, FVector2f(0.f, LaneY), FVector2f(Size.X, LaneHeight), FLinearColor(0.f, 0.f, 0.f, 0.35f));
-			PaintLabel(Out, Layer + 3, G, FVector2f(3.f, LaneY - 2.f), Foot == 0 ? TEXT("L") : TEXT("R"), FLinearColor(1, 1, 1, 0.6f));
+			PaintLabel(Out, Layer + 3, G, FVector2f(3.f, LaneY - 2.f), *GetFootLaneLabel(Foot, false), FLinearColor(1, 1, 1, 0.6f));
 			if (!bHavePlants)
 			{
 				if (Foot == 0 && Plants.IsValid())
@@ -140,7 +140,7 @@ int32 SAnimStitchTimeline::OnPaint(const FPaintArgs& Args, const FGeometry& G, c
 		}
 		if (bHavePlants)
 		{
-			for (int32 Foot = 0; Foot < 2; ++Foot)
+			for (int32 Foot = 0; Foot < GetNumFootLanes(); ++Foot)
 			{
 				for (const FAnimStitchFootLockResult::FEventMark& Mark : Plants->Events[Foot])
 				{
@@ -357,7 +357,7 @@ SAnimStitchTimeline::FHit SAnimStitchTimeline::HitTest(const FVector2f& P) const
 	}
 	if (IsFootLaneVisible())
 	{
-		for (int32 Foot = 0; Foot < 2; ++Foot)
+		for (int32 Foot = 0; Foot < GetNumFootLanes(); ++Foot)
 		{
 			if (P.Y >= GetLaneTop(Foot) - 2.f && P.Y <= GetLaneTop(Foot) + LaneHeight + 2.f)
 			{

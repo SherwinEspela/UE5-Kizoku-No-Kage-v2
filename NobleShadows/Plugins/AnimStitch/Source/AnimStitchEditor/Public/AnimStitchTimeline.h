@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "Misc/FrameRate.h"
@@ -64,6 +64,13 @@ struct ANIMSTITCHEDITOR_API FAnimStitchFootLockSettings
 
 	UPROPERTY()
 	FName RightFootBone;
+
+	/**
+	 * Designated ground contacts (end-effector bones: 2 feet, 4 paws...). Empty = the skeleton's remembered set, else the Left/Right pair above.
+	 * When set, entries 0 and 1 are the left and right foot (foot events address contacts by this index).
+	 */
+	UPROPERTY()
+	TArray<FName> GroundContacts;
 
 	/** Ground height = the feet's rest-pose height (the foot bone's height in the reference pose). */
 	UPROPERTY()
@@ -192,12 +199,25 @@ struct ANIMSTITCHEDITOR_API FAnimStitchTrackKey
 
 };
 
-/** Shape of a control in the viewport. */
+/**
+ * Shape of a control in the viewport. Epic Control Rig style: line-drawn outlines (curves), never solid cubes or spheres.
+ * Auto picks the curve that suits the bone's role. Box and Sphere only exist so projects saved before 2.0 still load; they draw as Auto.
+ */
 UENUM()
 enum class EAnimStitchControlShape : uint8
 {
+	/** Legacy (pre-2.0 default, drawn as Auto). Kept first so the numeric values of old data stay valid. */
 	Box,
+	/** Legacy (pre-2.0 pole vector default, drawn as Auto). */
 	Sphere,
+	/** The curve that suits the control's role (circle for FK joints, square for the root / pelvis / IK targets, diamond for pole vectors...). */
+	Auto,
+	Circle,
+	Square,
+	Diamond,
+	Triangle,
+	Hexagon,
+	Cross,
 };
 
 /** Per-control look. Overrides win over the global Show > Controls values; the offset only moves the drawn control (to separate overlapping shapes). */
@@ -220,7 +240,7 @@ struct ANIMSTITCHEDITOR_API FAnimStitchControlStyle
 	float Size = 1.f;
 
 	UPROPERTY()
-	EAnimStitchControlShape Shape = EAnimStitchControlShape::Box;
+	EAnimStitchControlShape Shape = EAnimStitchControlShape::Auto;
 
 	/** Display offset (cm, component space). */
 	UPROPERTY()
@@ -259,7 +279,7 @@ struct ANIMSTITCHEDITOR_API FAnimStitchTrack
 	UPROPERTY()
 	EAnimStitchTrackMode Mode = EAnimStitchTrackMode::Additive;
 
-	/** Bone tracks: the control (track) of the skeleton parent bone this control is parented to, set when the track is created (NAME_None = top level). Control hierarchy only; the track list stays flat. */
+	/** Deprecated since 2.0: the control hierarchy is derived from the skeleton (nearest ancestor bone that has a control, see FAnimStitchManualEdits::ResolveParentTrack). Cleared on load, never read. */
 	UPROPERTY()
 	FName ParentBone;
 

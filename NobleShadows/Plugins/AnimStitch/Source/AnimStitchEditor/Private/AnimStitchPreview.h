@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "UObject/GCObject.h"
@@ -40,7 +40,10 @@ struct FAnimStitchControl
 	/** Per-control look from the track (negative = use the global value). */
 	float Opacity = -1.f;
 	float SizeMul = -1.f;
-	bool bSphere = false;
+	/** The curve outline drawn for this control (Epic Control Rig style); resolved from the track's style and the control's role. */
+	EAnimStitchControlShape Shape = EAnimStitchControlShape::Circle;
+	/** Orientation of the drawn outline (circles ring the bone axis); the manipulator keeps using Orientation. */
+	FQuat ShapeOrientation = FQuat::Identity;
 	/** Display offset (cm): moves the drawn control and its manipulator, not the value it edits. */
 	FVector Offset = FVector::ZeroVector;
 	/** Pole controls: the IK limb track they belong to (the control's own track is the pole lane). */
@@ -278,7 +281,7 @@ private:
 	bool bHaveBasePose = false;
 	mutable TArray<float> BoneExtentSize;
 	/** Left / right foot bones that bone corrections keep planted (resolved lazily from the foot-lock settings). */
-	mutable FName PlantFeet[2];
+	mutable TArray<FName> PlantFeet;
 	mutable bool bPlantFeetResolved = false;
 	float ControlDrawSize = 1.f;
 	bool bShowControls = true;

@@ -149,7 +149,7 @@ void FAnimStitchPreview::BuildTrailFor(const FAnimStitchControlId& Id) const
 	}
 	if (bTraceBone && !bPlantFeetResolved)
 	{
-		FAnimStitchFootLock::ResolveFootBones(Evaluator.GetSkeleton(), Evaluator.GetTimeline().FootLock, PlantFeet[0], PlantFeet[1]);
+		PlantFeet = FAnimStitchFootLock::ResolveGroundContacts(Evaluator.GetSkeleton(), Evaluator.GetTimeline().FootLock);
 		bPlantFeetResolved = true;
 	}
 	TArray<FTransform> Scratch;
@@ -173,7 +173,7 @@ void FAnimStitchPreview::BuildTrailFor(const FAnimStitchControlId& Id) const
 			{
 				Evaluator.EvaluatePose(Time, Scratch);
 			}
-			FAnimStitchManualEdits::Apply(SkelRef, GetTrailTracks(), Time, Scratch, PlantFeet);
+			FAnimStitchManualEdits::Apply(SkelRef, GetTrailTracks(), Time, Scratch, &PlantFeet);
 			Out = FAnimStitchFootLock::GetComponentSpace(SkelRef, Scratch, SkelBone).GetTranslation() + DisplayOffset;
 			return true;
 		}

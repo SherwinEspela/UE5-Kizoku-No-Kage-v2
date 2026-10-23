@@ -1,4 +1,4 @@
-﻿#include "AnimStitchPreview.h"
+#include "AnimStitchPreview.h"
 #include "AnimStitchPoseComponent.h"
 #include "AnimStitchManualEdits.h"
 #include "AnimStitchShortcuts.h"
@@ -326,10 +326,10 @@ void FAnimStitchPreview::SetPlayhead(double Time)
 		}
 		if (!bPlantFeetResolved)
 		{
-			FAnimStitchFootLock::ResolveFootBones(Evaluator.GetSkeleton(), Evaluator.GetTimeline().FootLock, PlantFeet[0], PlantFeet[1]);
+			PlantFeet = FAnimStitchFootLock::ResolveGroundContacts(Evaluator.GetSkeleton(), Evaluator.GetTimeline().FootLock);
 			bPlantFeetResolved = true;
 		}
-		FAnimStitchManualEdits::Apply(Evaluator.GetSkeleton()->GetReferenceSkeleton(), ManualTracks, Time, Pose, PlantFeet);
+		FAnimStitchManualEdits::Apply(Evaluator.GetSkeleton()->GetReferenceSkeleton(), ManualTracks, Time, Pose, &PlantFeet);
 		if (bPinRoot && Pose.Num() > 0)
 		{
 			FVector Loc = Pose[0].GetTranslation();

@@ -80,6 +80,32 @@ void FAnimStitchFootLock::ResolveFootBones(const USkeleton* Skeleton, const FAni
 	}
 }
 
+TArray<FName> FAnimStitchFootLock::ResolveGroundContacts(const USkeleton* Skeleton, const FAnimStitchFootLockSettings& Settings)
+{
+	if (Settings.GroundContacts.Num() > 0)
+	{
+		return Settings.GroundContacts;
+	}
+	// A project saved before 2.0 (or one that picked the pair by hand) addresses the two feet through Left/Right.
+	if (Settings.LeftFootBone.IsNone() && Settings.RightFootBone.IsNone() && Skeleton)
+	{
+		const FAnimStitchFootBones* Remembered = GetDefault<UAnimStitchSettings>()->FootBonesBySkeleton.Find(Skeleton->GetPathName());
+		if (Remembered && Remembered->Contacts.Num() > 0)
+		{
+			const FReferenceSkeleton& Ref = Skeleton->GetReferenceSkeleton();
+			bool bAllFound = true;
+			for (const FName& Contact : Remembered->Contacts) { bAllFound &= Ref.FindBoneIndex(Contact) != INDEX_NONE; }
+			if (bAllFound)
+			{
+				return Remembered->Contacts;
+			}
+		}
+	}
+	FName Left, Right;
+	ResolveFootBones(Skeleton, Settings, Left, Right);
+	return { Left, Right };
+}
+
 FAnimStitchFootChain FAnimStitchFootLock::BuildChain(const FReferenceSkeleton& Ref, FName FootBone)
 {
 	FAnimStitchFootChain Chain;
@@ -108,16 +134,21 @@ FAnimStitchFootLockResult FAnimStitchFootLock::Detect(const FAnimStitchEvaluator
 	}
 	const FReferenceSkeleton& Ref = Skeleton->GetReferenceSkeleton();
 
-	FName Bones[2];
-	ResolveFootBones(Skeleton, S, Bones[0], Bones[1]);
-	for (int32 Foot = 0; Foot < 2; ++Foot)
+	const TArray<FName> Bones = ResolveGroundContacts(Skeleton, S);
+	const int32 NumContacts = Bones.Num();
+	Result.FootBones = Bones;
+	Result.Chains.SetNum(NumContacts);
+	Result.Mask.SetNum(NumContacts);
+	Result.Events.SetNum(NumContacts);
+	Result.PinOffset.SetNum(NumContacts);
+	Result.PinEvent.SetNum(NumContacts);
+	for (int32 Foot = 0; Foot < NumContacts; ++Foot)
 	{
-		Result.FootBones[Foot] = Bones[Foot];
 		Result.Chains[Foot] = BuildChain(Ref, Bones[Foot]);
 		if (!Result.Chains[Foot].IsValid())
 		{
-			Result.Problem = FText::Format(LOCTEXT("FootNoChain", "Foot lock: the {0} foot bone '{1}' was not found or has no thigh/calf above it. Pick the foot bones in the Bake window."),
-				Foot == 0 ? LOCTEXT("Left", "left") : LOCTEXT("Right", "right"), FText::FromName(Bones[Foot]));
+			Result.Problem = FText::Format(LOCTEXT("FootNoChain", "Foot lock: the ground contact bone #{0} '{1}' was not found or has no two bones above it. Pick the ground contacts in the Foot Lock settings."),
+				FText::AsNumber(Foot + 1), FText::FromName(Bones[Foot]));
 			return Result;
 		}
 	}
@@ -125,7 +156,11 @@ FAnimStitchFootLockResult FAnimStitchFootLock::Detect(const FAnimStitchEvaluator
 	if (S.bAutoGroundHeight)
 	{
 		const TArray<FTransform>& RefPose = Ref.GetRefBonePose();
-		Result.GroundZ = FMath::Min(ComponentSpace(Ref, RefPose, Result.Chains[0].Foot).GetTranslation().Z, ComponentSpace(Ref, RefPose, Result.Chains[1].Foot).GetTranslation().Z);
+		Result.GroundZ = TNumericLimits<double>::Max();
+		for (int32 Foot = 0; Foot < NumContacts; ++Foot)
+		{
+			Result.GroundZ = FMath::Min(Result.GroundZ, ComponentSpace(Ref, RefPose, Result.Chains[Foot].Foot).GetTranslation().Z);
+		}
 	}
 	else
 	{
@@ -136,7 +171,7 @@ FAnimStitchFootLockResult FAnimStitchFootLock::Detect(const FAnimStitchEvaluator
 	const double Dt = 1.0 / Fps;
 	const int32 MinFrames = FMath::Max(1, FMath::CeilToInt(S.MinPlantDuration * Fps));
 
-	for (int32 Foot = 0; Foot < 2; ++Foot)
+	for (int32 Foot = 0; Foot < NumContacts; ++Foot)
 	{
 		TArray<FVector> Position;
 		Position.SetNum(NumFrames);
@@ -338,11 +373,12 @@ int32 FAnimStitchFootLock::GroundFeet(const FAnimStitchEvaluator& Evaluator, TAr
 	const double TiltLimit = FMath::DegreesToRadians(TiltToleranceDegrees);
 
 	// The floor: the ankle sits RefAnkleZ above the sole in the reference pose, and Detection.GroundZ is the height the ankle counts as grounded at.
-	const double RefAnkleZ = FMath::Min(ComponentSpace(Ref, RefPose, Detection.Chains[0].Foot).GetTranslation().Z, ComponentSpace(Ref, RefPose, Detection.Chains[1].Foot).GetTranslation().Z);
+	double RefAnkleZ = TNumericLimits<double>::Max();
+	for (const FAnimStitchFootChain& C : Detection.Chains) { RefAnkleZ = FMath::Min(RefAnkleZ, ComponentSpace(Ref, RefPose, C.Foot).GetTranslation().Z); }
 	const double FloorZ = Detection.GroundZ - RefAnkleZ;
 
 	int32 Corrected = 0;
-	for (int32 Foot = 0; Foot < 2; ++Foot)
+	for (int32 Foot = 0; Foot < Detection.Chains.Num(); ++Foot)
 	{
 		const FAnimStitchFootChain& Chain = Detection.Chains[Foot];
 		const TArray<uint8>& Mask = Detection.Mask[Foot];
@@ -451,8 +487,14 @@ int32 FAnimStitchFootLock::Pin(const FAnimStitchEvaluator& Evaluator, TArray<TAr
 
 	// Pass 1: where each foot's ankle should be on each frame (from the unmodified poses).
 	struct FTarget { bool bActive = false; FVector Desired = FVector::ZeroVector; bool bRelease = false; double ReleaseWeight = 0.0; };
-	TArray<FTarget> Targets[2];
-	for (int32 Foot = 0; Foot < 2; ++Foot)
+	const int32 NumFeet = Detection.Chains.Num();
+	TArray<TArray<FTarget>> Targets;
+	Targets.SetNum(NumFeet);
+	if (Output)
+	{
+		Output->ManualTarget.SetNum(NumFeet);
+	}
+	for (int32 Foot = 0; Foot < NumFeet; ++Foot)
 	{
 		Targets[Foot].SetNum(NumFrames);
 		if (Output)
@@ -528,7 +570,9 @@ int32 FAnimStitchFootLock::Pin(const FAnimStitchEvaluator& Evaluator, TArray<TAr
 
 	// Pass 2: pelvis follows. Where a pinned foot would be beyond (about 97% of) the leg's reach, move the pelvis the minimum
 	// amount that brings every pinned foot back in reach, capped and lightly smoothed. Spine and head follow the pelvis.
-	const int32 Pelvis = Detection.Chains[0].ThighParent == Detection.Chains[1].ThighParent ? Detection.Chains[0].ThighParent : INDEX_NONE;
+	// Only when every contact's leg hangs from the same bone (a biped); quadrupeds with separate fore/hind girdles keep the pelvis where it is.
+	int32 Pelvis = NumFeet > 0 ? Detection.Chains[0].ThighParent : INDEX_NONE;
+	for (const FAnimStitchFootChain& C : Detection.Chains) { if (C.ThighParent != Pelvis) { Pelvis = INDEX_NONE; } }
 	TArray<FVector> PelvisOffset;
 	PelvisOffset.Init(FVector::ZeroVector, NumFrames);
 	bool bAnyOffset = false;
@@ -537,14 +581,20 @@ int32 FAnimStitchFootLock::Pin(const FAnimStitchEvaluator& Evaluator, TArray<TAr
 		constexpr double ReachFraction = 0.97;
 		for (int32 f = 0; f < NumFrames; ++f)
 		{
-			FVector Hip[2], Goal[2];
-			double Reach[2];
-			bool bUse[2];
-			for (int32 Foot = 0; Foot < 2; ++Foot)
+			TArray<FVector> Hip, Goal;
+			TArray<double> Reach;
+			TArray<uint8> bUse;
+			Hip.Init(FVector::ZeroVector, NumFeet);
+			Goal.Init(FVector::ZeroVector, NumFeet);
+			Reach.Init(0.0, NumFeet);
+			bUse.Init(0, NumFeet);
+			bool bAnyUse = false;
+			for (int32 Foot = 0; Foot < NumFeet; ++Foot)
 			{
 				const FAnimStitchFootChain& Chain = Detection.Chains[Foot];
 				bUse[Foot] = Targets[Foot][f].bActive && !Targets[Foot][f].bRelease;
 				if (!bUse[Foot]) { continue; }
+				bAnyUse = true;
 				const FVector H = ComponentSpace(Ref, Poses[f], Chain.Thigh).GetTranslation();
 				const FVector K = ComponentSpace(Ref, Poses[f], Chain.Calf).GetTranslation();
 				const FVector A = ComponentSpace(Ref, Poses[f], Chain.Foot).GetTranslation();
@@ -553,12 +603,12 @@ int32 FAnimStitchFootLock::Pin(const FAnimStitchEvaluator& Evaluator, TArray<TAr
 				// Never ask for more bend than the animation itself had: a leg that was already nearly straight stays as it was.
 				Reach[Foot] = FMath::Max(((K - H).Size() + (A - K).Size()) * ReachFraction, (A - H).Size());
 			}
-			if (!bUse[0] && !bUse[1]) { continue; }
+			if (!bAnyUse) { continue; }
 
 			FVector Offset = FVector::ZeroVector;
 			for (int32 Iteration = 0; Iteration < 6; ++Iteration)
 			{
-				for (int32 Foot = 0; Foot < 2; ++Foot)
+				for (int32 Foot = 0; Foot < NumFeet; ++Foot)
 				{
 					if (!bUse[Foot]) { continue; }
 					const FVector FromGoal = Hip[Foot] + Offset - Goal[Foot];
@@ -576,7 +626,7 @@ int32 FAnimStitchFootLock::Pin(const FAnimStitchEvaluator& Evaluator, TArray<TAr
 		}
 
 		// While a foot eases back to the animation after an explicit unlock, the pelvis offset it needed eases out with it.
-		for (int32 Foot = 0; Foot < 2; ++Foot)
+		for (int32 Foot = 0; Foot < NumFeet; ++Foot)
 		{
 			for (int32 f = 1; f < NumFrames; ++f)
 			{
@@ -620,7 +670,7 @@ int32 FAnimStitchFootLock::Pin(const FAnimStitchEvaluator& Evaluator, TArray<TAr
 
 	// Pass 3: solve both legs onto their targets (with the hips where pass 2 left them).
 	int32 Corrected = 0;
-	for (int32 Foot = 0; Foot < 2; ++Foot)
+	for (int32 Foot = 0; Foot < NumFeet; ++Foot)
 	{
 		for (int32 f = 0; f < NumFrames; ++f)
 		{
@@ -647,15 +697,16 @@ FAnimStitchPredictReport FAnimStitchFootLock::PredictFeet(const FAnimStitchEvalu
 	}
 	const FReferenceSkeleton& Ref = Skeleton->GetReferenceSkeleton();
 
-	FName Bones[2];
-	ResolveFootBones(Skeleton, S, Bones[0], Bones[1]);
-	FAnimStitchFootChain Chains[2];
-	for (int32 Foot = 0; Foot < 2; ++Foot)
+	const TArray<FName> Bones = ResolveGroundContacts(Skeleton, S);
+	const int32 NumFeet = Bones.Num();
+	TArray<FAnimStitchFootChain> Chains;
+	Chains.SetNum(NumFeet);
+	for (int32 Foot = 0; Foot < NumFeet; ++Foot)
 	{
 		Chains[Foot] = BuildChain(Ref, Bones[Foot]);
 		if (!Chains[Foot].IsValid())
 		{
-			Report.Problem = FText::Format(LOCTEXT("PredictNoChain", "Foot prediction: the foot bone '{0}' was not found or has no thigh/calf above it. Pick the foot bones in the Foot Lock settings."), FText::FromName(Bones[Foot]));
+			Report.Problem = FText::Format(LOCTEXT("PredictNoChain", "Foot prediction: the ground contact bone '{0}' was not found or has no two bones above it. Pick the ground contacts in the Foot Lock settings."), FText::FromName(Bones[Foot]));
 			return Report;
 		}
 	}
@@ -663,7 +714,8 @@ FAnimStitchPredictReport FAnimStitchFootLock::PredictFeet(const FAnimStitchEvalu
 	if (S.bAutoGroundHeight)
 	{
 		const TArray<FTransform>& RefPose = Ref.GetRefBonePose();
-		GroundZ = FMath::Min(ComponentSpace(Ref, RefPose, Chains[0].Foot).GetTranslation().Z, ComponentSpace(Ref, RefPose, Chains[1].Foot).GetTranslation().Z);
+		GroundZ = TNumericLimits<double>::Max();
+		for (const FAnimStitchFootChain& C : Chains) { GroundZ = FMath::Min(GroundZ, ComponentSpace(Ref, RefPose, C.Foot).GetTranslation().Z); }
 	}
 	Report.bValid = true;
 
@@ -682,9 +734,9 @@ FAnimStitchPredictReport FAnimStitchFootLock::PredictFeet(const FAnimStitchEvalu
 		FVector PinAt(int32 Frame) const { return Pin[Frame - First]; }
 	};
 	const int32 NumClips = Timeline.Clips.Num();
-	TArray<FClipFoot> ClipFeet[2];
-	ClipFeet[0].SetNum(NumClips);
-	ClipFeet[1].SetNum(NumClips);
+	TArray<TArray<FClipFoot>> ClipFeet;
+	ClipFeet.SetNum(NumFeet);
+	for (TArray<FClipFoot>& PerFoot : ClipFeet) { PerFoot.SetNum(NumClips); }
 
 	auto AnalyseClip = [&](int32 ClipIndex)
 	{
@@ -695,19 +747,19 @@ FAnimStitchPredictReport FAnimStitchFootLock::PredictFeet(const FAnimStitchEvalu
 		const int32 N = F1 - F0 + 1;
 		if (N < 2) { return; }
 
-		TArray<FVector> Position[2];
-		Position[0].SetNum(N);
-		Position[1].SetNum(N);
+		TArray<TArray<FVector>> Position;
+		Position.SetNum(NumFeet);
+		for (TArray<FVector>& PerFoot : Position) { PerFoot.SetNum(N); }
 		TArray<FTransform> Pose;
 		for (int32 i = 0; i < N; ++i)
 		{
 			Evaluator.EvaluateClipPose(ClipIndex, (F0 + i) * Dt, Pose);
-			for (int32 Foot = 0; Foot < 2; ++Foot)
+			for (int32 Foot = 0; Foot < NumFeet; ++Foot)
 			{
 				Position[Foot][i] = ComponentSpace(Ref, Pose, Chains[Foot].Foot).GetTranslation();
 			}
 		}
-		for (int32 Foot = 0; Foot < 2; ++Foot)
+		for (int32 Foot = 0; Foot < NumFeet; ++Foot)
 		{
 			FClipFoot& Out = ClipFeet[Foot][ClipIndex];
 			Out.bAnalysed = true;
@@ -743,9 +795,9 @@ FAnimStitchPredictReport FAnimStitchFootLock::PredictFeet(const FAnimStitchEvalu
 
 	// 2) Inside each crossfade, decide where each foot should be.
 	struct FTarget { double Weight = 0.0; FVector Desired = FVector::ZeroVector; FVector Target = FVector::ZeroVector; };
-	TArray<FTarget> Targets[2];
-	Targets[0].SetNum(NumFrames);
-	Targets[1].SetNum(NumFrames);
+	TArray<TArray<FTarget>> Targets;
+	Targets.SetNum(NumFeet);
+	for (TArray<FTarget>& PerFoot : Targets) { PerFoot.SetNum(NumFrames); }
 
 	for (int32 In = 1; In < NumClips; ++In)
 	{
@@ -759,7 +811,7 @@ FAnimStitchPredictReport FAnimStitchFootLock::PredictFeet(const FAnimStitchEvalu
 		if (WinEnd < WinStart) { continue; }
 		++Report.Overlaps;
 
-		for (int32 Foot = 0; Foot < 2; ++Foot)
+		for (int32 Foot = 0; Foot < NumFeet; ++Foot)
 		{
 			const FAnimStitchFootChain& Chain = Chains[Foot];
 			const FClipFoot& FeetA = ClipFeet[Foot][In - 1];
@@ -842,7 +894,7 @@ FAnimStitchPredictReport FAnimStitchFootLock::PredictFeet(const FAnimStitchEvalu
 	}
 
 	// 3) Solve the legs onto the targets. Only leg rotations change; the pelvis is untouched.
-	for (int32 Foot = 0; Foot < 2; ++Foot)
+	for (int32 Foot = 0; Foot < NumFeet; ++Foot)
 	{
 		for (int32 f = 0; f < NumFrames; ++f)
 		{

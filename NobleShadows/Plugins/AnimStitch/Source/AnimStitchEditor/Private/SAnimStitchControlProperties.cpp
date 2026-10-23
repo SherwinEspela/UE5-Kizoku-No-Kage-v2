@@ -1,7 +1,13 @@
-﻿#include "SAnimStitchControlProperties.h"
+#include "SAnimStitchControlProperties.h"
 #include "SAnimStitchTimeline.h"
 #include "AnimStitchPreview.h"
 #include "AnimStitchTimelineAsset.h"
+#include "AnimStitchControlShapes.h"
+#include "AnimStitchManualEdits.h"
+#include "Engine/SkeletalMesh.h"
+#include "Animation/Skeleton.h"
+#include "ReferenceSkeleton.h"
+#include "Widgets/Layout/SWrapBox.h"
 #include "ScopedTransaction.h"
 #include "Styling/AppStyle.h"
 #include "Widgets/Input/SButton.h"
@@ -44,6 +50,27 @@ void SAnimStitchControlProperties::Edit(TFunctionRef<void(FAnimStitchControlStyl
 	Asset->SetTrackControlStyle(Track, bPole, Style);
 }
 
+TSharedRef<SWidget> SAnimStitchControlProperties::MakeShapeRow()
+{
+	TSharedRef<SWrapBox> Row = SNew(SWrapBox).UseAllottedSize(true);
+	for (const EAnimStitchControlShape Shape : { EAnimStitchControlShape::Auto, EAnimStitchControlShape::Circle, EAnimStitchControlShape::Square, EAnimStitchControlShape::Diamond, EAnimStitchControlShape::Triangle, EAnimStitchControlShape::Hexagon, EAnimStitchControlShape::Cross })
+	{
+		Row->AddSlot().Padding(0.f, 0.f, 2.f, 2.f)
+		[
+			SNew(SCheckBox).Style(FAppStyle::Get(), "ToggleButtonCheckbox")
+			.ToolTipText(FText::Format(LOCTEXT("ShapePickTip", "Draw this control as: {0}"), AnimStitchControlShapes::GetDisplayName(Shape)))
+			.IsChecked_Lambda([this, Shape]()
+			{
+				const EAnimStitchControlShape Current = GetStyle().Shape;
+				const bool bLegacy = Current == EAnimStitchControlShape::Box || Current == EAnimStitchControlShape::Sphere; // pre-2.0 values draw as Auto
+				return (Current == Shape || (bLegacy && Shape == EAnimStitchControlShape::Auto)) ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+			})
+			.OnCheckStateChanged_Lambda([this, Shape](ECheckBoxState) { Edit([Shape](FAnimStitchControlStyle& S) { S.Shape = Shape; }); })
+			[SNew(STextBlock).Text(AnimStitchControlShapes::GetDisplayName(Shape)).Margin(FMargin(8.f, 2.f))]
+		];
+	}
+	return Row;
+}
 TSharedRef<SWidget> SAnimStitchControlProperties::MakeOffsetRow(const FText& Label, int32 Axis)
 {
 	return SNew(SHorizontalBox)
@@ -83,12 +110,14 @@ void SAnimStitchControlProperties::Construct(const FArguments& InArgs)
 		+ SVerticalBox::Slot().AutoHeight().Padding(8.f, 0.f, 8.f, 2.f)
 			[
 				SNew(STextBlock).AutoWrapText(true).ColorAndOpacity(FSlateColor::UseSubduedForeground())
-				.ToolTipText(LOCTEXT("ParentControlTip", "Control hierarchy: a new control is parented to the control of its skeleton parent bone when that control exists. Moving the parent control carries this one. The timeline track list stays flat."))
+				.ToolTipText(LOCTEXT("ParentControlTip", "Control hierarchy: every control is parented to the control on its nearest ancestor bone (live, whenever either was added). Moving or rotating the parent control carries this one. The timeline track list stays flat."))
 				.Text_Lambda([this]() -> FText
 				{
 					UAnimStitchTimelineAsset* A = nullptr; int32 T = INDEX_NONE; bool bP = false;
 					if (!GetTarget(A, T, bP)) { return FText::GetEmpty(); }
-					const FName Parent = A->Timeline.Tracks[T].ParentBone;
+					const USkeleton* Skeleton = A->GetSkeleton();
+						const int32 ParentTrack = Skeleton ? FAnimStitchManualEdits::ResolveParentTrack(Skeleton->GetReferenceSkeleton(), A->Timeline.Tracks, T) : INDEX_NONE;
+						const FName Parent = ParentTrack != INDEX_NONE ? A->Timeline.Tracks[ParentTrack].Bone : FName();
 					return Parent.IsNone() ? LOCTEXT("NoParentControl", "Parent control: none (top level)") : FText::Format(LOCTEXT("ParentControl", "Parent control: {0}"), FText::FromName(Parent));
 				})
 			]
@@ -175,22 +204,10 @@ void SAnimStitchControlProperties::Construct(const FArguments& InArgs)
 			[
 				SNew(SHorizontalBox)
 				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 6.f, 0.f)[SNew(SBox).WidthOverride(84.f)[SNew(STextBlock).Text(LOCTEXT("PropShape", "Shape"))]]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 2.f, 0.f)
-				[
-					SNew(SCheckBox).Style(FAppStyle::Get(), "ToggleButtonCheckbox")
-					.ToolTipText(LOCTEXT("ShapeBoxTip", "Draw this control as a box"))
-					.IsChecked_Lambda([this]() { return GetStyle().Shape == EAnimStitchControlShape::Box ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
-					.OnCheckStateChanged_Lambda([this](ECheckBoxState) { Edit([](FAnimStitchControlStyle& S) { S.Shape = EAnimStitchControlShape::Box; }); })
-					[SNew(STextBlock).Text(LOCTEXT("ShapeBox", "Box")).Margin(FMargin(10.f, 2.f))]
-				]
-				+ SHorizontalBox::Slot().AutoWidth()
-				[
-					SNew(SCheckBox).Style(FAppStyle::Get(), "ToggleButtonCheckbox")
-					.ToolTipText(LOCTEXT("ShapeSphereTip", "Draw this control as a sphere"))
-					.IsChecked_Lambda([this]() { return GetStyle().Shape == EAnimStitchControlShape::Sphere ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
-					.OnCheckStateChanged_Lambda([this](ECheckBoxState) { Edit([](FAnimStitchControlStyle& S) { S.Shape = EAnimStitchControlShape::Sphere; }); })
-					[SNew(STextBlock).Text(LOCTEXT("ShapeSphere", "Sphere")).Margin(FMargin(10.f, 2.f))]
-				]
+				+ SHorizontalBox::Slot().FillWidth(1.f)
+					[
+						MakeShapeRow()
+					]
 			]
 			// Offset
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 2.f)[SNew(STextBlock).Text(LOCTEXT("PropOffset", "Offset (cm), to separate overlapping shapes"))]

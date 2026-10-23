@@ -1,8 +1,9 @@
-﻿#include "AnimStitchTimelineAsset.h"
+#include "AnimStitchTimelineAsset.h"
 #include "AnimStitchSettings.h"
 #include "AnimStitchManualEdits.h"
 #include "Animation/AnimData/IAnimationDataModel.h"
 #include "Animation/Skeleton.h"
+#include "ReferenceSkeleton.h"
 
 #define LOCTEXT_NAMESPACE "AnimStitch"
 
@@ -529,37 +530,168 @@ bool UAnimStitchTimelineAsset::CaptureBlendedBoneTransform(FName Bone, double Ti
 	return true;
 }
 
-/** Fills an Absolute bone track with one root-relative key per frame across the whole timeline, taken from the blended (pre-manual) pose. */
-static void BakeAbsoluteKeys(const FAnimStitchTimeline& Timeline, FAnimStitchTrack& Track)
+namespace
 {
+	double RigBakeRate(const FAnimStitchTimeline& Timeline)
+	{
+		double Rate = 30.0;
+		if (const UAnimSequence* Seq = Timeline.Clips.Num() > 0 ? Timeline.Clips[0].Sequence.Get() : nullptr)
+		{
+			Rate = Seq->GetDataModel()->GetFrameRate().AsDecimal();
+		}
+		return (Rate < 1.0 || Rate > 120.0) ? 30.0 : Rate;
+	}
+
+	/** Root-relative transform of a bone in a skeleton-local pose: what an Absolute key holds. */
+	FTransform RootRelative(const FReferenceSkeleton& Ref, const TArray<FTransform>& Pose, int32 Bone)
+	{
+		return FAnimStitchFootLock::GetComponentSpace(Ref, Pose, Bone).GetRelativeTransform(FAnimStitchFootLock::GetComponentSpace(Ref, Pose, 0));
+	}
+
+	/** Fills an Absolute bone track with one root-relative key per frame, taken from the baked rig (the evaluated, pre-manual blend). */
+	void FillKeysFromRig(const FReferenceSkeleton& Ref, const UAnimStitchTimelineAsset::FRigBake& Rig, FAnimStitchTrack& Track)
+	{
+		const int32 BoneIndex = Ref.FindBoneIndex(Track.Bone);
+		if (BoneIndex == INDEX_NONE) { return; }
+		Track.Keys.Reserve(Rig.Poses.Num());
+		for (int32 f = 0; f < Rig.Poses.Num(); ++f)
+		{
+			const FTransform Rel = RootRelative(Ref, Rig.Poses[f], BoneIndex);
+			FAnimStitchTrackKey Key;
+			Key.Time = f == Rig.Poses.Num() - 1 ? Rig.TotalLength : f / Rig.Rate;
+			Key.Translation = Rel.GetTranslation();
+			Key.Rotation = Rel.GetRotation().GetNormalized();
+			Key.Scale = Rel.GetScale3D();
+			Track.Keys.Add(Key);
+		}
+	}
+}
+
+void UAnimStitchTimelineAsset::PostInitProperties()
+{
+	Super::PostInitProperties();
+	// A project created now is current; one that is being loaded keeps what its file says (a file without the field was saved before 2.0 and reads as 0).
+	if (!HasAnyFlags(RF_NeedLoad | RF_ClassDefaultObject | RF_WasLoaded))
+	{
+		ProjectFormatVersion = CurrentFormatVersion;
+	}
+}
+
+void UAnimStitchTimelineAsset::PostLoad()
+{
+	Super::PostLoad();
+	MigrateToCurrentFormat();
+}
+
+void UAnimStitchTimelineAsset::MigrateToCurrentFormat()
+{
+	if (ProjectFormatVersion >= CurrentFormatVersion) { return; }
+	// Pre-2.0 -> 2.0: the control hierarchy is derived from the skeleton now (the stored creation-time parent is dropped), and controls drawn as the old
+	// solid Box / Sphere take the Epic-style curve of their role (Auto). Track keys, modes and every other setting are kept exactly as they were.
+	for (FAnimStitchTrack& Track : Timeline.Tracks)
+	{
+		Track.ParentBone = NAME_None;
+		for (FAnimStitchControlStyle* Style : { &Track.ControlStyle, &Track.PoleStyle })
+		{
+			if (Style->Shape == EAnimStitchControlShape::Box || Style->Shape == EAnimStitchControlShape::Sphere) { Style->Shape = EAnimStitchControlShape::Auto; }
+		}
+	}
+	ProjectFormatVersion = CurrentFormatVersion;
+}
+
+bool UAnimStitchTimelineAsset::GetRigBake(FRigBake& Out) const
+{
+	if (CachedRigStamp == EditCounter && CachedRig.Poses.Num() > 0)
+	{
+		Out = CachedRig;
+		return true;
+	}
 	FAnimStitchEvaluator Evaluator;
 	FString Error;
-	if (!Evaluator.Initialize(Timeline, Error)) { return; }
-	const FReferenceSkeleton& Ref = Evaluator.GetSkeleton()->GetReferenceSkeleton();
-	const int32 BoneIndex = Ref.FindBoneIndex(Track.Bone);
 	const double Total = Timeline.GetTotalLength();
-	if (BoneIndex == INDEX_NONE || Total <= KINDA_SMALL_NUMBER) { return; }
-	double Rate = 30.0;
-	if (const UAnimSequence* Seq = Timeline.Clips.Num() > 0 ? Timeline.Clips[0].Sequence.Get() : nullptr)
-	{
-		Rate = Seq->GetDataModel()->GetFrameRate().AsDecimal();
-	}
-	if (Rate < 1.0 || Rate > 120.0) { Rate = 30.0; }
-	const int32 NumFrames = FMath::Max(1, FMath::CeilToInt(Total * Rate - 1e-6));
-	Track.Keys.Reserve(NumFrames + 1);
-	TArray<FTransform> Pose;
+	if (Total <= KINDA_SMALL_NUMBER || !Evaluator.Initialize(Timeline, Error)) { return false; }
+	FRigBake Rig;
+	Rig.Rate = RigBakeRate(Timeline);
+	Rig.TotalLength = Total;
+	const int32 NumFrames = FMath::Max(1, FMath::CeilToInt(Total * Rig.Rate - 1e-6));
+	Rig.Poses.SetNum(NumFrames + 1);
 	for (int32 f = 0; f <= NumFrames; ++f)
 	{
-		const double Time = f == NumFrames ? Total : f / Rate;
-		Evaluator.EvaluatePose(Time, Pose);
-		const FTransform Rel = FAnimStitchFootLock::GetComponentSpace(Ref, Pose, BoneIndex).GetRelativeTransform(FAnimStitchFootLock::GetComponentSpace(Ref, Pose, 0));
-		FAnimStitchTrackKey Key;
-		Key.Time = Time;
-		Key.Translation = Rel.GetTranslation();
-		Key.Rotation = Rel.GetRotation().GetNormalized();
-		Key.Scale = Rel.GetScale3D();
-		Track.Keys.Add(Key);
+		Evaluator.EvaluatePose(f == NumFrames ? Total : f / Rig.Rate, Rig.Poses[f]);
 	}
+	constexpr int64 MaxCachedTransforms = 800000; // ~75 MB; longer bakes are rebuilt on demand instead of kept
+	if ((int64)Rig.Poses.Num() * Evaluator.GetNumBones() <= MaxCachedTransforms)
+	{
+		CachedRig = Rig;
+		CachedRigStamp = EditCounter;
+	}
+	Out = MoveTemp(Rig);
+	return true;
+}
+
+TArray<FName> UAnimStitchTimelineAsset::GetRigNodes() const
+{
+	TArray<FName> Nodes;
+	if (const USkeleton* Skeleton = GetSkeleton())
+	{
+		const FReferenceSkeleton& Ref = Skeleton->GetReferenceSkeleton();
+		for (int32 b = 1; b < Ref.GetNum(); ++b) // bone 0 is the root: the Root offset lane is its control
+		{
+			if (FAnimStitchManualEdits::IsRigBone(Ref.GetBoneName(b))) { Nodes.Add(Ref.GetBoneName(b)); }
+		}
+	}
+	return Nodes;
+}
+
+bool UAnimStitchTimelineAsset::IsRigNodeRevealed(FName Bone) const
+{
+	return Timeline.Tracks.ContainsByPredicate([Bone](const FAnimStitchTrack& T) { return T.Kind == EAnimStitchTrackKind::Bone && T.Bone == Bone; });
+}
+
+bool UAnimStitchTimelineAsset::GetRigNodeTransform(FName Bone, int32 Frame, FTransform& Out) const
+{
+	const USkeleton* Skeleton = GetSkeleton();
+	FRigBake Rig;
+	if (!Skeleton || !GetRigBake(Rig) || !Rig.Poses.IsValidIndex(Frame)) { return false; }
+	const FReferenceSkeleton& Ref = Skeleton->GetReferenceSkeleton();
+	const int32 BoneIndex = Ref.FindBoneIndex(Bone);
+	if (BoneIndex == INDEX_NONE) { return false; }
+	Out = RootRelative(Ref, Rig.Poses[Frame], BoneIndex);
+	return true;
+}
+
+int32 UAnimStitchTimelineAsset::BakeToControlRig()
+{
+	const USkeleton* Skeleton = GetSkeleton();
+	FRigBake Rig;
+	if (!Skeleton || !GetRigBake(Rig)) { return 0; }
+	const FReferenceSkeleton& Ref = Skeleton->GetReferenceSkeleton();
+	TouchManual();
+	int32 Changed = 0;
+
+	// 1) Every additive bone key becomes an Absolute key (per frame, reproducing the current result).
+	{
+		const int32 AdditiveBefore = Timeline.Tracks.FilterByPredicate([](const FAnimStitchTrack& T) { return T.Kind == EAnimStitchTrackKind::Bone && T.Mode == EAnimStitchTrackMode::Additive; }).Num();
+		FAnimStitchManualEdits::ConvertTracksToAbsolute(Ref, Timeline.Tracks, Rig.Poses, Rig.Rate, Rig.TotalLength);
+		Changed += AdditiveBefore;
+	}
+
+	// 2) Every remaining node is revealed with its baked keys already in place.
+	for (const FName& Bone : GetRigNodes())
+	{
+		if (IsRigNodeRevealed(Bone)) { continue; }
+		FAnimStitchTrack Track;
+		Track.Kind = EAnimStitchTrackKind::Bone;
+		Track.Bone = Bone;
+		Track.Mode = EAnimStitchTrackMode::Absolute;
+		Track.bRotationOnly = !FAnimStitchManualEdits::IsPelvisBone(Bone); // FK controls rotate; the pelvis also translates
+		Track.bKeepFeetPlanted = false;                                      // untouched keys must reproduce the animation exactly
+		FillKeysFromRig(Ref, Rig, Track);
+		Timeline.Tracks.Add(Track);
+		++Changed;
+	}
+	MarkPackageDirty();
+	return Changed;
 }
 void UAnimStitchTimelineAsset::FillAbsoluteTracks(const FKeyFollowScope* Scope)
 {
@@ -640,21 +772,7 @@ int32 UAnimStitchTimelineAsset::AddTrack(const FAnimStitchTrack& Track)
 	}
 	if (Track.Kind == EAnimStitchTrackKind::RootOffset) { Touch(); ++ManualCounter; } else { TouchManual(); }
 	FAnimStitchTrack NewTrack = Track;
-	// Control hierarchy: a new bone control is parented to the control of its skeleton parent bone, when that control exists (nothing is invented otherwise).
-	if (NewTrack.Kind == EAnimStitchTrackKind::Bone && NewTrack.ParentBone.IsNone())
-	{
-		if (const USkeleton* Skeleton = GetSkeleton())
-		{
-			const FReferenceSkeleton& SkelRef = Skeleton->GetReferenceSkeleton();
-			const int32 BoneIndex = SkelRef.FindBoneIndex(NewTrack.Bone);
-			const int32 ParentIndex = BoneIndex != INDEX_NONE ? SkelRef.GetParentIndex(BoneIndex) : INDEX_NONE;
-			if (ParentIndex != INDEX_NONE)
-			{
-				const FName ParentName = SkelRef.GetBoneName(ParentIndex);
-				if (Timeline.Tracks.ContainsByPredicate([ParentName](const FAnimStitchTrack& T) { return T.Kind == EAnimStitchTrackKind::Bone && T.Bone == ParentName; })) { NewTrack.ParentBone = ParentName; }
-			}
-		}
-	}
+	// The control hierarchy is not stored: it is derived from the skeleton (FAnimStitchManualEdits::ResolveParentTrack), so it holds for every control.
 	if (NewTrack.Kind != EAnimStitchTrackKind::Bone) { NewTrack.Mode = EAnimStitchTrackMode::Additive; } // Absolute is for FK / core bone tracks only
 	if (NewTrack.Kind == EAnimStitchTrackKind::RootOffset)
 	{
@@ -666,7 +784,10 @@ int32 UAnimStitchTimelineAsset::AddTrack(const FAnimStitchTrack& Track)
 	{
 		// Absolute: bake the bone's evaluated (blended) pose into a key on EVERY frame, like baking onto a Control Rig. The track then owns the
 		// bone: untouched frames reproduce the underlying animation, edits only change the keys the user touches.
-		BakeAbsoluteKeys(Timeline, NewTrack);
+		// Revealing a rig node: its baked keys are already in place.
+		FRigBake Rig;
+		if (const USkeleton* Skeleton = GetSkeleton()) { if (GetRigBake(Rig)) { FillKeysFromRig(Skeleton->GetReferenceSkeleton(), Rig, NewTrack); } }
+		MarkPackageDirty();
 		return Timeline.Tracks.Add(NewTrack);
 	}
 	if (NewTrack.Keys.Num() == 0 && NewTrack.Kind != EAnimStitchTrackKind::IKPole)

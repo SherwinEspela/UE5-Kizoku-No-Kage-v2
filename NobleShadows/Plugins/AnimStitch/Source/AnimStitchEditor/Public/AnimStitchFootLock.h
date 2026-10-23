@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "AnimStitchTimeline.h"
@@ -37,10 +37,11 @@ struct ANIMSTITCHEDITOR_API FAnimStitchFootLockResult
 	FText Problem;
 	double Fps = 30.0;
 	double GroundZ = 0.0;
-	FName FootBones[2];
-	FAnimStitchFootChain Chains[2];
+	/** One entry per designated ground contact (index 0 = left foot, 1 = right foot on a humanoid; more for other rigs). */
+	TArray<FName> FootBones;
+	TArray<FAnimStitchFootChain> Chains;
 	/** One AnimStitchPlant value per frame, per foot (0 = left, 1 = right). */
-	TArray<uint8> Mask[2];
+	TArray<TArray<uint8>> Mask;
 
 	/** Manual events mapped to timeline time (for drawing). */
 	struct FEventMark
@@ -48,11 +49,11 @@ struct ANIMSTITCHEDITOR_API FAnimStitchFootLockResult
 		double Time = 0.0;
 		EAnimStitchFootAction Action = EAnimStitchFootAction::Lock;
 	};
-	TArray<FEventMark> Events[2];
+	TArray<TArray<FEventMark>> Events;
 
 	/** Per frame: pin offset of the manual lock governing that frame (zero otherwise) and which event owns it (clip, event index; -1 = none). */
-	TArray<FVector> PinOffset[2];
-	TArray<FIntPoint> PinEvent[2];
+	TArray<TArray<FVector>> PinOffset;
+	TArray<TArray<FIntPoint>> PinEvent;
 };
 
 /** Ground Feet pass tuning. */
@@ -66,7 +67,7 @@ namespace AnimStitchGroundFeet
 struct ANIMSTITCHEDITOR_API FAnimStitchPinOutput
 {
 	/** Per frame: the world-space point a manually locked foot is pinned to (valid where the plant mask says ManualPin). */
-	TArray<FVector> ManualTarget[2];
+	TArray<TArray<FVector>> ManualTarget;
 };
 
 /** What the pre-blend foot prediction did (for logs and tests). */
@@ -97,6 +98,12 @@ public:
 
 	/** Settings value if set, else the pair remembered for the skeleton, else a name-based guess. */
 	static void ResolveFootBones(const USkeleton* Skeleton, const FAnimStitchFootLockSettings& Settings, FName& OutLeft, FName& OutRight);
+
+	/**
+	 * The designated ground contacts: the settings' GroundContacts if any, else the set remembered for the skeleton, else the Left/Right pair
+	 * (ResolveFootBones). Index 0/1 stay left/right foot, so foot events and the humanoid behaviour are unchanged.
+	 */
+	static TArray<FName> ResolveGroundContacts(const USkeleton* Skeleton, const FAnimStitchFootLockSettings& Settings);
 
 	static FAnimStitchFootChain BuildChain(const FReferenceSkeleton& RefSkeleton, FName FootBone);
 

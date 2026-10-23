@@ -1,4 +1,4 @@
-﻿#include "AnimStitchSpikeCommandlet.h"
+#include "AnimStitchSpikeCommandlet.h"
 #include "AnimStitchBaker.h"
 #include "AnimStitchTimelineAsset.h"
 #include "AnimStitchBatch.h"
@@ -435,6 +435,284 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 		UE_LOG(LogAnimStitchSpike, Display, TEXT("S6 RESULT: %d failures"), Fails);
 		return Fails;
 	}
+	// Phase 21 test: -P21Test. #88 Epic-style curve controls + derived hierarchy + baked-rig reveal model + Bake to Control Rig + format versioning, #85 ground-contact sets.
+	if (FParse::Param(*Params, TEXT("P21Test")))
+	{
+		int32 Fails = 0;
+		auto Check = [&Fails](bool b, const TCHAR* What) { UE_LOG(LogAnimStitchSpike, Display, TEXT("P21 %s: %s"), b ? TEXT("PASS") : TEXT("FAIL"), What); if (!b) { ++Fails; } };
+		auto NewAsset = [&](UAnimStitchTimelineAsset*& Out) -> bool
+		{
+			Out = NewObject<UAnimStitchTimelineAsset>(GetTransientPackage());
+			TArray<FText> W;
+			Out->AddSequences({ const_cast<UAnimSequence*>(B), const_cast<UAnimSequence*>(B) }, INDEX_NONE, W);
+			return Out->Timeline.Clips.Num() == 2;
+		};
+		// Evaluated + corrected pose of a project at a time (what the bake writes).
+		auto FinalPose = [](UAnimStitchTimelineAsset* T, double Time, TArray<FTransform>& Pose)
+		{
+			FAnimStitchEvaluator E; FString Err;
+			if (!E.Initialize(T->Timeline, Err)) { return false; }
+			E.EvaluatePose(Time, Pose);
+			FAnimStitchManualEdits::Apply(E.GetSkeleton()->GetReferenceSkeleton(), T->Timeline.Tracks, Time, Pose);
+			return true;
+		};
+		auto MaxPoseDiff = [](const FReferenceSkeleton& Ref, const TArray<FTransform>& P0, const TArray<FTransform>& P1, double& OutCm, double& OutDeg)
+		{
+			OutCm = 0.0; OutDeg = 0.0;
+			for (int32 b = 0; b < Ref.GetNum(); ++b)
+			{
+				const FTransform C0 = FAnimStitchFootLock::GetComponentSpace(Ref, P0, b), C1 = FAnimStitchFootLock::GetComponentSpace(Ref, P1, b);
+				OutCm = FMath::Max(OutCm, (C0.GetTranslation() - C1.GetTranslation()).Size());
+				OutDeg = FMath::Max(OutDeg, FMath::RadiansToDegrees(C0.GetRotation().AngularDistance(C1.GetRotation())));
+			}
+		};
+
+		UAnimStitchTimelineAsset* TL = nullptr;
+		if (!NewAsset(TL)) { UE_LOG(LogAnimStitchSpike, Error, TEXT("P21: could not build the timeline")); return 101; }
+		FAnimStitchEvaluator Eval; FString Err;
+		if (!Eval.Initialize(TL->Timeline, Err)) { UE_LOG(LogAnimStitchSpike, Error, TEXT("P21: evaluator failed: %s"), *Err); return 102; }
+		const FReferenceSkeleton& Ref = Eval.GetSkeleton()->GetReferenceSkeleton();
+		const double Total = TL->Timeline.GetTotalLength();
+
+		// ---- #88 stage 1: hierarchy (derived, order independent) ----
+		{
+			FAnimStitchTrack Thigh; Thigh.Kind = EAnimStitchTrackKind::Bone; Thigh.Bone = TEXT("thigh_l"); Thigh.Mode = EAnimStitchTrackMode::Absolute; Thigh.bRotationOnly = true;
+			const int32 ThighT = TL->AddTrack(Thigh);
+			Check(FAnimStitchManualEdits::ResolveParentTrack(Ref, TL->Timeline.Tracks, ThighT) == INDEX_NONE, TEXT("a control with no controlled ancestor is top level"));
+			FAnimStitchTrack Pelvis; Pelvis.Kind = EAnimStitchTrackKind::Bone; Pelvis.Bone = TEXT("pelvis"); Pelvis.Mode = EAnimStitchTrackMode::Absolute; Pelvis.bKeepFeetPlanted = false;
+			const int32 PelvisT = TL->AddTrack(Pelvis);
+			Check(FAnimStitchManualEdits::ResolveParentTrack(Ref, TL->Timeline.Tracks, ThighT) == PelvisT, TEXT("adding the pelvis control LATER still parents the existing thigh control to it (derived, not creation-time)"));
+			FAnimStitchTrack Add; Add.Kind = EAnimStitchTrackKind::Bone; Add.Bone = TEXT("calf_l"); Add.Mode = EAnimStitchTrackMode::Additive; Add.bRotationOnly = true;
+			const int32 CalfT = TL->AddTrack(Add);
+			Check(FAnimStitchManualEdits::ResolveParentTrack(Ref, TL->Timeline.Tracks, CalfT) == ThighT, TEXT("calf control is parented to the thigh control"));
+			Check(TL->Timeline.Tracks[ThighT].ParentBone.IsNone(), TEXT("no stored parent any more"));
+
+			const int32 ThighBone = Ref.FindBoneIndex(TEXT("thigh_l")), CalfBone = Ref.FindBoneIndex(TEXT("calf_l"));
+			auto CompPos = [&](int32 Bone, double Time)
+			{
+				TArray<FTransform> Pose; FinalPose(TL, Time, Pose);
+				return FAnimStitchFootLock::GetComponentSpace(Ref, Pose, Bone).GetTranslation();
+			};
+			const double T0 = Total * 0.4;
+			const FVector ThighBefore = CompPos(ThighBone, T0), CalfBefore = CompPos(CalfBone, T0);
+			for (FAnimStitchTrackKey& K : TL->Timeline.Tracks[PelvisT].Keys) { K.Translation += FVector(0, 0, 30); }
+			const FVector ThighAfter = CompPos(ThighBone, T0), CalfAfter = CompPos(CalfBone, T0);
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("P21 pelvis lifted 30: thigh moved %s, calf moved %s"), *(ThighAfter - ThighBefore).ToCompactString(), *(CalfAfter - CalfBefore).ToCompactString());
+			Check((ThighAfter - ThighBefore - FVector(0, 0, 30)).Size() < 0.5, TEXT("moving the pelvis control carries the thigh control (Absolute child)"));
+			Check((CalfAfter - CalfBefore - FVector(0, 0, 30)).Size() < 0.5, TEXT("...and the calf control (Additive grandchild)"));
+			TL->RemoveTrack(CalfT); TL->RemoveTrack(ThighT); TL->RemoveTrack(TL->Timeline.Tracks.IndexOfByPredicate([](const FAnimStitchTrack& T) { return T.Bone == TEXT("pelvis"); }));
+			Check(TL->Timeline.Tracks.Num() == 0, TEXT("tracks removed"));
+		}
+
+		// ---- #88 stage 1: curve shapes everywhere + reveal-only display ----
+		{
+			USkeletalMesh* PreviewMesh = Eval.GetSkeleton()->GetPreviewMesh(true);
+			if (!PreviewMesh) { UE_LOG(LogAnimStitchSpike, Error, TEXT("P21: no preview mesh")); return 103; }
+			TSharedRef<FAnimStitchPreview> Preview = MakeShared<FAnimStitchPreview>();
+			Preview->SetMesh(PreviewMesh);
+			Preview->SetAsset(TL);
+			Preview->SetTimeline(TL->Timeline);
+			TArray<FAnimStitchControl> Controls;
+			Preview->BuildControls(Controls);
+			Check(TL->GetRigNodes().Num() > 20 && Controls.Num() == 0, *FString::Printf(TEXT("a complete rig exists (%d nodes) but none is displayed until added (%d controls)"), TL->GetRigNodes().Num(), Controls.Num()));
+
+			FAnimStitchTrack Pelvis; Pelvis.Kind = EAnimStitchTrackKind::Bone; Pelvis.Bone = TEXT("pelvis"); Pelvis.Mode = EAnimStitchTrackMode::Absolute; Pelvis.bKeepFeetPlanted = false;
+			FAnimStitchTrack Spine; Spine.Kind = EAnimStitchTrackKind::Bone; Spine.Bone = TEXT("spine_01"); Spine.Mode = EAnimStitchTrackMode::Absolute; Spine.bRotationOnly = true;
+			Spine.ControlStyle.Shape = EAnimStitchControlShape::Box; // a pre-2.0 value: still draws as the Epic-style curve of its role
+			FAnimStitchTrack IK; IK.Kind = EAnimStitchTrackKind::IKLimb; IK.Bone = TEXT("foot_l");
+			FAnimStitchTrack Pole; Pole.Kind = EAnimStitchTrackKind::IKPole; Pole.Bone = TEXT("foot_l"); Pole.ControlStyle.Shape = EAnimStitchControlShape::Sphere; // the old pole default
+			FAnimStitchTrack Root; Root.Kind = EAnimStitchTrackKind::RootOffset; Root.Bone = Ref.GetBoneName(0);
+			for (const FAnimStitchTrack& T : { Pelvis, Spine, IK, Pole, Root }) { TL->AddTrack(T); }
+			Preview->SetTimeline(TL->Timeline);
+			Preview->SetManualTracks(TL->Timeline.Tracks);
+			Preview->SetPlayhead(Total * 0.3);
+			Preview->BuildControls(Controls);
+			auto ShapeOf = [&Controls](EAnimStitchControlKind Kind, const TCHAR* Label) { for (const FAnimStitchControl& C : Controls) { if (C.Id.Kind == Kind && (!Label || C.Label.Contains(Label))) { return C.Shape; } } return EAnimStitchControlShape::Box; };
+			bool bAllCurves = Controls.Num() == 5;
+			for (const FAnimStitchControl& C : Controls) { bAllCurves &= C.Shape != EAnimStitchControlShape::Box && C.Shape != EAnimStitchControlShape::Sphere && C.Shape != EAnimStitchControlShape::Auto; }
+			Check(bAllCurves, *FString::Printf(TEXT("all %d controls draw as curve outlines (never cube / sphere)"), Controls.Num()));
+			Check(ShapeOf(EAnimStitchControlKind::Bone, TEXT("spine")) == EAnimStitchControlShape::Circle, TEXT("an FK joint is a circle (a saved Box still draws as the circle)"));
+			Check(ShapeOf(EAnimStitchControlKind::Bone, TEXT("pelvis")) == EAnimStitchControlShape::Square, TEXT("the pelvis is a square"));
+			Check(ShapeOf(EAnimStitchControlKind::IKEffector, nullptr) == EAnimStitchControlShape::Square, TEXT("an IK target is a flat square"));
+			Check(ShapeOf(EAnimStitchControlKind::IKPole, nullptr) == EAnimStitchControlShape::Diamond, TEXT("a pole vector is a diamond, not the old sphere default"));
+			Check(Controls.Num() == TL->Timeline.Tracks.Num(), TEXT("only the controls the user added are displayed"));
+		}
+
+		// ---- #88 stage 2: reveal with baked keys already in place ----
+		{
+			UAnimStitchTimelineAsset* R = nullptr; NewAsset(R);
+			Check(R->ProjectFormatVersion == UAnimStitchTimelineAsset::CurrentFormatVersion, TEXT("a new project is written in the current format version"));
+			FAnimStitchTrack Pelvis; Pelvis.Kind = EAnimStitchTrackKind::Bone; Pelvis.Bone = TEXT("pelvis"); Pelvis.Mode = EAnimStitchTrackMode::Absolute; Pelvis.bKeepFeetPlanted = false;
+			const int32 PT = R->AddTrack(Pelvis);
+			UAnimStitchTimelineAsset::FRigBake Bake;
+			const bool bBake = R->GetRigBake(Bake);
+			Check(bBake && R->Timeline.Tracks[PT].Keys.Num() == Bake.Poses.Num(), *FString::Printf(TEXT("the revealed node has a key on every frame (%d keys, %d frames)"), R->Timeline.Tracks[PT].Keys.Num(), Bake.Poses.Num()));
+			double Worst = 0.0;
+			for (int32 f = 0; f < Bake.Poses.Num() && f < R->Timeline.Tracks[PT].Keys.Num(); f += 7)
+			{
+				FTransform Node; R->GetRigNodeTransform(TEXT("pelvis"), f, Node);
+				Worst = FMath::Max(Worst, (Node.GetTranslation() - R->Timeline.Tracks[PT].Keys[f].Translation).Size());
+			}
+			Check(Worst < 1e-3, *FString::Printf(TEXT("the revealed keys equal the baked rig node (max difference %.6f cm)"), Worst));
+			double MaxCm = 0, MaxDeg = 0, Cm, Deg;
+			for (const double Time : { 0.0, Total * 0.2, Total * 0.55, Total * 0.9 })
+			{
+				TArray<FTransform> Plain, WithRig; Eval.EvaluatePose(Time, Plain); FinalPose(R, Time, WithRig);
+				MaxPoseDiff(Ref, Plain, WithRig, Cm, Deg); MaxCm = FMath::Max(MaxCm, Cm); MaxDeg = FMath::Max(MaxDeg, Deg);
+			}
+			Check(MaxCm < 0.01 && MaxDeg < 0.01, *FString::Printf(TEXT("a freshly revealed control reproduces the evaluated animation exactly (%.5f cm, %.5f deg)"), MaxCm, MaxDeg));
+		}
+
+		// ---- #88 stage 2: Bake to Control Rig ----
+		{
+			UAnimStitchTimelineAsset* R = nullptr; NewAsset(R);
+			FAnimStitchTrack Pelvis; Pelvis.Kind = EAnimStitchTrackKind::Bone; Pelvis.Bone = TEXT("pelvis"); Pelvis.Mode = EAnimStitchTrackMode::Absolute; Pelvis.bKeepFeetPlanted = false;
+			const int32 PT = R->AddTrack(Pelvis);
+			for (FAnimStitchTrackKey& K : R->Timeline.Tracks[PT].Keys) { K.Translation += FVector(0, 5, 20); }
+			FAnimStitchTrack Spine; Spine.Kind = EAnimStitchTrackKind::Bone; Spine.Bone = TEXT("spine_01"); Spine.Mode = EAnimStitchTrackMode::Additive;
+			const int32 ST = R->AddTrack(Spine);
+			FAnimStitchTrack Thigh; Thigh.Kind = EAnimStitchTrackKind::Bone; Thigh.Bone = TEXT("thigh_l"); Thigh.Mode = EAnimStitchTrackMode::Additive; Thigh.bRotationOnly = true;
+			const int32 TT = R->AddTrack(Thigh);
+			FAnimStitchTrack Hand; Hand.Kind = EAnimStitchTrackKind::Bone; Hand.Bone = TEXT("hand_r"); Hand.Mode = EAnimStitchTrackMode::Additive;
+			const int32 HT = R->AddTrack(Hand);
+			for (const double Time : { Total * 0.25, Total * 0.5, Total * 0.75 })
+			{
+				FAnimStitchTrackKey KS; KS.Time = Time; KS.Rotation = FQuat(FVector::UpVector, FMath::DegreesToRadians(18.0)); KS.Channels = AnimStitchChannel::All; KS.Translation = FVector(0, 3, 0);
+				R->SetTrackChannelKey(ST, KS, AnimStitchChannel::All);
+				FAnimStitchTrackKey KT; KT.Time = Time; KT.Rotation = FQuat(FVector::RightVector, FMath::DegreesToRadians(-25.0)); KT.Channels = AnimStitchChannel::Rotation;
+				R->SetTrackChannelKey(TT, KT, AnimStitchChannel::Rotation);
+				FAnimStitchTrackKey KH; KH.Time = Time; KH.Translation = FVector(0, 0, 12); KH.Rotation = FQuat(FVector::ForwardVector, FMath::DegreesToRadians(30.0)); KH.Channels = AnimStitchChannel::All;
+				R->SetTrackChannelKey(HT, KH, AnimStitchChannel::All);
+			}
+			// A bake samples whole frames, so compare there (between frames the per-frame keys interpolate linearly instead of along the original curve).
+			auto OnFrame = [](double Time) { return FMath::RoundToDouble(Time * 30.0) / 30.0; };
+			const TArray<double> Times = { OnFrame(0.05), OnFrame(Total * 0.25), OnFrame(Total * 0.4), OnFrame(Total * 0.5), OnFrame(Total * 0.62), OnFrame(Total * 0.9) };
+			TArray<TArray<FTransform>> Before;
+			for (const double Time : Times) { TArray<FTransform>& P = Before.AddDefaulted_GetRef(); FinalPose(R, Time, P); }
+			const int32 TracksBefore = R->Timeline.Tracks.Num();
+			const int32 Changed = R->BakeToControlRig();
+			bool bAllAbsolute = true, bAllVisible = true;
+			for (const FAnimStitchTrack& T : R->Timeline.Tracks) { if (T.Kind == EAnimStitchTrackKind::Bone) { bAllAbsolute &= T.Mode == EAnimStitchTrackMode::Absolute; } }
+			for (const FName& Node : R->GetRigNodes()) { bAllVisible &= R->IsRigNodeRevealed(Node); }
+			Check(Changed > 0 && R->Timeline.Tracks.Num() > TracksBefore + 20, *FString::Printf(TEXT("Bake to Control Rig revealed the whole rig (%d -> %d controls, %d changed)"), TracksBefore, R->Timeline.Tracks.Num(), Changed));
+			Check(bAllVisible, TEXT("every rig node is now revealed"));
+			Check(bAllAbsolute, TEXT("every key is Absolute"));
+			double WorstCm = 0, WorstDeg = 0;
+			for (int32 i = 0; i < Times.Num(); ++i)
+			{
+				TArray<FTransform> After; FinalPose(R, Times[i], After);
+				double Cm, Deg; MaxPoseDiff(Ref, Before[i], After, Cm, Deg); WorstCm = FMath::Max(WorstCm, Cm); WorstDeg = FMath::Max(WorstDeg, Deg);
+			}
+			Check(WorstCm < 0.05 && WorstDeg < 0.05, *FString::Printf(TEXT("the result after the command equals the result before it (worst %.5f cm, %.5f deg over %d times)"), WorstCm, WorstDeg, Times.Num()));
+			Check(R->BakeToControlRig() == 0, TEXT("running it again changes nothing"));
+		}
+
+		// ---- project format: a new project is current; an old one is migrated without losing anything ----
+		{
+			UAnimStitchTimelineAsset* Old = nullptr; NewAsset(Old);
+			Old->ProjectFormatVersion = 0;
+			FAnimStitchTrack T; T.Kind = EAnimStitchTrackKind::Bone; T.Bone = TEXT("spine_01"); T.Mode = EAnimStitchTrackMode::Additive; T.ParentBone = TEXT("pelvis"); T.ControlStyle.Shape = EAnimStitchControlShape::Box;
+			FAnimStitchTrackKey K; K.Time = 1.0; K.Translation = FVector(1, 2, 3); T.Keys.Add(K);
+			Old->Timeline.Tracks.Add(T);
+			Old->MigrateToCurrentFormat();
+			const FAnimStitchTrack& M = Old->Timeline.Tracks[0];
+			Check(Old->ProjectFormatVersion == UAnimStitchTimelineAsset::CurrentFormatVersion && M.ParentBone.IsNone() && M.ControlStyle.Shape == EAnimStitchControlShape::Auto, TEXT("a pre-2.0 project is migrated (format version, derived hierarchy, curve shapes)"));
+			Check(M.Mode == EAnimStitchTrackMode::Additive && M.Keys.Num() == 1 && M.Keys[0].Translation.Equals(FVector(1, 2, 3)), TEXT("...and its tracks, modes and keys are untouched"));
+			int32 Loaded = 0, Good = 0;
+			for (const TCHAR* Name : { TEXT("ANS_FootLockTest2"), TEXT("ANS_FootLockTest5"), TEXT("ANS_FootslideTest1"), TEXT("NewAnimStitchTimeline") })
+			{
+				const FString Path = FString::Printf(TEXT("/Game/00_Experiments/AnimStitchTests/SaveTest/%s.%s"), Name, Name);
+				if (const UAnimStitchTimelineAsset* Saved = LoadObject<UAnimStitchTimelineAsset>(nullptr, *Path))
+				{
+					++Loaded;
+					bool bOk = Saved->ProjectFormatVersion == UAnimStitchTimelineAsset::CurrentFormatVersion;
+					for (const FAnimStitchTrack& Track : Saved->Timeline.Tracks) { bOk &= Track.ParentBone.IsNone() && Track.ControlStyle.Shape != EAnimStitchControlShape::Box && Track.ControlStyle.Shape != EAnimStitchControlShape::Sphere; }
+					FAnimStitchEvaluator SavedEval; FString SavedErr;
+					bOk &= Saved->Timeline.Clips.Num() == 0 || SavedEval.Initialize(Saved->Timeline, SavedErr);
+					Good += bOk ? 1 : 0;
+					UE_LOG(LogAnimStitchSpike, Display, TEXT("P21 saved project %s: %d clips, %d tracks, format %d"), Name, Saved->Timeline.Clips.Num(), Saved->Timeline.Tracks.Num(), Saved->ProjectFormatVersion);
+				}
+			}
+			Check(Loaded > 0 && Good == Loaded, *FString::Printf(TEXT("%d pre-2.0 project files on disk load, migrate and evaluate"), Loaded));
+		}
+
+		// ---- #85: ground-contact sets ----
+		{
+			// The same two clips and trim the foot lock test uses (landing, then the run), so the feet really plant.
+			UAnimStitchTimelineAsset* G = NewObject<UAnimStitchTimelineAsset>(GetTransientPackage());
+			{ TArray<FText> W; G->AddSequences({ const_cast<UAnimSequence*>(A), const_cast<UAnimSequence*>(B) }, INDEX_NONE, W); }
+			G->SetTrim(1, 0.0, FMath::Min(3.0, (double)B->GetPlayLength()));
+			G->SetOverlap(1, 0.2);
+			G->SetRootAuthority(0);
+			const double GTotal = G->Timeline.GetTotalLength();
+			const FName FootL = FAnimStitchFootLock::GuessFootBone(Ref, true), FootR = FAnimStitchFootLock::GuessFootBone(Ref, false);
+			const FName HandL = FAnimStitchManualEdits::GuessHandBone(Ref, true), HandR = FAnimStitchManualEdits::GuessHandBone(Ref, false);
+			FAnimStitchFootLockSettings FL; FL.bEnabled = true; FL.bPelvisFollows = false; // pelvis follow is shared state between legs; compare the legs themselves
+			G->Timeline.FootLock = FL;
+			FAnimStitchEvaluator E; FString EErr;
+			E.Initialize(G->Timeline, EErr);
+			const int32 NumFrames = FMath::FloorToInt(GTotal * 30.0);
+			TArray<TArray<FTransform>> Poses; Poses.SetNum(NumFrames + 1);
+			for (int32 f = 0; f <= NumFrames; ++f) { E.EvaluatePose(f / 30.0, Poses[f]); }
+
+			auto Run = [&](const TArray<FName>& Contacts, TArray<TArray<FTransform>>& OutPoses, FAnimStitchFootLockResult& OutDet, int32& OutPinned, int32& OutGrounded)
+			{
+				FAnimStitchFootLockSettings S = FL; S.GroundContacts = Contacts;
+				G->Timeline.FootLock = S;
+				FAnimStitchEvaluator Ev; FString Er; Ev.Initialize(G->Timeline, Er);
+				OutPoses = Poses;
+				OutDet = FAnimStitchFootLock::Detect(Ev, OutPoses, 30.0);
+				OutPinned = FAnimStitchFootLock::Pin(Ev, OutPoses, OutDet);
+				OutGrounded = FAnimStitchFootLock::GroundFeet(Ev, OutPoses, OutDet);
+			};
+			TArray<TArray<FTransform>> PA, PB, PC; FAnimStitchFootLockResult DA, DB, DC; int32 PinA, GrA, PinB, GrB, PinC, GrC;
+			Run({}, PA, DA, PinA, GrA);                                  // the pair, resolved the pre-2.0 way
+			Run({ FootL, FootR }, PB, DB, PinB, GrB);                    // the same pair, as an explicit set
+			Check(DA.bValid && DA.Chains.Num() == 2 && DB.Chains.Num() == 2, TEXT("humanoid: two ground contacts by default"));
+			bool bSame = PinA == PinB && GrA == GrB && PinA > 0;
+			for (int32 f = 0; f <= NumFrames && bSame; ++f) { for (int32 b = 0; b < Ref.GetNum(); ++b) { bSame &= PA[f][b].Equals(PB[f][b], 1e-6f); } }
+			for (int32 Foot = 0; Foot < 2; ++Foot) { bSame &= DA.Mask[Foot] == DB.Mask[Foot]; }
+			Check(bSame, *FString::Printf(TEXT("humanoid behaviour is identical with the usual two feet (%d pinned, %d grounded frames)"), PinA, GrA));
+
+			Run({ FootL, FootR, HandL, HandR }, PC, DC, PinC, GrC);      // four contacts, none paired with another
+			Check(DC.bValid && DC.Chains.Num() == 4 && DC.Mask.Num() == 4 && DC.Events.Num() == 4 && DC.PinOffset.Num() == 4, TEXT("four ground contacts are all analysed"));
+			bool bFeetKept = DC.Mask[0] == DA.Mask[0] && DC.Mask[1] == DA.Mask[1];
+			for (int32 f = 0; f <= NumFrames && bFeetKept; ++f) { for (const int32 Bone : { DA.Chains[0].Thigh, DA.Chains[0].Calf, DA.Chains[0].Foot, DA.Chains[1].Thigh, DA.Chains[1].Calf, DA.Chains[1].Foot }) { bFeetKept &= PA[f][Bone].Equals(PC[f][Bone], 1e-6f); } }
+			Check(bFeetKept, TEXT("adding two more contacts does not change the first two (detection and correction are per limb)"));
+
+			// Four real legs: the two feet twice over (the quadruped case, two contacts per side), each lane its own limb.
+			TArray<TArray<FTransform>> PD; FAnimStitchFootLockResult DD; int32 PinD, GrD;
+			Run({ FootL, FootR, FootL, FootR }, PD, DD, PinD, GrD);
+			Check(DD.Mask.Num() == 4 && DD.Mask[2] == DD.Mask[0] && DD.Mask[3] == DD.Mask[1], TEXT("a third and fourth contact plant exactly when their limbs do"));
+			bool bPlantsHold = true; int32 PlantedFrames[4] = { 0, 0, 0, 0 };
+			for (int32 Foot = 0; Foot < 4; ++Foot) { for (int32 f = 0; f <= NumFrames; ++f) { PlantedFrames[Foot] += AnimStitchPlant::IsPlanted(DD.Mask[Foot][f]) ? 1 : 0; } }
+			bPlantsHold = PlantedFrames[0] > 0 && PlantedFrames[2] == PlantedFrames[0] && PlantedFrames[3] == PlantedFrames[1];
+			Check(bPlantsHold, *FString::Printf(TEXT("planted frames per contact: %d / %d / %d / %d"), PlantedFrames[0], PlantedFrames[1], PlantedFrames[2], PlantedFrames[3]));
+			// Every lane is pinned on its own (the legs are solved once per lane, so a duplicated limb is corrected twice as often as the pair).
+			Check(PinD == PinA * 2 && PinD > 0, *FString::Printf(TEXT("pin runs on all four lanes (%d pinned foot-frames vs %d for the pair), ground pass ran (%d)"), PinD, PinA, GrD));
+
+			// A manual lock addresses one contact by its index.
+			G->Timeline.FootLock.GroundContacts = { FootL, FootR, FootL, FootR };
+			const double LockT = GTotal * 0.5;
+			G->AddFootEvent(2, LockT, EAnimStitchFootAction::Lock);
+			FAnimStitchEvaluator E2; E2.Initialize(G->Timeline, EErr);
+			const FAnimStitchFootLockResult DE = FAnimStitchFootLock::Detect(E2, Poses, 30.0);
+			const int32 LF = FMath::RoundToInt(LockT * 30.0);
+			Check(DE.bValid && DE.Mask[2].IsValidIndex(LF + 3) && DE.Mask[2][LF + 3] == AnimStitchPlant::ManualPin && DE.Mask[0][LF + 3] != AnimStitchPlant::ManualPin, TEXT("a manual lock on contact #3 locks only that contact"));
+
+			// Prediction runs over the whole set.
+			TArray<TArray<FTransform>> PP = Poses;
+			G->Timeline.FootLock.GroundContacts = { FootL, FootR, HandL, HandR };
+			G->Timeline.bPredictFeet = true;
+			G->SetOverlap(1, 0.3);
+			FAnimStitchEvaluator E3; E3.Initialize(G->Timeline, EErr);
+			const FAnimStitchPredictReport Report = FAnimStitchFootLock::PredictFeet(E3, PP, 30.0);
+			Check(Report.bValid, *FString::Printf(TEXT("foot prediction runs over four contacts (%d overlaps, %d pinned foot-frames)"), Report.Overlaps, Report.PinnedFootFrames));
+		}
+
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("P21 RESULT: %d failures"), Fails);
+		return Fails;
+	}
 	// FK limbs hotfix test: -S7Test. Rotating a parent FK control carries the child rigidly: the child's LOCAL rotation (the bend) must not change.
 	if (FParse::Param(*Params, TEXT("S7Test")))
 	{
@@ -491,7 +769,7 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 			}
 			FQuat Local1, World1, Upper1; LowerLocalAndWorld(Local1, World1, Upper1);
 			UE_LOG(LogAnimStitchSpike, Display, TEXT("S7 %s: upper-arm world rotation moved %.1f deg; lower-arm LOCAL rotation changed %.3f deg; lower-arm WORLD rotation changed %.1f deg; lower track parent bone: %s"), *Label,
-				FMath::RadiansToDegrees(Upper0.AngularDistance(Upper1)), FMath::RadiansToDegrees(Local0.AngularDistance(Local1)), FMath::RadiansToDegrees(World0.AngularDistance(World1)), *TLAsset->Timeline.Tracks[Tracks[1]].ParentBone.ToString());
+				FMath::RadiansToDegrees(Upper0.AngularDistance(Upper1)), FMath::RadiansToDegrees(Local0.AngularDistance(Local1)), FMath::RadiansToDegrees(World0.AngularDistance(World1)), *Ref.GetBoneName(Arm.Thigh).ToString());
 			Check(Upper0.AngularDistance(Upper1) > 0.3, *(Label + TEXT(": the parent actually rotated")));
 			Check(FMath::RadiansToDegrees(Local0.AngularDistance(Local1)) < 0.05, *(Label + TEXT(": the child's local rotation (the bend) is unchanged, it is carried rigidly")));
 		}
@@ -538,11 +816,11 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 			TLAsset->RemoveTrack(SpineTrack);
 			const int32 NewSpine = TLAsset->AddTrack(Spine);
 			const int32 PelvisTrack = TLAsset->Timeline.Tracks.IndexOfByPredicate([](const FAnimStitchTrack& T) { return T.Bone == TEXT("pelvis"); }); // indices shifted by the removal
-			Check(TLAsset->Timeline.Tracks[NewSpine].ParentBone == TEXT("pelvis"), TEXT("spine_01 control is parented to the pelvis control"));
+			Check(FAnimStitchManualEdits::ResolveParentTrack(Ref, TLAsset->Timeline.Tracks, NewSpine) == PelvisTrack, TEXT("spine_01 control is parented to the pelvis control"));
 			FAnimStitchTrack Hand; Hand.Kind = EAnimStitchTrackKind::Bone; Hand.Bone = TEXT("hand_l");
 			const int32 HandTrack = TLAsset->AddTrack(Hand);
-			Check(TLAsset->Timeline.Tracks[HandTrack].ParentBone.IsNone(), TEXT("no control on the skeleton parent: stays top level"));
-			Check(TLAsset->Timeline.Tracks[PelvisTrack].ParentBone.IsNone(), TEXT("the pelvis (its parent has no control) is top level"));
+			Check(FAnimStitchManualEdits::ResolveParentTrack(Ref, TLAsset->Timeline.Tracks, HandTrack) == NewSpine, TEXT("2.0: the hand control is parented to the nearest controlled ancestor (spine_01)"));
+			Check(FAnimStitchManualEdits::ResolveParentTrack(Ref, TLAsset->Timeline.Tracks, PelvisTrack) == INDEX_NONE, TEXT("the pelvis (no controlled ancestor) is top level"));
 			Check(TLAsset->Timeline.Tracks.Num() == 3, TEXT("the track list is flat (3 tracks, no nesting)"));
 
 			// Inheritance: lift the pelvis control; the Absolute child follows only while parented.
@@ -556,11 +834,8 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 			const FVector Before = SpineRel(0.8);
 			for (FAnimStitchTrackKey& K : TLAsset->Timeline.Tracks[PelvisTrack].Keys) { K.Translation += FVector(0, 0, 30); }
 			const FVector Carried = SpineRel(0.8);
-			TLAsset->Timeline.Tracks[NewSpine].ParentBone = NAME_None;
-			const FVector Free = SpineRel(0.8);
-			UE_LOG(LogAnimStitchSpike, Display, TEXT("S5 spine before %s, parented after lifting pelvis 30: %s, unparented: %s"), *Before.ToCompactString(), *Carried.ToCompactString(), *Free.ToCompactString());
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("S5 spine before %s, after lifting pelvis 30: %s"), *Before.ToCompactString(), *Carried.ToCompactString());
 			Check((Carried - Before - FVector(0, 0, 30)).Size() < 0.5, TEXT("moving the parent control carries the child control"));
-			Check((Free - Before).Size() < 0.5, TEXT("an unparented Absolute control stays put"));
 			TLAsset->RemoveTrack(HandTrack);
 		}
 
@@ -1468,7 +1743,7 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 					Preview->SetManualTracks(TLAsset->Timeline.Tracks);
 					TArray<FAnimStitchControl> StyledControls; Preview->BuildControls(StyledControls);
 					const FAnimStitchControl* Styled = StyledControls.FindByPredicate([PelvisTrack](const FAnimStitchControl& K) { return K.Id.Kind == EAnimStitchControlKind::Bone && K.Id.A == PelvisTrack; });
-					UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest P12 STYLE: pelvis control size mul %.1f opacity %.2f sphere=%d offset %s (expected 2.0 / 0.60 / 1 / Y=15)"), Styled ? Styled->SizeMul : -9.f, Styled ? Styled->Opacity : -9.f, Styled ? Styled->bSphere : -1, Styled ? *Styled->Offset.ToCompactString() : TEXT("none"));
+					UE_LOG(LogAnimStitchSpike, Display, TEXT("ManualTest P12 STYLE: pelvis control size mul %.1f opacity %.2f sphere=%d offset %s (expected 2.0 / 0.60 / 1 / Y=15)"), Styled ? Styled->SizeMul : -9.f, Styled ? Styled->Opacity : -9.f, Styled ? (int32)Styled->Shape : -1, Styled ? *Styled->Offset.ToCompactString() : TEXT("none"));
 
 					TLAsset->AddFootEvent(0, 1.0, EAnimStitchFootAction::Lock);
 					TLAsset->AddFootEvent(0, 1.5, EAnimStitchFootAction::Unlock);

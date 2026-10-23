@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "AnimStitchTimeline.h"
@@ -40,7 +40,7 @@ public:
 	 * PlantFootBones (left, right; optional): when a bone track moves a leg (pelvis...), these feet stay where they were via leg IK,
 	 * unless the foot has its own active IK track.
 	 */
-	static void Apply(const FReferenceSkeleton& RefSkeleton, const TArray<FAnimStitchTrack>& Tracks, double Time, TArray<FTransform>& LocalPose, const FName* PlantFootBones = nullptr);
+	static void Apply(const FReferenceSkeleton& RefSkeleton, const TArray<FAnimStitchTrack>& Tracks, double Time, TArray<FTransform>& LocalPose, const TArray<FName>* PlantFootBones = nullptr);
 
 	/** Where an IK pole sits by default for a pose: out from the knee/elbow, away from the leg axis (falls back to the reference pose, then forward). */
 	static FVector DefaultPoleForPose(const FReferenceSkeleton& RefSkeleton, const FAnimStitchFootChain& Chain, const TArray<FTransform>& ComponentPose);
@@ -58,6 +58,22 @@ public:
 	static TArray<FName> GetCoreBoneSuggestions(const FReferenceSkeleton& RefSkeleton);
 
 	static bool IsIdentityKey(const FAnimStitchTrackKey& Key);
+
+	/**
+	 * The control hierarchy, derived live from the skeleton: the parent of Tracks[TrackIndex] is the Bone track on the nearest ancestor bone that has one
+	 * (INDEX_NONE = top level). Because it is derived, it holds for every control whenever it was added, in any order.
+	 */
+	static int32 ResolveParentTrack(const FReferenceSkeleton& RefSkeleton, const TArray<FAnimStitchTrack>& Tracks, int32 TrackIndex);
+
+	/** True for bones that get a node in the internal baked rig (body bones; twist / corrective / helper / IK helper / end / face bones have none). */
+	static bool IsRigBone(FName Bone);
+
+	/**
+	 * Bake to Control Rig, key conversion: re-expresses every Bone track as an Absolute track with one key per frame, so Apply on the result reproduces the pose
+	 * Apply produced with the original tracks. BlendPoses are the per-frame skeleton-local poses BEFORE manual corrections (indexed by frame at Rate).
+	 * IK, pole and root-offset tracks are left as they are.
+	 */
+	static void ConvertTracksToAbsolute(const FReferenceSkeleton& RefSkeleton, TArray<FAnimStitchTrack>& Tracks, const TArray<TArray<FTransform>>& BlendPoses, double Rate, double TotalLength, const TArray<FName>* PlantFootBones = nullptr);
 
 	/** -1 = left, +1 = right, 0 = centre / unknown, guessed from the bone name. */
 	static int32 GetBoneSide(FName Bone);

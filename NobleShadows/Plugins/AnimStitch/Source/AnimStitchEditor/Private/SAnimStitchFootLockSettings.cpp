@@ -9,6 +9,8 @@
 #include "Widgets/Input/SSearchableComboBox.h"
 #include "Widgets/Input/SSpinBox.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SWrapBox.h"
+#include "Widgets/Input/SButton.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Styling/AppStyle.h"
 
@@ -33,6 +35,12 @@ void SAnimStitchFootLockSettings::Apply(TFunctionRef<void(FAnimStitchFootLockSet
 	// Make the bones that are shown explicit, so what you see is what is used.
 	if (Settings.LeftFootBone.IsNone() && LeftSelected.IsValid()) { Settings.LeftFootBone = FName(**LeftSelected); }
 	if (Settings.RightFootBone.IsNone() && RightSelected.IsValid()) { Settings.RightFootBone = FName(**RightSelected); }
+	// With extra contacts the set is explicit and its first two entries stay the left and right foot.
+	if (Settings.GroundContacts.Num() >= 2)
+	{
+		Settings.GroundContacts[0] = Settings.LeftFootBone;
+		Settings.GroundContacts[1] = Settings.RightFootBone;
+	}
 	{
 		const FScopedTransaction Tx(Label);
 		Timeline->SetFootLockSettings(Settings);
@@ -45,13 +53,38 @@ void SAnimStitchFootLockSettings::Apply(TFunctionRef<void(FAnimStitchFootLockSet
 		{
 			UAnimStitchSettings* Plugin = GetMutableDefault<UAnimStitchSettings>();
 			FAnimStitchFootBones& Remembered = Plugin->FootBonesBySkeleton.FindOrAdd(Skeleton->GetPathName());
-			if (Remembered.Left != Settings.LeftFootBone || Remembered.Right != Settings.RightFootBone)
+			if (Remembered.Left != Settings.LeftFootBone || Remembered.Right != Settings.RightFootBone || Remembered.Contacts != Settings.GroundContacts)
 			{
 				Remembered.Left = Settings.LeftFootBone;
 				Remembered.Right = Settings.RightFootBone;
+				Remembered.Contacts = Settings.GroundContacts;
 				Plugin->SaveConfig();
 			}
 		}
+	}
+}
+
+void SAnimStitchFootLockSettings::RebuildContactChips()
+{
+	if (!ContactChips.IsValid()) { return; }
+	ContactChips->ClearChildren();
+	const TArray<FName>& Contacts = Current().GroundContacts;
+	for (int32 i = 2; i < Contacts.Num(); ++i)
+	{
+		ContactChips->AddSlot().Padding(0, 0, 4, 2)
+		[
+			SNew(SButton)
+			.ToolTipText(LOCTEXT("RemoveContactTip", "Remove this ground contact"))
+			.OnClicked_Lambda([this, i]()
+			{
+				Apply([i](FAnimStitchFootLockSettings& S) { if (S.GroundContacts.IsValidIndex(i)) { S.GroundContacts.RemoveAt(i); } if (S.GroundContacts.Num() <= 2) { S.GroundContacts.Empty(); } }, LOCTEXT("RemoveContactTx", "Remove Ground Contact"));
+				RebuildContactChips();
+				return FReply::Handled();
+			})
+			[
+				SNew(STextBlock).Text(FText::Format(LOCTEXT("ContactChip", "{0}  x"), FText::FromName(Contacts[i])))
+			]
+		];
 	}
 }
 
@@ -124,6 +157,35 @@ void SAnimStitchFootLockSettings::Construct(const FArguments& InArgs)
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
 		[
 			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)[SNew(STextBlock).Text(LOCTEXT("ExtraContacts", "More contacts")).ToolTipText(LOCTEXT("ExtraContactsTip", "Further ground contacts besides the pair above (the other paws of a quadruped, extra legs). Plant detection, foot lock, prediction and Ground Feet treat every contact on its own. Remembered per skeleton."))]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+			[
+				SNew(SBox).WidthOverride(180.f)
+				[
+					SNew(SSearchableComboBox)
+					.OptionsSource(&BoneItems)
+					.OnGenerateWidget_Lambda([](TSharedPtr<FString> Item) { return SNew(STextBlock).Text(FText::FromString(*Item)); })
+					.OnSelectionChanged_Lambda([this](TSharedPtr<FString> Item, ESelectInfo::Type)
+					{
+						if (!Item.IsValid()) { return; }
+						const FName Bone(**Item);
+						Apply([Bone](FAnimStitchFootLockSettings& S)
+						{
+							if (S.GroundContacts.Num() < 2) { S.GroundContacts = { S.LeftFootBone, S.RightFootBone }; }
+							S.GroundContacts.AddUnique(Bone);
+						}, LOCTEXT("AddContactTx", "Add Ground Contact"));
+						RebuildContactChips();
+					})
+					[
+						SNew(STextBlock).Text(LOCTEXT("AddContact", "Add contact bone..."))
+					]
+				]
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)[SAssignNew(ContactChips, SWrapBox).UseAllottedSize(true)]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
+		[
+			SNew(SHorizontalBox)
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 12, 0)
 			[
 				SNew(SCheckBox)
@@ -184,6 +246,7 @@ void SAnimStitchFootLockSettings::Construct(const FArguments& InArgs)
 				LOCTEXT("PlantBlendTip", "The correction fades in and out over this long at the ends of a plant"))]
 		]
 	];
+	RebuildContactChips();
 }
 
 #undef LOCTEXT_NAMESPACE
