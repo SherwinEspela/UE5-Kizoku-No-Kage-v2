@@ -435,6 +435,69 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 		UE_LOG(LogAnimStitchSpike, Display, TEXT("S6 RESULT: %d failures"), Fails);
 		return Fails;
 	}
+	// FK limbs hotfix test: -S7Test. Rotating a parent FK control carries the child rigidly: the child's LOCAL rotation (the bend) must not change.
+	if (FParse::Param(*Params, TEXT("S7Test")))
+	{
+		int32 Fails = 0;
+		auto Check = [&Fails](bool b, const TCHAR* What) { UE_LOG(LogAnimStitchSpike, Display, TEXT("S7 %s: %s"), b ? TEXT("PASS") : TEXT("FAIL"), What); if (!b) { ++Fails; } };
+		for (const EAnimStitchTrackMode Mode : { EAnimStitchTrackMode::Additive, EAnimStitchTrackMode::Absolute })
+		{
+			UAnimStitchTimelineAsset* TLAsset = NewObject<UAnimStitchTimelineAsset>(GetTransientPackage());
+			TArray<FText> W;
+			TLAsset->AddSequences({ const_cast<UAnimSequence*>(B), const_cast<UAnimSequence*>(B) }, INDEX_NONE, W);
+			FAnimStitchEvaluator Eval; FString Err;
+			if (!Eval.Initialize(TLAsset->Timeline, Err)) { UE_LOG(LogAnimStitchSpike, Error, TEXT("S7: evaluator failed")); return 91; }
+			const FReferenceSkeleton& Ref = Eval.GetSkeleton()->GetReferenceSkeleton();
+			const FName Hand = FAnimStitchManualEdits::GuessHandBone(Ref, true);
+			const FAnimStitchFootChain Arm = FAnimStitchManualEdits::ChainFor(Ref, Hand); // Thigh = upper arm, Calf = lower arm, Foot = hand
+			if (!Arm.IsValid()) { UE_LOG(LogAnimStitchSpike, Error, TEXT("S7: no arm chain")); return 92; }
+			const FString Label = Mode == EAnimStitchTrackMode::Absolute ? TEXT("Absolute") : TEXT("Additive");
+			// Created the way the limb menu does: FK joints, rotation only, parent first.
+			int32 Tracks[2];
+			int32 n = 0;
+			for (const int32 Joint : { Arm.Thigh, Arm.Calf })
+			{
+				FAnimStitchTrack T; T.Kind = EAnimStitchTrackKind::Bone; T.Bone = Ref.GetBoneName(Joint); T.bRotationOnly = true; T.Mode = Mode;
+				Tracks[n++] = TLAsset->AddTrack(T);
+			}
+			const double Time = 1.0;
+			auto LowerLocalAndWorld = [&](FQuat& OutLocal, FQuat& OutWorld, FQuat& OutUpperWorld)
+			{
+				TArray<FTransform> Pose; Eval.EvaluatePose(Time, Pose);
+				FAnimStitchManualEdits::Apply(Ref, TLAsset->Timeline.Tracks, Time, Pose);
+				OutLocal = Pose[Arm.Calf].GetRotation();
+				OutWorld = FAnimStitchFootLock::GetComponentSpace(Ref, Pose, Arm.Calf).GetRotation();
+				OutUpperWorld = FAnimStitchFootLock::GetComponentSpace(Ref, Pose, Arm.Thigh).GetRotation();
+			};
+			// The child already has its own bend keyed (additive: a component-space delta; absolute: a baked full transform is already its own).
+			if (Mode == EAnimStitchTrackMode::Additive)
+			{
+				FAnimStitchTrackKey CK; CK.Time = Time; CK.Rotation = FQuat(FVector::UpVector, FMath::DegreesToRadians(25.0)); CK.Channels = AnimStitchChannel::Rotation;
+				TLAsset->SetTrackChannelKey(Tracks[1], CK, AnimStitchChannel::Rotation);
+			}
+			FQuat Local0, World0, Upper0; LowerLocalAndWorld(Local0, World0, Upper0);
+			// Rotate the UPPER arm control by 40 degrees (a key at the playhead, like the gizmo writes).
+			FAnimStitchTrack& Parent = TLAsset->Timeline.Tracks[Tracks[0]];
+			const FQuat Delta(FVector::RightVector, FMath::DegreesToRadians(40.0));
+			if (Mode == EAnimStitchTrackMode::Additive)
+			{
+				FAnimStitchTrackKey K; K.Time = Time; K.Rotation = Delta; K.Channels = AnimStitchChannel::Rotation;
+				TLAsset->SetTrackChannelKey(Tracks[0], K, AnimStitchChannel::Rotation);
+			}
+			else
+			{
+				// Absolute: the gizmo moves the bone in component space; rotate every baked key near the playhead so the effect is stable.
+				for (FAnimStitchTrackKey& K : Parent.Keys) { if (FMath::Abs(K.Time - Time) < 0.2) { K.Rotation = (Delta * K.Rotation).GetNormalized(); } }
+			}
+			FQuat Local1, World1, Upper1; LowerLocalAndWorld(Local1, World1, Upper1);
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("S7 %s: upper-arm world rotation moved %.1f deg; lower-arm LOCAL rotation changed %.3f deg; lower-arm WORLD rotation changed %.1f deg; lower track parent bone: %s"), *Label,
+				FMath::RadiansToDegrees(Upper0.AngularDistance(Upper1)), FMath::RadiansToDegrees(Local0.AngularDistance(Local1)), FMath::RadiansToDegrees(World0.AngularDistance(World1)), *TLAsset->Timeline.Tracks[Tracks[1]].ParentBone.ToString());
+			Check(Upper0.AngularDistance(Upper1) > 0.3, *(Label + TEXT(": the parent actually rotated")));
+			Check(FMath::RadiansToDegrees(Local0.AngularDistance(Local1)) < 0.05, *(Label + TEXT(": the child's local rotation (the bend) is unchanged, it is carried rigidly")));
+		}
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("S7 RESULT: %d failures"), Fails);
+		return Fails;
+	}
 	// Hotfix Set 5 test: -S5Test. Trail refresh, deletion vs channel locks, control parenting, Absolute delete-interpolation on crossfades.
 	if (FParse::Param(*Params, TEXT("S5Test")))
 	{

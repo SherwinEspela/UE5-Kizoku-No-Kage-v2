@@ -373,11 +373,9 @@ void FAnimStitchManualEdits::Apply(const FReferenceSkeleton& Ref, const TArray<F
 
 	// Control hierarchy: an Absolute control places its bone at a fixed spot, so a parented one also follows what its parent control did to the parent bone
 	// (the parent bone's change from the blended pose to its corrected pose, which already includes everything above it).
+	// The pose before any control touches it: additive deltas are expressed in ITS axes (see below), and parented Absolute controls follow their parent's change from it.
 	TArray<FTransform> Original;
-	for (const FAnimStitchTrack& T : Tracks)
-	{
-		if (T.Kind == EAnimStitchTrackKind::Bone && T.Mode == EAnimStitchTrackMode::Absolute && !T.ParentBone.IsNone() && T.Keys.Num() > 0) { Original = Local; break; }
-	}
+	if (BoneTracks.Num() > 0) { Original = Local; }
 
 	for (const TPair<int32, const FAnimStitchTrack*>& Entry : BoneTracks)
 	{
@@ -425,13 +423,15 @@ void FAnimStitchManualEdits::Apply(const FReferenceSkeleton& Ref, const TArray<F
 		}
 		if (!Track.bRotationOnly)
 		{
-			L.SetTranslation(L.GetTranslation() + ParentCS.InverseTransformVector(Key.Translation));
+			// Additive deltas are expressed in the component axes of the ANIMATION (the pose before the controls), not of the parent as other controls moved it:
+			// rotating a parent control then carries this bone rigidly (its own local rotation / offset stays exactly as keyed) instead of re-aiming its delta.
+			L.SetTranslation(L.GetTranslation() + (Parent != INDEX_NONE ? FAnimStitchFootLock::GetComponentSpace(Ref, Original, Parent) : FTransform::Identity).InverseTransformVector(Key.Translation));
 			L.SetScale3D(L.GetScale3D() * Key.Scale);
 		}
 		if (!Key.Rotation.IsIdentity(1e-6))
 		{
 			// The delta is a component-space rotation about the bone: conjugate it into the parent's space.
-			const FQuat ParentRot = ParentCS.GetRotation();
+			const FQuat ParentRot = Parent != INDEX_NONE ? FAnimStitchFootLock::GetComponentSpace(Ref, Original, Parent).GetRotation() : FQuat::Identity;
 			L.SetRotation(((ParentRot.Inverse() * Key.Rotation * ParentRot) * L.GetRotation()).GetNormalized());
 		}
 	}

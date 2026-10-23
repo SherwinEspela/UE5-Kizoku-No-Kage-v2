@@ -310,7 +310,7 @@ void FAnimStitchPreview::SetPlayhead(double Time)
 		bHaveBasePose = false;
 		for (const FAnimStitchTrack& T : ManualTracks)
 		{
-			if (T.Kind == EAnimStitchTrackKind::IKLimb)
+			if (T.Kind == EAnimStitchTrackKind::IKLimb || (T.Kind == EAnimStitchTrackKind::Bone && T.Mode == EAnimStitchTrackMode::Additive && T.Keys.Num() > 0))
 			{
 				const FReferenceSkeleton& SkelRef = Evaluator.GetSkeleton()->GetReferenceSkeleton();
 				BaseLocalPose = Pose;

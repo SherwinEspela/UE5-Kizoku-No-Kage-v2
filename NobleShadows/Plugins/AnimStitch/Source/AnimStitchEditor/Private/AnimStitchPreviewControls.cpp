@@ -954,6 +954,21 @@ void FAnimStitchPreview::ApplyControlEdit(const FVector& Translation, const FQua
 		if (AssetPtr->Timeline.Tracks[Id.A].Kind == EAnimStitchTrackKind::IKPole) { Key.Translation = Drag.StartKey.Translation + Translation; }
 		else { Key.Pole = Drag.StartKey.Pole + Translation; }
 	}
+	// Additive keys live in the axes of the animation (the pose before the controls). The gizmo works in what is on screen, so a bone whose parent has been
+	// moved by other controls converts its drag by the parent's motion: a parent rotation then never leaks into the child's own delta.
+	if (Id.Kind == EAnimStitchControlKind::Bone && AssetPtr->Timeline.Tracks[Id.A].Kind == EAnimStitchTrackKind::Bone && AssetPtr->Timeline.Tracks[Id.A].Mode == EAnimStitchTrackMode::Additive && bHaveBasePose && bEvaluatorValid)
+	{
+		const FReferenceSkeleton& SkelRef = Evaluator.GetSkeleton()->GetReferenceSkeleton();
+		const int32 BoneIndex = SkelRef.FindBoneIndex(AssetPtr->Timeline.Tracks[Id.A].Bone);
+		const int32 ParentIndex = BoneIndex != INDEX_NONE ? SkelRef.GetParentIndex(BoneIndex) : INDEX_NONE;
+		FTransform ParentNow;
+		if (ParentIndex != INDEX_NONE && BaseComponentPose.IsValidIndex(ParentIndex) && GetBoneComponentTransform(SkelRef.GetBoneName(ParentIndex), ParentNow))
+		{
+			const FQuat Mi = BaseComponentPose[ParentIndex].GetRotation() * ParentNow.GetRotation().Inverse();
+			Key.Translation = Drag.StartKey.Translation + Mi.RotateVector(Translation);
+			Key.Rotation = (Mi * Rotation * Mi.Inverse() * Drag.StartKey.Rotation).GetNormalized();
+		}
+	}
 	// Bone tracks key only the channels the gizmo actually changed (rotating never creates translation or scale keys); a locked channel is left alone.
 	uint8 Channels = AnimStitchChannel::All;
 	if (Id.Kind == EAnimStitchControlKind::Bone && AssetPtr->Timeline.Tracks[Id.A].Kind == EAnimStitchTrackKind::Bone)
