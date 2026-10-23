@@ -8,6 +8,9 @@
 #include "AnimStitchControlShapes.h"
 #include "Engine/SkeletalMesh.h"
 #include "ScopedTransaction.h"
+#include "Framework/Application/SlateApplication.h"
+#include "Framework/Notifications/NotificationManager.h"
+#include "Widgets/Notifications/SNotificationList.h"
 #include "SceneManagement.h"
 #include "SceneView.h"
 #include "ReferenceSkeleton.h"
@@ -645,6 +648,7 @@ bool FAnimStitchPreview::BeginGizmoDrag(const FSceneView& View, const FVector2D&
 	UAnimStitchTimelineAsset* AssetPtr = Asset.Get();
 	if (!AssetPtr) { return false; }
 	Drag = FDragState();
+	bDragBlockedShown = false;
 	Drag.bActive = true;
 	Drag.Axis = HitAxis;
 	Drag.Control = *Selected;
@@ -810,6 +814,30 @@ void FAnimStitchPreview::UpdateGizmoDrag(const FSceneView& View, const FVector2D
 	Drag.LastRotation = Rotation;
 	ApplyControlEdit(Translation, Rotation, Scale);
 }
+
+void FAnimStitchPreview::ClampDragToUnlocked(FVector& Translation, FQuat& Rotation, FVector& Scale)
+{
+	const UAnimStitchTimelineAsset* AssetPtr = Asset.Get();
+	const FAnimStitchControlId Id = Drag.Control.Id;
+	if (!AssetPtr || Id.Kind != EAnimStitchControlKind::Bone || !AssetPtr->Timeline.Tracks.IsValidIndex(Id.A)) { return; }
+	const FAnimStitchTrack& Track = AssetPtr->Timeline.Tracks[Id.A];
+	if (Track.Kind != EAnimStitchTrackKind::Bone) { return; }
+	const uint8 Editable = FAnimStitchManualEdits::GetEditableChannels(Track);
+	TArray<FText> Blocked;
+	if (!(Editable & AnimStitchChannel::Translation) && !Translation.IsNearlyZero(1e-6)) { Translation = FVector::ZeroVector; Blocked.Add(LOCTEXT("LockedTranslation", "Translation")); }
+	if (!(Editable & AnimStitchChannel::Rotation) && !Rotation.Equals(FQuat::Identity, 1e-7)) { Rotation = FQuat::Identity; Blocked.Add(LOCTEXT("LockedRotation", "Rotation")); }
+	if (!(Editable & AnimStitchChannel::Scale) && !Scale.Equals(FVector::OneVector, 1e-7)) { Scale = FVector::OneVector; Blocked.Add(LOCTEXT("LockedScale", "Scale")); }
+	if (Blocked.Num() > 0 && !bDragBlockedShown)
+	{
+		bDragBlockedShown = true;
+		const FText Message = FText::Format(LOCTEXT("DragBlocked", "{0} is locked on {1}, so that part of the drag was not applied. Unlock the lane (lock icon in the value panel or the channel lane) to move it."), FText::Join(FText::FromString(TEXT(", ")), Blocked), FText::FromName(Track.Bone));
+		FNotificationInfo Info(Message);
+		Info.ExpireDuration = 4.f;
+		Info.bUseThrobber = false;
+		LastDragBlockedText = Message;
+		if (FSlateApplication::IsInitialized()) { FSlateNotificationManager::Get().AddNotification(Info); }
+	}
+}
 bool FAnimStitchPreview::GetFocusBox(FBox& OutBox) const
 {
 	TArray<FAnimStitchControl> Controls;
@@ -886,10 +914,15 @@ void FAnimStitchPreview::EndGizmoDrag()
 	DragTransaction.Reset(); // closes the undo transaction
 }
 
-void FAnimStitchPreview::ApplyControlEdit(const FVector& Translation, const FQuat& Rotation, const FVector& Scale)
+void FAnimStitchPreview::ApplyControlEdit(const FVector& TranslationIn, const FQuat& RotationIn, const FVector& ScaleIn)
 {
 	UAnimStitchTimelineAsset* AssetPtr = Asset.Get();
 	if (!AssetPtr || !Drag.bActive) { return; }
+	// Whatever falls on a locked channel is dropped from the drag (and the user is told), so the control never follows the cursor to a place the joint cannot go.
+	FVector Translation = TranslationIn, Scale = ScaleIn;
+	FQuat Rotation = RotationIn;
+	ClampDragToUnlocked(Translation, Rotation, Scale);
+	if (!Translation.Equals(TranslationIn) || !Rotation.Equals(RotationIn)) { Drag.LastTranslation = Translation; Drag.LastRotation = Rotation; }
 	const FAnimStitchControlId Id = Drag.Control.Id;
 
 	if (Id.Kind == EAnimStitchControlKind::LockPin)

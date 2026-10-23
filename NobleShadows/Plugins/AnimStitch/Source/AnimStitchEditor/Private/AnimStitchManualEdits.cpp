@@ -1,5 +1,8 @@
 #include "AnimStitchManualEdits.h"
 #include "ReferenceSkeleton.h"
+#include "Animation/Skeleton.h"
+#include "Engine/SkeletalMesh.h"
+#include "Engine/SkeletalMeshSocket.h"
 
 namespace
 {
@@ -45,7 +48,29 @@ bool FAnimStitchManualEdits::IsRigBone(FName Bone)
 	static const TCHAR* Excluded[] = { TEXT("twist"), TEXT("corrective"), TEXT("roll"), TEXT("helper"), TEXT("_ik"), TEXT("ik_"), TEXT("_end"), TEXT("jaw"), TEXT("eye"), TEXT("tongue"), TEXT("teeth"), TEXT("hair"), TEXT("brow"), TEXT("lip"), TEXT("cheek"), TEXT("nose"), TEXT("ear"), TEXT("facial"), TEXT("pole"), TEXT("attach"), TEXT("socket") };
 	const FString Lower = Bone.ToString().ToLower();
 	if (Lower.StartsWith(TEXT("ik")) && Lower.Len() > 2) { return false; }
-	for (const TCHAR* Word : Excluded) { if (Lower.Contains(Word)) { return false; } }
+	for (const TCHAR* Word : Excluded)
+	{
+		// A word counts only where it starts (not inside another word): "ear" is a face bone, "forearm" is not.
+		for (int32 At = Lower.Find(Word, ESearchCase::CaseSensitive, ESearchDir::FromStart, 0); At != INDEX_NONE; At = Lower.Find(Word, ESearchCase::CaseSensitive, ESearchDir::FromStart, At + 1))
+		{
+			if (Word[0] == TEXT('_') || At == 0 || !FChar::IsAlpha(Lower[At - 1])) { return false; }
+		}
+	}
+	return true;
+}
+
+bool FAnimStitchManualEdits::IsControlBone(const USkeleton* Skeleton, FName Bone)
+{
+	if (!IsRigBone(Bone)) { return false; }
+	const FString Name = Bone.ToString();
+	if (Name.StartsWith(TEXT("VB "), ESearchCase::IgnoreCase)) { return false; } // virtual bones are named "VB <source>_<target>"
+	if (!Skeleton) { return true; }
+	for (const FVirtualBone& Virtual : Skeleton->GetVirtualBones()) { if (Virtual.VirtualBoneName == Bone) { return false; } }
+	for (const USkeletalMeshSocket* Socket : Skeleton->Sockets) { if (Socket && Socket->SocketName == Bone) { return false; } }
+	if (const USkeletalMesh* PreviewMesh = Skeleton->GetPreviewMesh())
+	{
+		for (const USkeletalMeshSocket* Socket : PreviewMesh->GetMeshOnlySocketList()) { if (Socket && Socket->SocketName == Bone) { return false; } }
+	}
 	return true;
 }
 
@@ -63,6 +88,46 @@ int32 FAnimStitchManualEdits::ResolveParentTrack(const FReferenceSkeleton& Ref, 
 	return INDEX_NONE;
 }
 
+FName FAnimStitchManualEdits::FindLimbEffector(const FReferenceSkeleton& Ref, FName Bone)
+{
+	const int32 B = Ref.FindBoneIndex(Bone);
+	if (B == INDEX_NONE) { return NAME_None; }
+	auto IsEnd = [&Ref](int32 Index)
+	{
+		const FName Name = Ref.GetBoneName(Index);
+		const FString Lower = Name.ToString().ToLower();
+		if (Lower.Contains(TEXT("twist")) || Lower.Contains(TEXT("ik")) || Lower.Contains(TEXT("corrective")) || Lower.Contains(TEXT("helper"))) { return false; }
+		return (Lower.Contains(TEXT("hand")) || Lower.Contains(TEXT("foot"))) && ChainFor(Ref, Name).IsValid();
+	};
+	if (IsEnd(B)) { return Ref.GetBoneName(B); }
+	for (int32 Child = B + 1; Child < Ref.GetNum(); ++Child)
+	{
+		if (Ref.GetParentIndex(Child) != B) { continue; }
+		if (IsEnd(Child)) { return Ref.GetBoneName(Child); }
+		for (int32 Grand = Child + 1; Grand < Ref.GetNum(); ++Grand)
+		{
+			if (Ref.GetParentIndex(Grand) == Child && IsEnd(Grand)) { return Ref.GetBoneName(Grand); }
+		}
+	}
+	return NAME_None;
+}
+
+bool FAnimStitchManualEdits::IsLimbIKAt(const FAnimStitchTrack& IKTrack, double Time)
+{
+	if (IKTrack.LimbSwitches.Num() == 0) { return true; }
+	bool bIK = !IKTrack.LimbSwitches[0].bIK; // before the first switch the limb is in the mode the first switch leaves
+	for (const FAnimStitchLimbSwitch& Switch : IKTrack.LimbSwitches)
+	{
+		if (Switch.Time <= Time + 1e-9) { bIK = Switch.bIK; } else { break; }
+	}
+	return bIK;
+}
+
+int32 FAnimStitchManualEdits::FindIKTrack(const TArray<FAnimStitchTrack>& Tracks, FName Effector)
+{
+	return Tracks.IndexOfByPredicate([Effector](const FAnimStitchTrack& T) { return T.Kind == EAnimStitchTrackKind::IKLimb && T.Bone == Effector; });
+}
+
 bool FAnimStitchManualEdits::IsIdentityKey(const FAnimStitchTrackKey& Key)
 {
 	return Key.Translation.IsNearlyZero(1e-4) && Key.Rotation.Equals(FQuat::Identity, 1e-5) && Key.Scale.Equals(FVector::OneVector, 1e-5);
@@ -74,10 +139,16 @@ namespace
 	constexpr double IKWeightRamp = 0.1;
 
 	/**
-	 * IK keys interpolate like every other track: across the FULL span between two keys, the target (translation, rotation, pole) and the weight
-	 * all use the same normalised position, starting at the first key and arriving exactly at the next. A key whose weight is 0 has no target of its
-	 * own, so the span borrows the active neighbour's target while the weight fades (IK released / engaged).
+	 * IK keys interpolate like every other track: across the FULL span between two keys the target (translation, rotation, pole) and the weight all use the SAME
+	 * normalised position, starting at the first key and arriving exactly at the next. Every key carries a target of its own (see NormalizeIKKeys), so there is
+	 * nothing to borrow from a neighbour. Only a key that still has no target at all (data that was never normalised) falls back to its neighbour's.
 	 */
+	bool HasIKTarget(const FAnimStitchTrackKey& K)
+	{
+		// A fully engaged key always has a target (even one at the origin); an IK-off or half-faded key with nothing stored has none.
+		return K.Weight >= 0.999f || !(K.Translation.IsNearlyZero(1e-3) && K.Rotation.Equals(FQuat::Identity, 1e-5) && K.Pole.IsNearlyZero(1e-3));
+	}
+
 	FAnimStitchTrackKey SampleIK(const FAnimStitchTrack& Track, double Time)
 	{
 		const TArray<FAnimStitchTrackKey>& Keys = Track.Keys;
@@ -98,9 +169,8 @@ namespace
 		if (!Keys.IsValidIndex(I + 1))
 		{
 			FAnimStitchTrackKey Out = K; // after the last key (unchanged): hold
-			if (K.Weight <= 1e-3f && I > 0 && Keys[I - 1].Weight > 1e-3f)
+			if (!HasIKTarget(K) && I > 0 && HasIKTarget(Keys[I - 1]))
 			{
-				// A released (weight 0) last key keeps the previous key's target, as before.
 				Out.Translation = Keys[I - 1].Translation;
 				Out.Rotation = Keys[I - 1].Rotation;
 				Out.Pole = Keys[I - 1].Pole;
@@ -111,10 +181,9 @@ namespace
 		const FAnimStitchTrackKey& Next = Keys[I + 1];
 		const double Span = Next.Time - K.Time;
 		const double T = Span > 1e-9 ? FMath::Clamp((Time - K.Time) / Span, 0.0, 1.0) : 0.0;
-		const bool bActiveK = K.Weight > 1e-3f;
-		const bool bActiveNext = Next.Weight > 1e-3f;
-		const FAnimStitchTrackKey& From = (!bActiveK && bActiveNext) ? Next : K; // the target the span starts from
-		const FAnimStitchTrackKey& To = (bActiveK && !bActiveNext) ? K : Next;   // and the one it arrives at
+		// A key with no target at all (never normalised) borrows its neighbour's, so the span still interpolates between two real targets.
+		const FAnimStitchTrackKey& From = (!HasIKTarget(K) && HasIKTarget(Next)) ? Next : K;
+		const FAnimStitchTrackKey& To = (!HasIKTarget(Next) && HasIKTarget(K)) ? K : Next;
 		FAnimStitchTrackKey Out = K;
 		Out.Translation = FMath::Lerp(From.Translation, To.Translation, T);
 		Out.Rotation = FQuat::Slerp(From.Rotation, To.Rotation, T).GetNormalized();
@@ -123,6 +192,34 @@ namespace
 		Out.Time = Time;
 		return Out;
 	}
+}
+
+bool FAnimStitchManualEdits::NormalizeIKKeys(FAnimStitchTrack& Track)
+{
+	if (Track.Kind != EAnimStitchTrackKind::IKLimb) { return false; }
+	bool bChanged = false;
+	TArray<FAnimStitchTrackKey>& Keys = Track.Keys;
+	for (int32 k = 0; k < Keys.Num(); ++k)
+	{
+		if (HasIKTarget(Keys[k])) { continue; }
+		// Older builds stored "IK off" anchors and half-faded keys with no target at all. Give them the target of the nearest key that has one, so every key is a full
+		// (target, pole, weight) value and the span between any two keys interpolates all of it together.
+		int32 Best = INDEX_NONE;
+		for (int32 d = 1; d < Keys.Num() && Best == INDEX_NONE; ++d)
+		{
+			const bool bNext = Keys.IsValidIndex(k + d) && HasIKTarget(Keys[k + d]);
+			const bool bPrev = Keys.IsValidIndex(k - d) && HasIKTarget(Keys[k - d]);
+			if (bNext && bPrev) { Best = (Keys[k + d].Time - Keys[k].Time) <= (Keys[k].Time - Keys[k - d].Time) ? k + d : k - d; }
+			else if (bNext) { Best = k + d; }
+			else if (bPrev) { Best = k - d; }
+		}
+		if (Best == INDEX_NONE) { continue; }
+		Keys[k].Translation = Keys[Best].Translation;
+		Keys[k].Rotation = Keys[Best].Rotation;
+		Keys[k].Pole = Keys[Best].Pole;
+		bChanged = true;
+	}
+	return bChanged;
 }
 uint8 FAnimStitchManualEdits::GetApplicableChannels(const FAnimStitchTrack& Track)
 {
@@ -207,7 +304,9 @@ FAnimStitchTrackKey FAnimStitchManualEdits::Sample(const FAnimStitchTrack& Track
 	}
 	if (Track.Kind == EAnimStitchTrackKind::IKLimb)
 	{
-		return SampleIK(Track, Time);
+		FAnimStitchTrackKey Out = SampleIK(Track, Time);
+		if (!IsLimbIKAt(Track, Time)) { Out.Weight = 0.f; } // FK mode: the IK is off, the FK joints drive the limb
+		return Out;
 	}
 	if (Track.Kind == EAnimStitchTrackKind::Bone)
 	{
@@ -328,7 +427,7 @@ TArray<FName> FAnimStitchManualEdits::GetCoreBoneSuggestions(const FReferenceSke
 		for (const TCHAR* W : Wanted) { bMatch |= Lower.Contains(W); }
 		bool bBad = false;
 		for (const TCHAR* W : Excluded) { bBad |= Lower.Contains(W); }
-		if (bMatch && !bBad && BoneDepth(RefSkeleton, i) < 9) { Result.Add(RefSkeleton.GetBoneName(i)); }
+		if (bMatch && !bBad && !Lower.StartsWith(TEXT("vb ")) && BoneDepth(RefSkeleton, i) < 9) { Result.Add(RefSkeleton.GetBoneName(i)); }
 	}
 	return Result;
 }
@@ -500,7 +599,7 @@ void FAnimStitchManualEdits::Apply(const FReferenceSkeleton& Ref, const TArray<F
 	}
 }
 
-void FAnimStitchManualEdits::ConvertTracksToAbsolute(const FReferenceSkeleton& Ref, TArray<FAnimStitchTrack>& Tracks, const TArray<TArray<FTransform>>& BlendPoses, double Rate, double TotalLength, const TArray<FName>* PlantFootBones)
+void FAnimStitchManualEdits::ConvertTracksToAbsolute(const FReferenceSkeleton& Ref, TArray<FAnimStitchTrack>& Tracks, const TArray<TArray<FTransform>>& BlendPoses, double Rate, double TotalLength, const TArray<FName>* PlantFootBones, const TArray<int32>* OnlyTracks, bool bEveryFrame)
 {
 	(void)PlantFootBones; // the plant / IK stages run after the bone stage that is captured here, so they are not part of the keys
 	if (BlendPoses.Num() == 0 || Rate <= 0.0) { return; }
@@ -513,6 +612,7 @@ void FAnimStitchManualEdits::ConvertTracksToAbsolute(const FReferenceSkeleton& R
 	for (int32 i = 0; i < Tracks.Num(); ++i)
 	{
 		if (Tracks[i].Kind != EAnimStitchTrackKind::Bone || Tracks[i].Mode != EAnimStitchTrackMode::Additive) { continue; }
+		if (OnlyTracks && !OnlyTracks->Contains(i)) { continue; }
 		const int32 Bone = Ref.FindBoneIndex(Tracks[i].Bone);
 		if (Bone == INDEX_NONE) { continue; }
 		const int32 ParentTrack = ResolveParentTrack(Ref, Tracks, i);
@@ -548,6 +648,17 @@ void FAnimStitchManualEdits::ConvertTracksToAbsolute(const FReferenceSkeleton& R
 	for (FConvert& C : Converts)
 	{
 		FAnimStitchTrack& Track = Tracks[C.Track];
+		if (!bEveryFrame)
+		{
+			// Existing keyframes only: Absolute keys at the frames the track already had keys on (plus the first / last frame so it holds).
+			TSet<int32> Frames;
+			Frames.Add(0);
+			Frames.Add(C.Keys.Num() - 1);
+			for (const FAnimStitchTrackKey& Old : Track.Keys) { Frames.Add(FMath::Clamp(FMath::RoundToInt32(Old.Time * Rate), 0, C.Keys.Num() - 1)); }
+			TArray<FAnimStitchTrackKey> Thinned;
+			for (int32 f = 0; f < C.Keys.Num(); ++f) { if (Frames.Contains(f)) { Thinned.Add(C.Keys[f]); } }
+			C.Keys = MoveTemp(Thinned);
+		}
 		Track.Mode = EAnimStitchTrackMode::Absolute;
 		Track.Keys = MoveTemp(C.Keys);
 	}

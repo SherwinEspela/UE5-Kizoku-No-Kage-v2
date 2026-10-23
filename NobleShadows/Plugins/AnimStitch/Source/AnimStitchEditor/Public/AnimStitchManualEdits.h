@@ -59,6 +59,17 @@ public:
 
 	static bool IsIdentityKey(const FAnimStitchTrackKey& Key);
 
+	/** IK tracks: gives every key that has no target (anchors / half-faded keys saved by older builds) the target of its nearest neighbour that has one. Idempotent; returns true if anything changed. Runs on load and after every IK key edit. */
+	static bool NormalizeIKKeys(FAnimStitchTrack& Track);
+
+	// ---- Per-limb FK/IK switch (hotfix set 6) ----
+	/** The hand / foot bone of the limb a track belongs to: an IK track names it directly, an FK joint track is the effector or sits up to two levels above it. NAME_None if there is none. */
+	static FName FindLimbEffector(const FReferenceSkeleton& RefSkeleton, FName Bone);
+	/** True when the limb of this IK track evaluates in IK mode at a time (always true for a limb that was never switched). */
+	static bool IsLimbIKAt(const FAnimStitchTrack& IKTrack, double Time);
+	/** Index of the IK track of a limb (by effector bone), or INDEX_NONE. */
+	static int32 FindIKTrack(const TArray<FAnimStitchTrack>& Tracks, FName Effector);
+
 	/**
 	 * The control hierarchy, derived live from the skeleton: the parent of Tracks[TrackIndex] is the Bone track on the nearest ancestor bone that has one
 	 * (INDEX_NONE = top level). Because it is derived, it holds for every control whenever it was added, in any order.
@@ -69,11 +80,18 @@ public:
 	static bool IsRigBone(FName Bone);
 
 	/**
+	 * True when a skeleton bone may have a control: a real BONE that passes IsRigBone. Sockets (skeleton or preview-mesh sockets, socket-style names) and virtual bones
+	 * are never controls - not in the internal rig, not in the add-control picker, not in Bake to Control Rig.
+	 */
+	static bool IsControlBone(const class USkeleton* Skeleton, FName Bone);
+
+	/**
 	 * Bake to Control Rig, key conversion: re-expresses every Bone track as an Absolute track with one key per frame, so Apply on the result reproduces the pose
 	 * Apply produced with the original tracks. BlendPoses are the per-frame skeleton-local poses BEFORE manual corrections (indexed by frame at Rate).
 	 * IK, pole and root-offset tracks are left as they are.
+	 * OnlyTracks (optional): convert just these track indices. bEveryFrame false: each converted track keeps Absolute keys only at the frames (and the first / last frame) where it already had a key.
 	 */
-	static void ConvertTracksToAbsolute(const FReferenceSkeleton& RefSkeleton, TArray<FAnimStitchTrack>& Tracks, const TArray<TArray<FTransform>>& BlendPoses, double Rate, double TotalLength, const TArray<FName>* PlantFootBones = nullptr);
+	static void ConvertTracksToAbsolute(const FReferenceSkeleton& RefSkeleton, TArray<FAnimStitchTrack>& Tracks, const TArray<TArray<FTransform>>& BlendPoses, double Rate, double TotalLength, const TArray<FName>* PlantFootBones = nullptr, const TArray<int32>* OnlyTracks = nullptr, bool bEveryFrame = true);
 
 	/** -1 = left, +1 = right, 0 = centre / unknown, guessed from the bone name. */
 	static int32 GetBoneSide(FName Bone);

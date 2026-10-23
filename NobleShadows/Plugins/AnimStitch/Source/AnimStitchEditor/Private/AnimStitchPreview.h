@@ -349,6 +349,13 @@ private:
 	mutable uint32 TrailSignature = 0;
 	bool IsHeavyTrail() const;
 	bool StartTrailDrag(int32 TrailKey, const FVector& StartHit, const FVector2D& Pixel);
+	/** A drag never snaps back silently: the parts of it that fall on a locked channel are dropped from the drag (the control stays under the cursor only for what can move) and the user is told once per drag. */
+	void ClampDragToUnlocked(FVector& Translation, FQuat& Rotation, FVector& Scale);
+	bool bDragBlockedShown = false;
+public:
+	/** The last "this part of the drag was not applied" message (also shown as a notification); empty when nothing was blocked. */
+	FText LastDragBlockedText;
+private:
 	mutable bool bTrailDirty = true;
 	mutable TArray<FTrailSegment> TrailSegments;
 	mutable TArray<FTrailKey> TrailKeys;
@@ -401,6 +408,8 @@ public:
 
 	/** Frames the camera on the preview mesh. */
 	void FocusOnMesh();
+	/** F: frame the selection in the viewport (the character when nothing is selected), whichever panel has keyboard focus. */
+	void FrameSelection() { OnFocusViewportToSelection(); }
 	void SetViewMode(EAnimStitchViewMode Mode) { if (Client.IsValid()) { Client->SetCameraView(Mode); } }
 	EAnimStitchViewMode GetViewMode() const { return Client.IsValid() ? Client->GetCameraView() : EAnimStitchViewMode::Perspective; }
 	/** Lit / Unlit / Wireframe (the engine view mode index). */

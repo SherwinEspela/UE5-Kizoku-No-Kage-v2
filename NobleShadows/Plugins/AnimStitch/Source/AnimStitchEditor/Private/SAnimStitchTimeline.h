@@ -88,6 +88,8 @@ public:
 
 	// ---- Adding bone tracks (shared by the lane right-click menu and the main toolbar) ----
 	void BuildCoreBoneMenu(class FMenuBuilder& Menu);
+	/** Per-limb FK/IK switch at the playhead (one undo step). The limb is named by its hand / foot bone. */
+	void SwitchLimbAtPlayhead(FName Effector, bool bToIK);
 	/** Bake to Control Rig: reveals every control and converts every key to Absolute, as one undo step. A deliberate command, never run implicitly. */
 	void BakeToControlRig();
 	void BuildLimbMenu(class FMenuBuilder& Menu);
@@ -114,7 +116,22 @@ public:
 
 	// ---- Vertical scrolling of the correction lanes ----
 	float GetTrackAreaTop() const { return GetTracksTop(); }
-	float GetTrackContentHeight() const { return Asset ? Asset->Timeline.Tracks.Num() * (TrackLaneHeight + 2.f) + ExpandedCount() * ExpanderHeight + 8.f : 0.f; }
+	float GetTrackContentHeight() const { return Asset ? NumVisibleTracks() * (TrackLaneHeight + 2.f) + ExpandedCount() * ExpanderHeight + 8.f : 0.f; }
+
+	// ---- Track search (Sequencer style) ----
+	/** Live filter of the track list: only tracks whose displayed name (or lane names) contain the text are shown. Empty = every track. */
+	void SetTrackFilter(const FString& Filter) { TrackFilter = Filter; VScroll = 0.f; }
+	const FString& GetTrackFilter() const { return TrackFilter; }
+	bool IsTrackVisible(int32 Track) const;
+	bool MatchesTrackFilter(int32 Track) const;
+	int32 NumVisibleTracks() const { int32 N = 0; if (Asset) { for (int32 i = 0; i < Asset->Timeline.Tracks.Num(); ++i) { N += IsTrackVisible(i) ? 1 : 0; } } return N; }
+	int32 VisibleTracksBefore(int32 Track) const { int32 N = 0; if (Asset) { for (int32 i = 0; i < Track && i < Asset->Timeline.Tracks.Num(); ++i) { N += IsTrackVisible(i) ? 1 : 0; } } return N; }
+	/** The title shown in the track column (also what the search matches). */
+	static FString GetTrackLabel(const FAnimStitchTrack& Track);
+	/** Height of the band above the first lane that holds the search field. */
+	static constexpr float SearchBarHeight = 26.f;
+	/** Pressing Esc in the timeline clears an active search (the panel empties its search box). */
+	FSimpleDelegate OnTrackFilterCleared;
 	float GetTrackViewHeight() const { return FMath::Max(0.f, GetCachedGeometry().GetLocalSize().Y - GetTracksTop()); }
 	float GetTrackScrollMax() const { return FMath::Max(0.f, GetTrackContentHeight() - GetTrackViewHeight()); }
 	float GetTrackScroll() const { return VScroll; }
@@ -133,8 +150,8 @@ public:
 	bool JumpToAdjacentKey(int32 Direction);
 	// Every track expands on its own; expanding one never collapses another.
 	bool IsTrackExpanded(int32 Track) const { return Asset && Asset->Timeline.Tracks.IsValidIndex(Track) && ExpandedTracks.Contains(TrackKey(Asset->Timeline.Tracks[Track])); }
-	int32 ExpandedCount() const { int32 N = 0; if (Asset) { for (int32 i = 0; i < Asset->Timeline.Tracks.Num(); ++i) { N += IsTrackExpanded(i) ? 1 : 0; } } return N; }
-	int32 ExpandedAbove(int32 Track) const { int32 N = 0; if (Asset) { for (int32 i = 0; i < Track && i < Asset->Timeline.Tracks.Num(); ++i) { N += IsTrackExpanded(i) ? 1 : 0; } } return N; }
+	int32 ExpandedCount() const { int32 N = 0; if (Asset) { for (int32 i = 0; i < Asset->Timeline.Tracks.Num(); ++i) { N += (IsTrackExpanded(i) && IsTrackVisible(i)) ? 1 : 0; } } return N; }
+	int32 ExpandedAbove(int32 Track) const { int32 N = 0; if (Asset) { for (int32 i = 0; i < Track && i < Asset->Timeline.Tracks.Num(); ++i) { N += (IsTrackExpanded(i) && IsTrackVisible(i)) ? 1 : 0; } } return N; }
 	void ToggleTrackExpanded(int32 Track);
 	void ExpandAllTracks();
 	void CollapseAllTracks();
@@ -145,6 +162,8 @@ public:
 	bool HasSelectedTrack() const { return Asset && Asset->Timeline.Tracks.IsValidIndex(SelectedTrack); }
 	/** Enter / A: keys the evaluated value of every selected track at the playhead (undoable). Returns false when nothing is selected. */
 	bool AddKeyAtPlayhead();
+	/** F while the timeline has focus is not a timeline command: it frames the selection in the VIEWPORT (bound by the panel). */
+	FSimpleDelegate OnFrameViewport;
 	/** Live value of a track's control (IK targets, pole) for keys written when the limb is not keyed yet; set by the panel. */
 	TFunction<bool(int32 TrackIndex, FAnimStitchTrackKey& OutKey)> LiveKeyProvider;
 	static FString TrackKey(const FAnimStitchTrack& Track) { return FString::Printf(TEXT("%d:%s"), (int32)Track.Kind, *Track.Bone.ToString()); }
@@ -208,8 +227,14 @@ enum class EDrag : uint8 { None, Scrub, Move, TrimLeft, TrimRight, RateLeft, Rat
 
 	// ---- Manual bone correction lanes (Phase 9) ----
 	static constexpr float TrackLaneHeight = 30.f;
-	float GetTracksTop() const { return GetTrackTop() + TrackHeight + 10.f; }
-	float GetTrackLaneTop(int32 Track) const { return GetTracksTop() + Track * (TrackLaneHeight + 2.f) + ExpandedAbove(Track) * ExpanderHeight - VScroll; }
+	float GetTracksTop() const { return GetTrackTop() + TrackHeight + 10.f + SearchBarHeight; }
+	/** A track the search hides sits far off screen, so painting and hit testing (which compare against the lane top) never see it. */
+	float GetTrackLaneTop(int32 Track) const { return IsTrackVisible(Track) ? GetTracksTop() + VisibleTracksBefore(Track) * (TrackLaneHeight + 2.f) + ExpandedAbove(Track) * ExpanderHeight - VScroll : -100000.f; }
+	FString TrackFilter;
+	/** Per-track visibility under the current search, rebuilt only when the filter or the tracks change (the lane layout asks for it many times a paint). */
+	mutable TArray<uint8> VisibleCache;
+	mutable FString VisibleCacheFilter;
+	mutable uint32 VisibleCacheStamp = MAX_uint32;
 	TSet<FString> ExpandedTracks;
 	float LabelWidth = 290.f;
 	uint32 TrackSelectionSerial = 0;

@@ -5,9 +5,12 @@
 #include "AnimStitchBlueprintLibrary.h"
 #include "AnimStitchFootLock.h"
 #include "AnimStitchManualEdits.h"
+#include "AnimStitchSettings.h"
 #include "AnimStitchPreview.h"
 #include "AnimStitchPoseComponent.h"
 #include "Engine/SkeletalMesh.h"
+#include "Engine/SkeletalMeshSocket.h"
+#include "Animation/Skeleton.h"
 #include "Algo/MaxElement.h"
 #include "Misc/PackageName.h"
 #include "UObject/Package.h"
@@ -421,12 +424,12 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 		// Engaging: first key IK off, next on. The weight rises over the whole span toward the active key's target.
 		IK.Keys = { MakeKey(1.0, 0.f, FVector(5, 5, 5), FVector::ZeroVector, 0.0), MakeKey(3.0, 1.f, FVector(100, 0, 0), FVector::ZeroVector, 0.0) };
 		const FAnimStitchTrackKey On = FAnimStitchManualEdits::Sample(IK, 2.0);
-		Check(FMath::IsNearlyEqual(On.Weight, 0.5f, 1e-4f) && On.Translation.Equals(FVector(100, 0, 0), 1e-3), TEXT("engaging: weight 0.5 at the midpoint, aiming at the active key's target"));
+		Check(FMath::IsNearlyEqual(On.Weight, 0.5f, 1e-4f) && On.Translation.Equals(FVector(52.5, 2.5, 2.5), 1e-3), TEXT("engaging: weight 0.5 AND the target half way between the two keys' targets at the midpoint (S6-1: both interpolate over the full span)"));
 		Check(FMath::IsNearlyEqual(FAnimStitchManualEdits::Sample(IK, 1.0).Weight, 0.f, 1e-5f) && FMath::IsNearlyEqual(FAnimStitchManualEdits::Sample(IK, 3.0).Weight, 1.f, 1e-5f), TEXT("weight arrives exactly at the keys"));
 		// Releasing: first key on, next off. Keeps the active target while the weight fades.
 		IK.Keys = { MakeKey(1.0, 1.f, FVector(100, 0, 0), FVector::ZeroVector, 0.0), MakeKey(3.0, 0.f, FVector(7, 7, 7), FVector::ZeroVector, 0.0) };
 		const FAnimStitchTrackKey Off = FAnimStitchManualEdits::Sample(IK, 2.0);
-		Check(FMath::IsNearlyEqual(Off.Weight, 0.5f, 1e-4f) && Off.Translation.Equals(FVector(100, 0, 0), 1e-3), TEXT("releasing: weight 0.5 at the midpoint, still aiming at the active key's target"));
+		Check(FMath::IsNearlyEqual(Off.Weight, 0.5f, 1e-4f) && Off.Translation.Equals(FVector(53.5, 3.5, 3.5), 1e-3), TEXT("releasing: weight 0.5 AND the target half way between the two keys' targets at the midpoint (S6-1: both interpolate over the full span)"));
 		// Edges unchanged: hold after the last key, ease in just before the first.
 		IK.Keys = { MakeKey(1.0, 1.f, FVector(10, 0, 0), FVector::ZeroVector, 0.0), MakeKey(3.0, 1.f, FVector(100, 0, 0), FVector::ZeroVector, 0.0) };
 		const FAnimStitchTrackKey After = FAnimStitchManualEdits::Sample(IK, 9.0);
@@ -434,6 +437,324 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 		Check(FMath::IsNearlyEqual(FAnimStitchManualEdits::Sample(IK, 0.5).Weight, 0.f) && FMath::IsNearlyEqual(FAnimStitchManualEdits::Sample(IK, 0.95).Weight, 0.5f, 1e-3f), TEXT("before the first key: unchanged 0.1 s ease-in"));
 		UE_LOG(LogAnimStitchSpike, Display, TEXT("S6 RESULT: %d failures"), Fails);
 		return Fails;
+	}
+	// Hotfix Set 6 test: -H6Test. S6-2 drags never snap back silently, S6-3 sockets are not controls, S6-5 translation unlocked by default, S6-6 bake options, S6-7 FK/IK switch.
+	if (FParse::Param(*Params, TEXT("H6Test")))
+	{
+		int32 Fails = 0;
+		auto Check = [&Fails](bool b, const TCHAR* What) { UE_LOG(LogAnimStitchSpike, Display, TEXT("H6 %s: %s"), b ? TEXT("PASS") : TEXT("FAIL"), What); if (!b) { ++Fails; } };
+		auto NewAsset = [&](UAnimStitchTimelineAsset*& Out) -> bool
+		{
+			Out = NewObject<UAnimStitchTimelineAsset>(GetTransientPackage());
+			TArray<FText> W;
+			Out->AddSequences({ const_cast<UAnimSequence*>(B), const_cast<UAnimSequence*>(B) }, INDEX_NONE, W);
+			return Out->Timeline.Clips.Num() == 2;
+		};
+		auto FinalPose = [](UAnimStitchTimelineAsset* T, double Time, TArray<FTransform>& Pose)
+		{
+			FAnimStitchEvaluator E; FString Err;
+			if (!E.Initialize(T->Timeline, Err)) { return false; }
+			E.EvaluatePose(Time, Pose);
+			FAnimStitchManualEdits::Apply(E.GetSkeleton()->GetReferenceSkeleton(), T->Timeline.Tracks, Time, Pose);
+			return true;
+		};
+		auto OnFrame = [](double Time) { return FMath::RoundToDouble(Time * 30.0) / 30.0; };
+		UAnimStitchTimelineAsset* TL = nullptr;
+		if (!NewAsset(TL)) { return 111; }
+		FAnimStitchEvaluator Eval; FString Err;
+		if (!Eval.Initialize(TL->Timeline, Err)) { UE_LOG(LogAnimStitchSpike, Error, TEXT("H6: evaluator failed")); return 112; }
+		USkeleton* Skeleton = Eval.GetSkeleton();
+		const FReferenceSkeleton& Ref = Skeleton->GetReferenceSkeleton();
+		const double Total = TL->Timeline.GetTotalLength();
+		auto CS = [&Ref](const TArray<FTransform>& Pose, FName Bone) { return FAnimStitchFootLock::GetComponentSpace(Ref, Pose, Ref.FindBoneIndex(Bone)); };
+
+		// ---- S6-5: translation unlocked by default ----
+		{
+			FAnimStitchTrack Pelvis; Pelvis.Kind = EAnimStitchTrackKind::Bone; Pelvis.Bone = TEXT("pelvis"); Pelvis.Mode = EAnimStitchTrackMode::Additive;
+			const int32 PT = TL->AddTrack(Pelvis);
+			Check(TL->Timeline.Tracks[PT].UnlockedChannels == (AnimStitchChannel::Translation | AnimStitchChannel::Rotation), TEXT("S6-5: a new bone track starts with Translation + Rotation unlocked, Scale locked"));
+			FAnimStitchTrack Old; Old.UnlockedChannels = AnimStitchChannel::Rotation;
+			Check(Old.UnlockedChannels == AnimStitchChannel::Rotation, TEXT("S6-5: the stored default is untouched, so lock states saved in existing projects load as saved"));
+			TL->RemoveTrack(PT);
+		}
+
+		// ---- S6-2: a drag on a locked channel gives feedback and never moves the control away from the joint ----
+		{
+			USkeletalMesh* PreviewMesh = Skeleton->GetPreviewMesh(true);
+			if (!PreviewMesh) { UE_LOG(LogAnimStitchSpike, Error, TEXT("H6: no preview mesh")); return 113; }
+			FAnimStitchTrack Pelvis; Pelvis.Kind = EAnimStitchTrackKind::Bone; Pelvis.Bone = TEXT("pelvis"); Pelvis.Mode = EAnimStitchTrackMode::Additive; Pelvis.bKeepFeetPlanted = false;
+			const int32 PT = TL->AddTrack(Pelvis);
+			TSharedRef<FAnimStitchPreview> Preview = MakeShared<FAnimStitchPreview>();
+			Preview->SetMesh(PreviewMesh); Preview->SetAsset(TL); Preview->SetTimeline(TL->Timeline);
+			Preview->SetManualTracks(TL->Timeline.Tracks);
+			const double Here = OnFrame(Total * 0.4);
+			Preview->SetPlayhead(Here);
+			const FAnimStitchControlId Id = { EAnimStitchControlKind::Bone, PT, INDEX_NONE };
+			auto PelvisZ = [&]() { TArray<FTransform> P; FinalPose(TL, Here, P); return CS(P, TEXT("pelvis")).GetTranslation().Z; };
+			// Locked translation (a track saved by an older build): nothing is written, the user is told, the control does not run off.
+			TL->SetTrackChannelUnlocked(PT, AnimStitchChannel::Translation, false);
+			Preview->SetManualTracks(TL->Timeline.Tracks);
+			const double Z0 = PelvisZ();
+			const int32 KeysBefore = TL->Timeline.Tracks[PT].Keys.Num();
+			Preview->LastDragBlockedText = FText::GetEmpty();
+			const bool bDragged = Preview->DebugDragControl(Id, FVector(0, 0, 25));
+			TArray<FAnimStitchControl> Controls; Preview->BuildControls(Controls);
+			const FAnimStitchControl* C = Controls.FindByPredicate([&Id](const FAnimStitchControl& K) { return K.Id == Id; });
+			TArray<FTransform> Pose; FinalPose(TL, Here, Pose);
+			const double ControlOffJoint = C ? (C->Position - CS(Pose, TEXT("pelvis")).GetTranslation()).Size() : 9999.0;
+			Preview->EndGizmoDrag();
+			Check(bDragged && !Preview->LastDragBlockedText.IsEmpty(), TEXT("S6-2: a drag on a locked channel tells the user which channel is locked"));
+			Check(FMath::Abs(PelvisZ() - Z0) < 1e-3 && TL->Timeline.Tracks[PT].Keys.Num() == KeysBefore, TEXT("S6-2: ...writes nothing"));
+			Check(ControlOffJoint < 1.0, *FString::Printf(TEXT("S6-2: ...and the control stays on the joint instead of snapping back later (%.3f cm apart)"), ControlOffJoint));
+			// Unlocked: the joint follows and holds the value.
+			TL->SetTrackChannelUnlocked(PT, AnimStitchChannel::Translation, true);
+			Preview->SetManualTracks(TL->Timeline.Tracks);
+			Preview->LastDragBlockedText = FText::GetEmpty();
+			Preview->DebugDragControl(Id, FVector(0, 0, 25));
+			Preview->EndGizmoDrag();
+			Check(FMath::Abs((PelvisZ() - Z0) - 25.0) < 0.5 && Preview->LastDragBlockedText.IsEmpty(), *FString::Printf(TEXT("S6-2: with the lane unlocked the pelvis follows the drag and holds it (moved %.2f cm)"), PelvisZ() - Z0));
+			TL->RemoveTrack(PT);
+		}
+
+		// ---- S6-3: sockets and virtual bones are never controls ----
+		{
+			const FName Pelvis = TEXT("pelvis");
+			Check(FAnimStitchManualEdits::IsControlBone(Skeleton, Pelvis), TEXT("S6-3: a real bone is a control"));
+			USkeletalMeshSocket* Socket = NewObject<USkeletalMeshSocket>(Skeleton);
+			Socket->SocketName = Pelvis; Socket->BoneName = Pelvis;
+			Skeleton->Sockets.Add(Socket);
+			const bool bSocketRefused = !FAnimStitchManualEdits::IsControlBone(Skeleton, Pelvis);
+			bool bInRig = TL->GetRigNodes().Contains(Pelvis);
+			Skeleton->Sockets.Remove(Socket);
+			Check(bSocketRefused && !bInRig, TEXT("S6-3: a socket name is refused by the picker check and left out of the internal rig"));
+			Check(!FAnimStitchManualEdits::IsControlBone(Skeleton, TEXT("VB spine_01_hand_l")) && !FAnimStitchManualEdits::IsControlBone(Skeleton, TEXT("hand_r_socket")) && !FAnimStitchManualEdits::IsControlBone(Skeleton, TEXT("weapon_attach")), TEXT("S6-3: virtual bones and socket-style names are refused"));
+			bool bClean = true;
+			for (const FName& Node : TL->GetRigNodes()) { const FString L = Node.ToString().ToLower(); bClean &= !L.StartsWith(TEXT("vb ")) && !L.Contains(TEXT("socket")); }
+			for (const FVirtualBone& VB : Skeleton->GetVirtualBones()) { bClean &= !TL->GetRigNodes().Contains(VB.VirtualBoneName); }
+			Check(bClean, TEXT("S6-3: no rig node is a socket or virtual bone"));
+		}
+
+		// ---- S6-6: Bake to Control Rig options ----
+		{
+			auto Build = [&](UAnimStitchTimelineAsset*& R)
+			{
+				NewAsset(R);
+				FAnimStitchTrack Pelvis; Pelvis.Kind = EAnimStitchTrackKind::Bone; Pelvis.Bone = TEXT("pelvis"); Pelvis.Mode = EAnimStitchTrackMode::Absolute; Pelvis.bKeepFeetPlanted = false;
+				R->AddTrack(Pelvis);
+				FAnimStitchTrack Spine; Spine.Kind = EAnimStitchTrackKind::Bone; Spine.Bone = TEXT("spine_01"); Spine.Mode = EAnimStitchTrackMode::Additive;
+				const int32 ST = R->AddTrack(Spine);
+				for (const double Time : { OnFrame(Total * 0.3), OnFrame(Total * 0.6) })
+				{
+					FAnimStitchTrackKey K; K.Time = Time; K.Rotation = FQuat(FVector::UpVector, FMath::DegreesToRadians(20.0)); K.Channels = AnimStitchChannel::All; K.Translation = FVector(0, 2, 0);
+					R->SetTrackChannelKey(ST, K, AnimStitchChannel::All);
+				}
+				FAnimStitchTrack Thigh; Thigh.Kind = EAnimStitchTrackKind::Bone; Thigh.Bone = TEXT("thigh_l"); Thigh.Mode = EAnimStitchTrackMode::Additive; Thigh.bRotationOnly = true;
+				R->AddTrack(Thigh); // identity anchors only: carries no keys
+			};
+			TArray<double> Times; for (int32 fr = 0; fr * 7 < int32(Total * 30.0); ++fr) { Times.Add(fr * 7 / 30.0); } // whole frames, key frames and in-between ones
+			auto Probe = [&](UAnimStitchTimelineAsset* R, TArray<TArray<FVector>>& Out)
+			{
+				Out.Reset();
+				for (const double Time : Times) { TArray<FTransform> P; FinalPose(R, Time, P); Out.Add({ CS(P, TEXT("spine_01")).GetTranslation(), CS(P, TEXT("hand_r")).GetTranslation(), CS(P, TEXT("foot_l")).GetTranslation(), CS(P, TEXT("head")).GetTranslation() }); }
+			};
+			auto Worst = [](const TArray<TArray<FVector>>& A, const TArray<TArray<FVector>>& B2) { double W = 0; for (int32 i = 0; i < A.Num(); ++i) { for (int32 k = 0; k < A[i].Num(); ++k) { W = FMath::Max(W, (A[i][k] - B2[i][k]).Size()); } } return W; };
+			// keys only + existing keyframes only: the animation must come out unchanged at EVERY frame
+			{
+				UAnimStitchTimelineAsset* R = nullptr; Build(R);
+				TArray<TArray<FVector>> Before; Probe(R, Before);
+				const int32 TracksBefore = R->Timeline.Tracks.Num();
+				UAnimStitchTimelineAsset::FRigBakeOptions O; O.bEveryFrame = false; O.bAllControls = false;
+				R->BakeToControlRig(O);
+				const int32 SI = R->Timeline.Tracks.IndexOfByPredicate([](const FAnimStitchTrack& T) { return T.Bone == TEXT("spine_01"); });
+				const int32 AllNodes = R->GetRigNodes().Num();
+				Check(R->Timeline.Tracks.Num() > TracksBefore && R->Timeline.Tracks.Num() <= AllNodes + 1, *FString::Printf(TEXT("S6-6: controls with keys only reveal the bones the animation moves (%d -> %d of %d nodes); static ones stay hidden"), TracksBefore, R->Timeline.Tracks.Num(), AllNodes));
+				Check(R->Timeline.Tracks[SI].Mode == EAnimStitchTrackMode::Absolute, TEXT("S6-6: the keyed control became Absolute"));
+				TArray<TArray<FVector>> After; Probe(R, After);
+				const double W = Worst(Before, After);
+				Check(W < 0.05, *FString::Printf(TEXT("S6-6: sparse + keys-only leaves the animation unchanged on every frame (worst %.5f cm)"), W));
+			}
+			// all controls + existing keyframes only
+			{
+				UAnimStitchTimelineAsset* R = nullptr; Build(R);
+				TArray<TArray<FVector>> Before; Probe(R, Before);
+				UAnimStitchTimelineAsset::FRigBakeOptions O; O.bEveryFrame = false; O.bAllControls = true;
+				const int32 Changed = R->BakeToControlRig(O);
+				int32 Fewest = MAX_int32; for (const FAnimStitchTrack& T : R->Timeline.Tracks) { Fewest = FMath::Min(Fewest, T.Keys.Num()); }
+				TArray<TArray<FVector>> After; Probe(R, After);
+				const double W = Worst(Before, After);
+				Check(Changed > 20 && W < 0.05, *FString::Printf(TEXT("S6-6: all controls (%d) with existing keyframes only keep the animation on every frame (worst %.5f cm; fewest keys on a control: %d)"), Changed, W, Fewest));
+			}
+		}
+		// ---- S6-7: per-limb FK/IK switch ----
+		{
+			UAnimStitchTimelineAsset* R = nullptr; NewAsset(R);
+			const FName Foot = TEXT("foot_l");
+			const double T1 = OnFrame(Total * 0.35), T2 = OnFrame(Total * 0.6);
+			auto PosAt = [&](UAnimStitchTimelineAsset* Asset, double Time, FName Bone) { TArray<FTransform> P; FinalPose(Asset, Time, P); return CS(P, Bone).GetTranslation(); };
+			TArray<double> Probe = { OnFrame(T1 - 0.2), T1, OnFrame(T1 + 0.1), T1 + 1.0 / 30.0, T2, OnFrame(T2 + 1.0 / 30.0), OnFrame(T2 + 0.2) };
+			TArray<FVector> Original; for (const double Time : Probe) { Original.Add(PosAt(R, Time, Foot)); }
+			Check(R->SwitchLimbMode(Foot, true, T1), TEXT("S6-7: FK -> IK switch at the playhead"));
+			const int32 IKI = FAnimStitchManualEdits::FindIKTrack(R->Timeline.Tracks, Foot);
+			Check(IKI != INDEX_NONE && !FAnimStitchManualEdits::IsLimbIKAt(R->Timeline.Tracks[IKI], T1 - 0.2) && FAnimStitchManualEdits::IsLimbIKAt(R->Timeline.Tracks[IKI], T1 + 0.2), TEXT("S6-7: FK before the switch frame, IK from it"));
+			Check((PosAt(R, Probe[0], Foot) - Original[0]).Size() < 0.05, TEXT("S6-7: before the switch frame the limb is exactly as it was"));
+			Check((PosAt(R, Probe[1], Foot) - Original[1]).Size() < 0.05, *FString::Printf(TEXT("S6-7: pose-matched at the switch frame, no pop (%.4f cm)"), (PosAt(R, Probe[1], Foot) - Original[1]).Size()));
+			const double HeldDrift = (PosAt(R, Probe[3], Foot) - PosAt(R, Probe[1], Foot)).Size();
+			Check(HeldDrift < 1.0, *FString::Printf(TEXT("S6-7: the IK target holds where the limb was (%.4f cm drift in the next frame while the animation moves %.1f cm)"), HeldDrift, (Original[3] - Original[1]).Size()));
+			// back to FK
+			Check(R->SwitchLimbMode(Foot, false, T2), TEXT("S6-7: IK -> FK switch at the playhead"));
+			Check(FAnimStitchManualEdits::IsLimbIKAt(R->Timeline.Tracks[IKI], T2 - 0.05) && !FAnimStitchManualEdits::IsLimbIKAt(R->Timeline.Tracks[IKI], T2 + 0.05), TEXT("S6-7: IK before the second switch, FK from it"));
+			const FVector IKHold = PosAt(R, Probe[2], Foot);
+			const FVector AtSwitch = PosAt(R, Probe[4], Foot);
+			const FVector Step = PosAt(R, Probe[5], Foot) - AtSwitch;
+			const FVector AnimStep = Original[5] - Original[4];
+			const FVector JustBefore = PosAt(R, T2 - 0.001, Foot);
+			Check((AtSwitch - JustBefore).Size() < 0.5, *FString::Printf(TEXT("S6-7: pose-matched going into FK, no pop (%.4f cm between the last IK sample and the first FK one)"), (AtSwitch - JustBefore).Size()));
+			const FVector PelvisStep = PosAt(R, Probe[5], TEXT("pelvis")) - PosAt(R, Probe[4], TEXT("pelvis"));
+			Check(Step.Size() < PelvisStep.Size() * 2.5 + 1.0, *FString::Printf(TEXT("S6-7: after the switch the FK foot travels with the body, as FK does (%.2f cm off the pelvis's own %.2f cm step in the first frame; the animation foot itself moves %.2f cm)"), (Step - PelvisStep).Size(), PelvisStep.Size(), AnimStep.Size()));
+			Check((PosAt(R, Probe[2], Foot) - IKHold).Size() < 1e-6 && (PosAt(R, Probe[2], Foot) - Original[2]).Size() < 40.0, TEXT("S6-7: the IK region is unchanged by the later switch"));
+		}
+
+		// ---- S6-1: IK interpolation, built the way the editor builds it (start / end anchors, pole lane, keys added one at a time) ----
+		{
+			UAnimStitchTimelineAsset* R = nullptr; NewAsset(R);
+			const FName Hand = TEXT("hand_r");
+			FAnimStitchTrack IK; IK.Kind = EAnimStitchTrackKind::IKLimb; IK.Bone = Hand; IK.bShowTrail = true;
+			const int32 IT = R->AddTrack(IK);
+			FAnimStitchTrack PoleT; PoleT.Kind = EAnimStitchTrackKind::IKPole; PoleT.Bone = Hand;
+			const int32 PT = R->AddTrack(PoleT);
+			const double K1 = OnFrame(Total * 0.30), K2 = OnFrame(Total * 0.55), K3 = OnFrame(Total * 0.80);
+			const FVector Ta(30, 40, 120), Tb(20, 120, 150), Tc(10, 200, 100);
+			const FVector PA(60, 40, 120), PB(60, 120, 150), PC(60, 200, 100);
+			int32 n = 0;
+			for (const TTuple<double, FVector, FVector>& Entry : { MakeTuple(K1, Ta, PA), MakeTuple(K2, Tb, PB), MakeTuple(K3, Tc, PC) })
+			{
+				FAnimStitchTrackKey K; K.Time = Entry.Get<0>(); K.Translation = Entry.Get<1>(); K.Pole = Entry.Get<2>(); K.Weight = 1.f; K.Rotation = FQuat(FVector::UpVector, FMath::DegreesToRadians(15.0 * (++n)));
+				R->SetTrackKey(IT, K);
+				FAnimStitchTrackKey PK; PK.Time = K.Time; PK.Translation = Entry.Get<2>();
+				R->SetTrackKey(PT, PK);
+			}
+			const FAnimStitchTrack& Track = R->Timeline.Tracks[IT];
+			bool bAllTargets = true; for (const FAnimStitchTrackKey& K : Track.Keys) { bAllTargets &= !K.Translation.IsNearlyZero(1e-3); }
+			Check(bAllTargets, TEXT("S6-1: every key of an editor-built track carries a full target (no key is left without one to borrow)"));
+			// two-key span K1 -> K2 at 0 / 25 / 50 / 75 / 100 %
+			bool bMonotonic = true, bInStep = true; double Prev = -1.0, WorstProgress = 0.0;
+			for (const double P : { 0.0, 0.25, 0.5, 0.75, 1.0 })
+			{
+				const FAnimStitchTrackKey S = FAnimStitchManualEdits::Sample(Track, FMath::Lerp(K1, K2, P));
+				const double Progress = FVector::DotProduct(S.Translation - Ta, Tb - Ta) / (Tb - Ta).SizeSquared();
+				bMonotonic &= Progress > Prev - 1e-9; Prev = Progress;
+				WorstProgress = FMath::Max(WorstProgress, FMath::Abs(Progress - P));
+				bInStep &= FMath::Abs(S.Weight - 1.f) < 1e-3f && (S.Translation - FMath::Lerp(Ta, Tb, P)).Size() < 0.01;
+			}
+			Check(bMonotonic && WorstProgress < 0.01 && bInStep, *FString::Printf(TEXT("S6-1: a two-key span progresses 0/25/50/75/100 %% in lock-step with the weight, reaching the next key only at 100 %% (worst %.4f)"), WorstProgress));
+			// the lead-in / lead-out are short ramps, not a fade across the whole timeline
+			const double Ramp = GetDefault<UAnimStitchSettings>()->IKBlendTime;
+			Check(FAnimStitchManualEdits::Sample(Track, K1 - Ramp * 2.0).Weight < 1e-3f && FAnimStitchManualEdits::Sample(Track, K1 - Ramp * 0.5).Weight > 0.2f && FAnimStitchManualEdits::Sample(Track, K3 + Ramp * 2.0).Weight > 0.999f, TEXT("S6-1: the IK engages over the short IK blend time (not the whole stretch from the timeline start) and then holds until it is released"));
+
+			// stale data from older builds: half-faded keys and IK-off anchors with no target
+			FAnimStitchTrack Old; Old.Kind = EAnimStitchTrackKind::IKLimb; Old.Bone = Hand;
+			auto Add = [&Old](double Time, float W, const FVector& T) { FAnimStitchTrackKey K; K.Time = Time; K.Weight = W; K.Translation = T; Old.Keys.Add(K); };
+			Add(0.0, 0.f, FVector::ZeroVector); Add(1.0, 0.4f, FVector::ZeroVector); Add(2.0, 1.f, FVector(100, 200, 50)); Add(3.0, 1.f, FVector(120, 260, 70)); Add(3.5, 0.f, FVector::ZeroVector);
+			const FAnimStitchTrackKey Mid = FAnimStitchManualEdits::Sample(Old, 1.5);
+			Check(Mid.Translation.Size() < 1000.0 && FVector::Dist(Mid.Translation, FVector(100, 200, 50)) < 80.0, *FString::Printf(TEXT("S6-1: stale un-normalised data still evaluates toward its neighbour, not the world origin (%s)"), *Mid.Translation.ToCompactString()));
+			const bool bChanged = FAnimStitchManualEdits::NormalizeIKKeys(Old);
+			bool bFilled = true; for (const FAnimStitchTrackKey& K : Old.Keys) { bFilled &= !K.Translation.IsNearlyZero(1e-3); }
+			Check(bChanged && bFilled && !FAnimStitchManualEdits::NormalizeIKKeys(Old), TEXT("S6-1: normalising fills every target-less key from its nearest neighbour, and is idempotent"));
+			bool bSpansSynced = true;
+			for (int32 k = 0; k + 1 < Old.Keys.Num(); ++k)
+			{
+				for (const double P : { 0.25, 0.5, 0.75 })
+				{
+					const FAnimStitchTrackKey S = FAnimStitchManualEdits::Sample(Old, FMath::Lerp(Old.Keys[k].Time, Old.Keys[k + 1].Time, P));
+					bSpansSynced &= (S.Translation - FMath::Lerp(Old.Keys[k].Translation, Old.Keys[k + 1].Translation, P)).Size() < 1e-3 && FMath::Abs(S.Weight - FMath::Lerp(Old.Keys[k].Weight, Old.Keys[k + 1].Weight, (float)P)) < 1e-3f;
+				}
+			}
+			Check(bSpansSynced, TEXT("S6-1: after normalising, every span interpolates target and weight with the same progress"));
+
+			// one continuous trail through every key
+			USkeletalMesh* PreviewMesh = Skeleton->GetPreviewMesh(true);
+			TSharedRef<FAnimStitchPreview> Preview = MakeShared<FAnimStitchPreview>();
+			Preview->SetMesh(PreviewMesh); Preview->SetAsset(R); Preview->SetTimeline(R->Timeline); Preview->SetManualTracks(R->Timeline.Tracks);
+			TArray<TArray<FVector>> Segments; TArray<FVector> Points;
+			Preview->GetTrailGeometry({ EAnimStitchControlKind::IKEffector, IT, INDEX_NONE }, Segments, Points);
+			Check(Segments.Num() == 1 && Points.Num() == R->Timeline.Tracks[IT].Keys.Num(), *FString::Printf(TEXT("S6-1: the IK trail is ONE continuous path (%d) with a point on every key (%d of %d)"), Segments.Num(), Points.Num(), R->Timeline.Tracks[IT].Keys.Num()));
+
+			// baked frames match the preview
+			const FString BakePath = TEXT("/Game/_AnimStitchSpike/AS_H6IK");
+			FString BakeErr;
+			UAnimSequence* Baked = UAnimStitchBlueprintLibrary::BakeTimeline(R, BakePath, 30, true, BakeErr);
+			double WorstBake = 0.0;
+			if (Baked)
+			{
+				const IAnimationDataModel* Model = Baked->GetDataModel();
+				TArray<FName> Names; Model->GetBoneTrackNames(Names);
+				const int32 Frames = Model->GetNumberOfFrames();
+				for (int32 fr = 0; fr <= Frames; fr += 3)
+				{
+					TArray<FTransform> BakedPose = Ref.GetRefBonePose();
+					for (const FName& N : Names) { const int32 b = Ref.FindBoneIndex(N); if (b != INDEX_NONE) { BakedPose[b] = Model->GetBoneTrackTransform(N, FFrameNumber(fr)); } }
+					TArray<FTransform> Live; FinalPose(R, fr / 30.0, Live);
+					WorstBake = FMath::Max(WorstBake, (CS(BakedPose, Hand).GetTranslation() - CS(Live, Hand).GetTranslation()).Size());
+				}
+			}
+			Check(Baked != nullptr && WorstBake < 0.05, *FString::Printf(TEXT("S6-1: baked frames match the preview within 0.05 cm (worst %.5f cm) %s"), WorstBake, *BakeErr));
+		}
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("H6 RESULT: %d failures"), Fails);
+		return Fails;
+	}
+	// Diagnostic: -DumpIK=<timeline asset path>. Prints every IK / pole track's keys and samples each IK span at 0/25/50/75/100 %.
+	FString DumpPath;
+	if (FParse::Value(*Params, TEXT("DumpIK="), DumpPath))
+	{
+		const UAnimStitchTimelineAsset* D = LoadObject<UAnimStitchTimelineAsset>(nullptr, *DumpPath);
+		if (!D) { UE_LOG(LogAnimStitchSpike, Error, TEXT("DumpIK: cannot load %s"), *DumpPath); return 1; }
+		UE_LOG(LogAnimStitchSpike, Display, TEXT("DumpIK: %s format %d, %d clips, length %.3f"), *DumpPath, D->ProjectFormatVersion, D->Timeline.Clips.Num(), D->Timeline.GetTotalLength());
+		for (int32 t = 0; t < D->Timeline.Tracks.Num(); ++t)
+		{
+			const FAnimStitchTrack& Tr = D->Timeline.Tracks[t];
+			if (Tr.Kind != EAnimStitchTrackKind::IKLimb && Tr.Kind != EAnimStitchTrackKind::IKPole) { continue; }
+			UE_LOG(LogAnimStitchSpike, Display, TEXT("DumpIK track %d kind %d bone %s: %d keys"), t, (int32)Tr.Kind, *Tr.Bone.ToString(), Tr.Keys.Num());
+			for (int32 k = 0; k < Tr.Keys.Num(); ++k)
+			{
+				const FAnimStitchTrackKey& K = Tr.Keys[k];
+				UE_LOG(LogAnimStitchSpike, Display, TEXT("  key %d t=%.4f w=%.3f T=%s Pole=%s"), k, K.Time, K.Weight, *K.Translation.ToCompactString(), *K.Pole.ToCompactString());
+			}
+			for (int32 k = 0; k + 1 < Tr.Keys.Num(); ++k)
+			{
+				FString Line = FString::Printf(TEXT("  span %d->%d:"), k, k + 1);
+				for (const double P : { 0.0, 0.25, 0.5, 0.75, 1.0 })
+				{
+					const FAnimStitchTrackKey S = FAnimStitchManualEdits::Sample(Tr, FMath::Lerp(Tr.Keys[k].Time, Tr.Keys[k + 1].Time, P));
+					Line += FString::Printf(TEXT("  [%.0f%% w=%.2f T=%s]"), P * 100.0, S.Weight, *S.Translation.ToCompactString());
+				}
+				UE_LOG(LogAnimStitchSpike, Display, TEXT("%s"), *Line);
+			}
+			if (Tr.Kind == EAnimStitchTrackKind::IKLimb)
+			{
+				// What the limb really does: the evaluated effector against the key target, across every span.
+				FAnimStitchEvaluator DE; FString DErr;
+				if (DE.Initialize(D->Timeline, DErr))
+				{
+					const FReferenceSkeleton& DRef = DE.GetSkeleton()->GetReferenceSkeleton();
+					const int32 EffBone = DRef.FindBoneIndex(Tr.Bone);
+					for (int32 k = 0; k + 1 < Tr.Keys.Num(); ++k)
+					{
+						FString Line = FString::Printf(TEXT("  EVAL span %d->%d:"), k, k + 1);
+						for (const double P : { 0.0, 0.25, 0.5, 0.75, 1.0 })
+						{
+							const double Time = FMath::Lerp(Tr.Keys[k].Time, Tr.Keys[k + 1].Time, P);
+							TArray<FTransform> Pose; DE.EvaluatePose(Time, Pose);
+							FAnimStitchManualEdits::Apply(DRef, D->Timeline.Tracks, Time, Pose);
+							const FVector At = FAnimStitchFootLock::GetComponentSpace(DRef, Pose, EffBone).GetTranslation();
+							const FAnimStitchTrackKey S = FAnimStitchManualEdits::Sample(Tr, Time);
+							Line += FString::Printf(TEXT("  [%.0f%% w=%.2f off-target %.1f cm]"), P * 100.0, S.Weight, (At - S.Translation).Size());
+						}
+						UE_LOG(LogAnimStitchSpike, Display, TEXT("%s"), *Line);
+					}
+				}
+			}
+		}
+		return 0;
 	}
 	// Phase 21 test: -P21Test. #88 Epic-style curve controls + derived hierarchy + baked-rig reveal model + Bake to Control Rig + format versioning, #85 ground-contact sets.
 	if (FParse::Param(*Params, TEXT("P21Test")))
@@ -792,7 +1113,8 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 		{
 			FAnimStitchTrack Fk; Fk.Kind = EAnimStitchTrackKind::Bone; Fk.Bone = TEXT("spine_01");
 			const int32 TI = TLAsset->AddTrack(Fk);
-			Check(!(TLAsset->Timeline.Tracks[TI].UnlockedChannels & AnimStitchChannel::Translation), TEXT("translation lane is locked by default"));
+			Check((TLAsset->Timeline.Tracks[TI].UnlockedChannels & AnimStitchChannel::Translation) != 0, TEXT("S6-5: the translation lane starts unlocked"));
+			TLAsset->SetTrackChannelUnlocked(TI, AnimStitchChannel::Translation, false); // deletion must work even on a locked lane
 			FAnimStitchTrackKey K; K.Time = 1.0; K.Channels = AnimStitchChannel::All; K.Translation = FVector(1, 2, 3);
 			FAnimStitchTrack& T = TLAsset->Timeline.Tracks[TI];
 			T.Keys.Reset(); T.Keys.Add(K);
@@ -1271,7 +1593,8 @@ int32 UAnimStitchSpikeCommandlet::Main(const FString& Params)
 		auto Count = [&](uint8 Bit) { int32 N = 0; for (const FAnimStitchTrackKey& K : TLAsset->Timeline.Tracks[TI].Keys) { N += (K.Channels & Bit) ? 1 : 0; } return N; };
 		int32 Fails = 0;
 		auto Check = [&Fails](bool b, const TCHAR* What) { UE_LOG(LogAnimStitchSpike, Display, TEXT("S2 %s: %s"), b ? TEXT("PASS") : TEXT("FAIL"), What); if (!b) { ++Fails; } };
-		Check(TLAsset->Timeline.Tracks[TI].UnlockedChannels == AnimStitchChannel::Rotation, TEXT("new track: only Rotation unlocked (Translation + Scale locked)"));
+		Check(TLAsset->Timeline.Tracks[TI].UnlockedChannels == (AnimStitchChannel::Translation | AnimStitchChannel::Rotation), TEXT("S6-5: new track: Translation + Rotation unlocked, Scale locked"));
+		TLAsset->SetTrackChannelUnlocked(TI, AnimStitchChannel::Translation, false); // the rest of this test exercises a locked translation lane
 		const int32 T0 = Count(AnimStitchChannel::Translation), R0 = Count(AnimStitchChannel::Rotation);
 		FAnimStitchTrackKey Key;
 		Key.Time = 0.5;

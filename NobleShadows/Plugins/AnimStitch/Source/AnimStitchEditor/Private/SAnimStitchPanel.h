@@ -153,6 +153,8 @@ private:
 	TObjectPtr<UAnimStitchTimelineAsset> Asset;
 	TSharedPtr<SAnimStitchTimeline> Timeline;
 	TSharedPtr<SAnimStitchViewport> Viewport;
+	/** Search field over the timeline's track list: filters the tracks as you type; Esc or clearing it restores the list. */
+	TSharedPtr<class SSearchBox> TrackSearchBox;
 	TSharedPtr<FAnimStitchPreview> Preview;
 
 	FText LastWarning;

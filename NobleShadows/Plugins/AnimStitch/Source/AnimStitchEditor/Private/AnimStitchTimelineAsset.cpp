@@ -581,6 +581,8 @@ void UAnimStitchTimelineAsset::PostLoad()
 {
 	Super::PostLoad();
 	MigrateToCurrentFormat();
+	// IK keys saved by older builds (IK-off anchors and half-faded keys with no target) become full (target, pole, weight) keys, whatever the format version.
+	for (FAnimStitchTrack& Track : Timeline.Tracks) { FAnimStitchManualEdits::NormalizeIKKeys(Track); }
 }
 
 void UAnimStitchTimelineAsset::MigrateToCurrentFormat()
@@ -637,7 +639,7 @@ TArray<FName> UAnimStitchTimelineAsset::GetRigNodes() const
 		const FReferenceSkeleton& Ref = Skeleton->GetReferenceSkeleton();
 		for (int32 b = 1; b < Ref.GetNum(); ++b) // bone 0 is the root: the Root offset lane is its control
 		{
-			if (FAnimStitchManualEdits::IsRigBone(Ref.GetBoneName(b))) { Nodes.Add(Ref.GetBoneName(b)); }
+			if (FAnimStitchManualEdits::IsControlBone(Skeleton, Ref.GetBoneName(b))) { Nodes.Add(Ref.GetBoneName(b)); }
 		}
 	}
 	return Nodes;
@@ -660,7 +662,7 @@ bool UAnimStitchTimelineAsset::GetRigNodeTransform(FName Bone, int32 Frame, FTra
 	return true;
 }
 
-int32 UAnimStitchTimelineAsset::BakeToControlRig()
+int32 UAnimStitchTimelineAsset::BakeToControlRig(const FRigBakeOptions& Options)
 {
 	const USkeleton* Skeleton = GetSkeleton();
 	FRigBake Rig;
@@ -668,30 +670,253 @@ int32 UAnimStitchTimelineAsset::BakeToControlRig()
 	const FReferenceSkeleton& Ref = Skeleton->GetReferenceSkeleton();
 	TouchManual();
 	int32 Changed = 0;
+	const int32 NumSamples = Rig.Poses.Num();
 
-	// 1) Every additive bone key becomes an Absolute key (per frame, reproducing the current result).
+	// What the SOURCE animation keys, per bone: frames of the rig bake at which some clip's own track for that bone carries keys (a bone whose track never changes in a clip
+	// has none there - it is a static, keyless control). Needed by both options: "existing keyframes only" keeps exactly those frames, and "controls with keys only" skips
+	// the bones that never move. Built lazily, once per bone.
+	TMap<FName, TSet<int32>> SourceFrames;
+	TSet<FName> SourceDone;
+	TFunction<const TSet<int32>&(FName)> GetSourceFrames;
+	GetSourceFrames = [&](FName Bone) -> const TSet<int32>&
 	{
-		const int32 AdditiveBefore = Timeline.Tracks.FilterByPredicate([](const FAnimStitchTrack& T) { return T.Kind == EAnimStitchTrackKind::Bone && T.Mode == EAnimStitchTrackMode::Additive; }).Num();
-		FAnimStitchManualEdits::ConvertTracksToAbsolute(Ref, Timeline.Tracks, Rig.Poses, Rig.Rate, Rig.TotalLength);
-		Changed += AdditiveBefore;
+		if (!SourceDone.Contains(Bone))
+		{
+			SourceDone.Add(Bone);
+			TSet<int32> Frames;
+			// A key is stored relative to the root bone, so it also changes whenever an ANCESTOR (below the root) moves: a bone needs the frames of its whole chain.
+			const int32 ParentIndex = Ref.GetParentIndex(Ref.FindBoneIndex(Bone));
+			if (ParentIndex > 0) { Frames.Append(GetSourceFrames(Ref.GetBoneName(ParentIndex))); }
+			for (const FAnimStitchClip& Clip : Timeline.Clips)
+			{
+				const UAnimSequence* Seq = Clip.Sequence.Get();
+				const IAnimationDataModel* Model = Seq ? Seq->GetDataModel() : nullptr;
+				if (!Model || !Model->IsValidBoneTrackName(Bone)) { continue; }
+				const int32 SrcFrames = Model->GetNumberOfFrames();
+				const FTransform First = Model->GetBoneTrackTransform(Bone, FFrameNumber(0));
+				bool bMoves = false;
+				for (int32 f = 1; f <= SrcFrames && !bMoves; ++f)
+				{
+					const FTransform At = Model->GetBoneTrackTransform(Bone, FFrameNumber(f));
+					bMoves = !At.Equals(First, 1e-4f);
+				}
+				if (!bMoves) { continue; }
+				const int32 F0 = FMath::Clamp(FMath::FloorToInt32(Clip.StartTime * Rig.Rate), 0, NumSamples - 1);
+				const int32 F1 = FMath::Clamp(FMath::CeilToInt32(Clip.GetEndTime() * Rig.Rate), 0, NumSamples - 1);
+				for (int32 f = F0; f <= F1; ++f) { Frames.Add(f); }
+			}
+			SourceFrames.Add(Bone, MoveTemp(Frames));
+		}
+		return SourceFrames.FindOrAdd(Bone);
+	};
+	auto HoldsKeys = [&](FName Bone) { return GetSourceFrames(Bone).Num() > 0; };
+	auto Thin = [&](TArray<FAnimStitchTrackKey>& Keys, const TSet<int32>& Extra, FName Bone)
+	{
+		TSet<int32> Frames = GetSourceFrames(Bone);
+		Frames.Append(Extra);
+		Frames.Add(0);
+		Frames.Add(Keys.Num() - 1);
+		TArray<FAnimStitchTrackKey> Thinned;
+		for (int32 f = 0; f < Keys.Num(); ++f) { if (Frames.Contains(f)) { Thinned.Add(Keys[f]); } }
+		Keys = MoveTemp(Thinned);
+	};
+
+	// 1) Every additive bone key becomes an Absolute key, reproducing the current result. "Controls with keys only": a control with nothing keyed (only identity
+	//    anchors) is left alone. "Existing keyframes only": the frames of the track's own keys plus the frames the source animation keys that bone on (an Absolute key
+	//    replaces the animation between its keys, so the animation's own keyframes must stay for the pose to be unchanged).
+	{
+		TArray<int32> Eligible;
+		TMap<int32, TSet<int32>> OwnFrames;
+		for (int32 i = 0; i < Timeline.Tracks.Num(); ++i)
+		{
+			const FAnimStitchTrack& T = Timeline.Tracks[i];
+			if (T.Kind != EAnimStitchTrackKind::Bone || T.Mode != EAnimStitchTrackMode::Additive) { continue; }
+			const bool bCarriesKeys = T.Keys.ContainsByPredicate([](const FAnimStitchTrackKey& K) { return !FAnimStitchManualEdits::IsIdentityKey(K); });
+			if (!Options.bAllControls && !bCarriesKeys && !HoldsKeys(T.Bone)) { continue; }
+			Eligible.Add(i);
+			TSet<int32>& Own = OwnFrames.Add(i);
+			for (const FAnimStitchTrackKey& K : T.Keys) { Own.Add(FMath::Clamp(FMath::RoundToInt32(K.Time * Rig.Rate), 0, NumSamples - 1)); }
+		}
+		FAnimStitchManualEdits::ConvertTracksToAbsolute(Ref, Timeline.Tracks, Rig.Poses, Rig.Rate, Rig.TotalLength, nullptr, &Eligible, true);
+		for (const int32 i : Eligible)
+		{
+			if (!Options.bEveryFrame) { Thin(Timeline.Tracks[i].Keys, OwnFrames[i], Timeline.Tracks[i].Bone); }
+		}
+		Changed += Eligible.Num();
 	}
 
-	// 2) Every remaining node is revealed with its baked keys already in place.
-	for (const FName& Bone : GetRigNodes())
+	// 2) Every remaining node is revealed with its baked keys already in place. "Controls with keys only" reveals just the nodes the source animation keys (they move);
+	//    the static ones stay hidden.
 	{
-		if (IsRigNodeRevealed(Bone)) { continue; }
-		FAnimStitchTrack Track;
-		Track.Kind = EAnimStitchTrackKind::Bone;
-		Track.Bone = Bone;
-		Track.Mode = EAnimStitchTrackMode::Absolute;
-		Track.bRotationOnly = !FAnimStitchManualEdits::IsPelvisBone(Bone); // FK controls rotate; the pelvis also translates
-		Track.bKeepFeetPlanted = false;                                      // untouched keys must reproduce the animation exactly
-		FillKeysFromRig(Ref, Rig, Track);
-		Timeline.Tracks.Add(Track);
-		++Changed;
+		TSet<int32> UserFrames; // frames other controls have real (sparse) keys on
+		if (!Options.bEveryFrame)
+		{
+			for (const FAnimStitchTrack& T : Timeline.Tracks)
+			{
+				if (T.Keys.Num() * 2 >= NumSamples) { continue; } // a dense (per-frame) track says nothing about where keys were placed
+				for (const FAnimStitchTrackKey& K : T.Keys) { UserFrames.Add(FMath::Clamp(FMath::RoundToInt32(K.Time * Rig.Rate), 0, NumSamples - 1)); }
+			}
+		}
+		for (const FName& Bone : GetRigNodes())
+		{
+			if (IsRigNodeRevealed(Bone)) { continue; }
+			if (!Options.bAllControls && !HoldsKeys(Bone)) { continue; }
+			FAnimStitchTrack Track;
+			Track.Kind = EAnimStitchTrackKind::Bone;
+			Track.Bone = Bone;
+			Track.Mode = EAnimStitchTrackMode::Absolute;
+			Track.bRotationOnly = !FAnimStitchManualEdits::IsPelvisBone(Bone); // FK controls rotate; the pelvis also translates
+			Track.bKeepFeetPlanted = false;                                      // untouched keys must reproduce the animation exactly
+			Track.UnlockedChannels = AnimStitchChannel::Translation | AnimStitchChannel::Rotation;
+			FillKeysFromRig(Ref, Rig, Track);
+			if (!Options.bEveryFrame) { Thin(Track.Keys, UserFrames, Bone); }
+			Timeline.Tracks.Add(Track);
+			++Changed;
+		}
 	}
 	MarkPackageDirty();
 	return Changed;
+}
+bool UAnimStitchTimelineAsset::SwitchLimbMode(FName Effector, bool bToIK, double Time)
+{
+	const USkeleton* Skeleton = GetSkeleton();
+	if (!Skeleton) { return false; }
+	const FReferenceSkeleton& Ref = Skeleton->GetReferenceSkeleton();
+	const FAnimStitchFootChain Chain = FAnimStitchManualEdits::ChainFor(Ref, Effector);
+	const double Total = Timeline.GetTotalLength();
+	if (!Chain.IsValid() || Total <= KINDA_SMALL_NUMBER) { return false; }
+	Time = FMath::Clamp(Time, 0.0, Total);
+
+	// The pose on screen right now (blend + every correction): the switch matches it.
+	FAnimStitchEvaluator Evaluator;
+	FString Error;
+	if (!Evaluator.Initialize(Timeline, Error)) { return false; }
+	TArray<FTransform> BlendPose, Pose;
+	Evaluator.EvaluatePose(Time, BlendPose);
+	Pose = BlendPose;
+	FAnimStitchManualEdits::Apply(Ref, Timeline.Tracks, Time, Pose);
+	TArray<FTransform> Component;
+	Component.SetNum(Pose.Num());
+	for (int32 i = 0; i < Pose.Num(); ++i)
+	{
+		const int32 Parent = Ref.GetParentIndex(i);
+		Component[i] = Parent != INDEX_NONE ? Pose[i] * Component[Parent] : Pose[i];
+	}
+
+	TouchManual();
+	auto NextSwitchAfter = [this](int32 IKIndex, double T) -> double
+	{
+		if (IKIndex != INDEX_NONE) { for (const FAnimStitchLimbSwitch& S : Timeline.Tracks[IKIndex].LimbSwitches) { if (S.Time > T + 1e-6) { return S.Time; } } }
+		return TNumericLimits<double>::Max();
+	};
+	auto AddSwitch = [this](int32 IKIndex, double T, bool bIK)
+	{
+		TArray<FAnimStitchLimbSwitch>& Switches = Timeline.Tracks[IKIndex].LimbSwitches;
+		Switches.RemoveAll([T](const FAnimStitchLimbSwitch& S) { return FMath::Abs(S.Time - T) < 1e-6; });
+		FAnimStitchLimbSwitch New; New.Time = T; New.bIK = bIK;
+		int32 At = 0;
+		while (At < Switches.Num() && Switches[At].Time < T) { ++At; }
+		Switches.Insert(New, At);
+	};
+
+	int32 IKIndex = FAnimStitchManualEdits::FindIKTrack(Timeline.Tracks, Effector);
+	if (bToIK)
+	{
+		if (IKIndex == INDEX_NONE)
+		{
+			FAnimStitchTrack IK; IK.Kind = EAnimStitchTrackKind::IKLimb; IK.Bone = Effector;
+			IKIndex = AddTrack(IK);
+		}
+		if (FAnimStitchManualEdits::FindIKTrack(Timeline.Tracks, Effector) == INDEX_NONE) { return false; }
+		int32 PoleIndex = Timeline.Tracks.IndexOfByPredicate([Effector](const FAnimStitchTrack& T) { return T.Kind == EAnimStitchTrackKind::IKPole && T.Bone == Effector; });
+		if (PoleIndex == INDEX_NONE)
+		{
+			FAnimStitchTrack Pole; Pole.Kind = EAnimStitchTrackKind::IKPole; Pole.Bone = Effector;
+			PoleIndex = AddTrack(Pole);
+		}
+		IKIndex = FAnimStitchManualEdits::FindIKTrack(Timeline.Tracks, Effector);
+		const FTransform Foot = Component[Chain.Foot];
+		const FVector PoleAt = FAnimStitchManualEdits::DefaultPoleForPose(Ref, Chain, Component);
+		FAnimStitchTrackKey Key;
+		Key.Time = Time;
+		Key.Translation = Foot.GetTranslation();
+		Key.Rotation = Foot.GetRotation();
+		Key.Pole = PoleAt;
+		Key.Weight = 1.f;
+		AddSwitch(IKIndex, Time, true);
+		// Written straight into the track (not through SetTrackKey): the switch owns its region, so no IK-off ramp anchors may be inserted inside it.
+		FAnimStitchManualEdits::SetKey(Timeline.Tracks[IKIndex], Key);
+		FAnimStitchTrackKey PoleKey; PoleKey.Time = Time; PoleKey.Translation = PoleAt;
+		SetTrackKey(PoleIndex, PoleKey);
+		// IK stays on until the limb is switched back: hold the pose at the end of the region (unless keys already shape it).
+		const double RegionEnd = FMath::Min(NextSwitchAfter(IKIndex, Time), Total);
+		if (RegionEnd > Time + 1e-3)
+		{
+			const bool bHasKeyInRegion = Timeline.Tracks[IKIndex].Keys.ContainsByPredicate([Time, RegionEnd](const FAnimStitchTrackKey& K) { return K.Time > Time + 1e-3 && K.Time <= RegionEnd + 1e-6 && K.Weight > 1e-3f; });
+			if (!bHasKeyInRegion)
+			{
+				FAnimStitchTrackKey Hold = Key; Hold.Time = RegionEnd;
+				FAnimStitchManualEdits::SetKey(Timeline.Tracks[IKIndex], Hold);
+				FAnimStitchTrackKey PoleHold = PoleKey; PoleHold.Time = RegionEnd;
+				SetTrackKey(PoleIndex, PoleHold);
+			}
+		}
+		FAnimStitchManualEdits::NormalizeIKKeys(Timeline.Tracks[IKIndex]);
+		MarkPackageDirty();
+		return true;
+	}
+
+	// IK -> FK
+	if (IKIndex != INDEX_NONE) { AddSwitch(IKIndex, Time, false); }
+	const double RegionEnd = NextSwitchAfter(IKIndex, Time);
+	FRigBake Rig;
+	const bool bHaveRig = GetRigBake(Rig);
+	TArray<int32> Joints;
+	for (const int32 Joint : { Chain.Thigh, Chain.Calf, Chain.Foot })
+	{
+		const FName JointName = Ref.GetBoneName(Joint);
+		if (!IsRigNodeRevealed(JointName))
+		{
+			FAnimStitchTrack Fk; Fk.Kind = EAnimStitchTrackKind::Bone; Fk.Bone = JointName; Fk.bRotationOnly = true; Fk.bKeepFeetPlanted = false; Fk.Mode = EAnimStitchTrackMode::Absolute;
+			AddTrack(Fk);
+		}
+		Joints.Add(Timeline.Tracks.IndexOfByPredicate([JointName](const FAnimStitchTrack& T) { return T.Kind == EAnimStitchTrackKind::Bone && T.Bone == JointName; }));
+	}
+	// Bone-stage pose (no IK / plants): the keys are stored relative to the controlled parent's motion, like Bake to Control Rig does.
+	for (const int32 TrackIndex : Joints)
+	{
+		if (!Timeline.Tracks.IsValidIndex(TrackIndex)) { continue; }
+		// The bone stage is recomputed for every joint: a child joint is keyed relative to its parent joint's NEW (matched) motion.
+		TArray<FAnimStitchTrack> BoneOnly;
+		for (const FAnimStitchTrack& T : Timeline.Tracks) { if (T.Kind == EAnimStitchTrackKind::Bone) { BoneOnly.Add(T); } }
+		TArray<FTransform> Stage = BlendPose;
+		FAnimStitchManualEdits::Apply(Ref, BoneOnly, Time, Stage, nullptr);
+		FAnimStitchTrack& Fk = Timeline.Tracks[TrackIndex];
+		if (Fk.Mode != EAnimStitchTrackMode::Absolute) { continue; } // an older additive FK joint already carries the animation plus its own offset
+		const int32 Bone = Ref.FindBoneIndex(Fk.Bone);
+		const int32 ParentTrack = FAnimStitchManualEdits::ResolveParentTrack(Ref, Timeline.Tracks, TrackIndex);
+		const int32 ParentBone = ParentTrack != INDEX_NONE ? Ref.FindBoneIndex(Timeline.Tracks[ParentTrack].Bone) : INDEX_NONE;
+		FTransform ParentMove = FTransform::Identity;
+		if (ParentBone != INDEX_NONE) { ParentMove = FAnimStitchFootLock::GetComponentSpace(Ref, BlendPose, ParentBone).Inverse() * FAnimStitchFootLock::GetComponentSpace(Ref, Stage, ParentBone); }
+		const FTransform Wanted = Component[Bone] * ParentMove.Inverse();   // the pose on screen (IK included), expressed as this key would hold it
+		const FTransform Matched = Wanted.GetRelativeTransform(Stage[0]);
+		const FQuat Current = FAnimStitchManualEdits::Sample(Fk, Time).Rotation; // what the FK joint would do here without the switch
+		// From the switch on, until the limb goes back to IK, the joint starts from the matched pose and then makes the animation's OWN motion (its change since the switch
+		// frame, taken in the joint's frame), so the switch frame matches and the limb moves on at the animation's pace instead of jumping.
+		const FQuat CurrentInverse = Current.Inverse();
+		for (FAnimStitchTrackKey& K : Fk.Keys)
+		{
+			if (K.Time > Time + 1e-6 && K.Time < RegionEnd - 1e-6) { K.Rotation = (Matched.GetRotation() * (CurrentInverse * K.Rotation)).GetNormalized(); }
+		}
+		FAnimStitchTrackKey Here = FAnimStitchManualEdits::Sample(Fk, Time);
+		Here.Time = Time;
+		Here.Rotation = Matched.GetRotation().GetNormalized();
+		Here.Channels = AnimStitchChannel::All;
+		FAnimStitchManualEdits::SetKey(Fk, Here);
+	}
+	(void)bHaveRig;
+	MarkPackageDirty();
+	return true;
 }
 void UAnimStitchTimelineAsset::FillAbsoluteTracks(const FKeyFollowScope* Scope)
 {
@@ -773,6 +998,8 @@ int32 UAnimStitchTimelineAsset::AddTrack(const FAnimStitchTrack& Track)
 	if (Track.Kind == EAnimStitchTrackKind::RootOffset) { Touch(); ++ManualCounter; } else { TouchManual(); }
 	FAnimStitchTrack NewTrack = Track;
 	// The control hierarchy is not stored: it is derived from the skeleton (FAnimStitchManualEdits::ResolveParentTrack), so it holds for every control.
+	// Hotfix Set 6: a new bone track starts with Translation and Rotation lanes editable (Scale stays disabled). Only the untouched struct default is replaced; existing projects keep their stored lock states.
+	if (NewTrack.Kind == EAnimStitchTrackKind::Bone && NewTrack.UnlockedChannels == AnimStitchChannel::Rotation) { NewTrack.UnlockedChannels = AnimStitchChannel::Translation | AnimStitchChannel::Rotation; }
 	if (NewTrack.Kind != EAnimStitchTrackKind::Bone) { NewTrack.Mode = EAnimStitchTrackMode::Additive; } // Absolute is for FK / core bone tracks only
 	if (NewTrack.Kind == EAnimStitchTrackKind::RootOffset)
 	{
@@ -861,6 +1088,38 @@ void UAnimStitchTimelineAsset::SetTrackKey(int32 TrackIndex, const FAnimStitchTr
 		FAnimStitchManualEdits::SetKey(Track, Anchor);
 	}
 	FAnimStitchManualEdits::SetKey(Track, Key);
+	if (Track.Kind == EAnimStitchTrackKind::IKLimb) { ShapeIKRamps(Track, Key.Time); }
+}
+
+void UAnimStitchTimelineAsset::ShapeIKRamps(FAnimStitchTrack& Track, double KeyTime)
+{
+	// A track made in the editor starts with IK-off anchors at the very start and end of the timeline. An engaged key next to such a far-away anchor would fade the weight
+	// in (and out) over the whole stretch; give it the same short, settings-sized ramps an empty track gets (IK Blend Time), keeping the anchors where they are.
+	const int32 I = FAnimStitchManualEdits::FindKey(Track, KeyTime);
+	if (I == INDEX_NONE || Track.Keys[I].Weight <= 1e-3f) { FAnimStitchManualEdits::NormalizeIKKeys(Track); return; }
+	const double Ramp = FMath::Clamp((double)GetDefault<UAnimStitchSettings>()->IKBlendTime, 0.03, 3.0);
+	const FAnimStitchTrackKey Engaged = Track.Keys[I];
+	auto Anchor = [&](double Time)
+	{
+		FAnimStitchTrackKey A = Engaged; A.Time = Time; A.Weight = 0.f; // same target, IK off
+		FAnimStitchManualEdits::SetKey(Track, A);
+	};
+	// A ramp anchor made earlier (a drag writes the key on every mouse move) follows the key's target instead of keeping the first one.
+	auto IsRampAnchor = [&](int32 Index, double Offset) { return Track.Keys.IsValidIndex(Index) && Track.Keys[Index].Weight <= 1e-3f && FMath::Abs(Track.Keys[Index].Time - (Engaged.Time + Offset)) < 1e-4; };
+	auto Refresh = [&](int32 Index) { Track.Keys[Index].Translation = Engaged.Translation; Track.Keys[Index].Rotation = Engaged.Rotation; Track.Keys[Index].Pole = Engaged.Pole; };
+	if (IsRampAnchor(I - 1, -Ramp)) { Refresh(I - 1); }
+	else if (Track.Keys.IsValidIndex(I - 1) && Track.Keys[I - 1].Weight <= 1e-3f && Engaged.Time - Track.Keys[I - 1].Time > Ramp * 1.5) { Anchor(Engaged.Time - Ramp); }
+	int32 J = FAnimStitchManualEdits::FindKey(Track, KeyTime);
+	// The untouched IK-off anchor at the very end of the timeline is dropped when the track gets its last engaged key: the IK then holds to the end (until a Release IK key),
+	// and a release ramp made here could not cut the IK out between two keys the user adds one after the other.
+	if (J != INDEX_NONE && Track.Keys.IsValidIndex(J + 1) && J + 2 == Track.Keys.Num())
+	{
+		const FAnimStitchTrackKey& Last = Track.Keys[J + 1];
+		if (Last.Weight <= 1e-3f && Last.Time >= Timeline.GetTotalLength() - 0.01 && Last.Translation.IsNearlyZero(1e-3) && Last.Pole.IsNearlyZero(1e-3)) { Track.Keys.RemoveAt(J + 1); }
+	}
+	if (J != INDEX_NONE && IsRampAnchor(J + 1, Ramp)) { Refresh(J + 1); }
+	else if (J != INDEX_NONE && Track.Keys.IsValidIndex(J + 1) && Track.Keys[J + 1].Weight <= 1e-3f && Track.Keys[J + 1].Time - Engaged.Time > Ramp * 1.5) { Anchor(Engaged.Time + Ramp); }
+	FAnimStitchManualEdits::NormalizeIKKeys(Track);
 }
 
 void UAnimStitchTimelineAsset::RemoveTrackKey(int32 TrackIndex, int32 KeyIndex)
@@ -869,6 +1128,7 @@ void UAnimStitchTimelineAsset::RemoveTrackKey(int32 TrackIndex, int32 KeyIndex)
 	{
 		TouchTrack(TrackIndex);
 		Timeline.Tracks[TrackIndex].Keys.RemoveAt(KeyIndex);
+		FAnimStitchManualEdits::NormalizeIKKeys(Timeline.Tracks[TrackIndex]);
 	}
 }
 
@@ -881,7 +1141,9 @@ int32 UAnimStitchTimelineAsset::MoveTrackKey(int32 TrackIndex, int32 KeyIndex, d
 		FAnimStitchTrackKey Moved = Track.Keys[KeyIndex];
 		Track.Keys.RemoveAt(KeyIndex);
 		Moved.Time = FMath::Max(0.0, NewTime);
-		return FAnimStitchManualEdits::SetKey(Track, Moved);
+		const int32 NewIndex = FAnimStitchManualEdits::SetKey(Track, Moved);
+		if (Track.Kind == EAnimStitchTrackKind::IKLimb) { FAnimStitchManualEdits::NormalizeIKKeys(Track); }
+		return NewIndex;
 	}
 	return KeyIndex;
 }

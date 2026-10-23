@@ -118,6 +118,45 @@ void SAnimStitchTimeline::PaintTrackLanes(FSlateWindowElementList& Out, int32 La
 	Out.PopClip();
 }
 
+FString SAnimStitchTimeline::GetTrackLabel(const FAnimStitchTrack& Track)
+{
+	FString Label = Track.Kind == EAnimStitchTrackKind::RootOffset ? FString(TEXT("Root - motion offset")) : Track.Bone.ToString();
+	if (Track.Kind == EAnimStitchTrackKind::IKPole) { Label += TEXT("  pole"); }
+	if (Track.Kind == EAnimStitchTrackKind::IKLimb) { Label += TEXT("  (IK)"); }
+	else if (Track.bRotationOnly) { Label += TEXT("  (FK)"); }
+	if (Track.Kind == EAnimStitchTrackKind::Bone && Track.Mode == EAnimStitchTrackMode::Absolute) { Label += TEXT("  [ABS]"); } // absolute tracks are tagged so they stand out from additive ones
+	return Label;
+}
+
+bool SAnimStitchTimeline::IsTrackVisible(int32 Track) const
+{
+	if (TrackFilter.IsEmpty() || !Asset || !Asset->Timeline.Tracks.IsValidIndex(Track)) { return true; }
+	const uint32 Stamp = Asset->GetManualCounter() * 31u + Asset->GetEditCounter() + (uint32)Asset->Timeline.Tracks.Num() * 7919u;
+	if (Stamp != VisibleCacheStamp || VisibleCacheFilter != TrackFilter || VisibleCache.Num() != Asset->Timeline.Tracks.Num())
+	{
+		VisibleCache.Init(0, Asset->Timeline.Tracks.Num());
+		VisibleCacheFilter = TrackFilter;
+		VisibleCacheStamp = Stamp;
+		for (int32 i = 0; i < VisibleCache.Num(); ++i) { VisibleCache[i] = MatchesTrackFilter(i) ? 1 : 0; }
+	}
+	return VisibleCache[Track] != 0;
+}
+
+bool SAnimStitchTimeline::MatchesTrackFilter(int32 Track) const
+{
+	const FAnimStitchTrack& T = Asset->Timeline.Tracks[Track];
+	auto Has = [this](const FString& Text) { return Text.Contains(TrackFilter, ESearchCase::IgnoreCase); };
+	if (Has(GetTrackLabel(T))) { return true; }
+	// Lanes answer to their own names too: a bone track has Translation / Rotation / Scale channel lanes, a limb its target, pole and weight.
+	if (T.Kind == EAnimStitchTrackKind::Bone)
+	{
+		const uint8 Applicable = FAnimStitchManualEdits::GetApplicableChannels(T);
+		return ((Applicable & AnimStitchChannel::Translation) && Has(TEXT("Translation"))) || ((Applicable & AnimStitchChannel::Rotation) && Has(TEXT("Rotation"))) || ((Applicable & AnimStitchChannel::Scale) && Has(TEXT("Scale")));
+	}
+	if (T.Kind == EAnimStitchTrackKind::IKLimb) { return Has(TEXT("Target")) || Has(TEXT("Weight")) || Has(TEXT("Effector")); }
+	return false;
+}
+
 /** The Sequencer-like track column: titles with an expand arrow, key navigation buttons and the area behind the value rows. */
 void SAnimStitchTimeline::PaintLeftColumn(FSlateWindowElementList& Out, int32 Layer, const FGeometry& G) const
 {
@@ -155,11 +194,7 @@ void SAnimStitchTimeline::PaintLeftColumn(FSlateWindowElementList& Out, int32 La
 		const float Indent = Track.Kind == EAnimStitchTrackKind::IKPole ? 18.f : 0.f; // the pole lane sits indented under its IK track
 		if (Indent > 0.f) { FSlateDrawElement::MakeBox(Out, Layer + 4, G.ToPaintGeometry(FVector2f(1.f, TrackLaneHeight), FSlateLayoutTransform(FVector2f(12.f, Top))), White, ESlateDrawEffect::None, FLinearColor(1.f, 1.f, 1.f, 0.25f)); }
 		FSlateDrawElement::MakeText(Out, Layer + 5, G.ToPaintGeometry(Size, FSlateLayoutTransform(FVector2f(7.f + Indent, Top + 7.f))), FString(bOpen ? TEXT("v") : TEXT(">")), Font, ESlateDrawEffect::None, FLinearColor(1.f, 1.f, 1.f, 0.8f));
-		FString Label = Track.Kind == EAnimStitchTrackKind::RootOffset ? FString(TEXT("Root - motion offset")) : Track.Bone.ToString();
-		if (Track.Kind == EAnimStitchTrackKind::IKPole) { Label += TEXT("  pole"); }
-		if (bIK) { Label += TEXT("  (IK)"); }
-		else if (Track.bRotationOnly) { Label += TEXT("  (FK)"); }
-		if (Track.Kind == EAnimStitchTrackKind::Bone && Track.Mode == EAnimStitchTrackMode::Absolute) { Label += TEXT("  [ABS]"); } // absolute tracks are tagged so they stand out from additive ones
+		const FString Label = GetTrackLabel(Track);
 		FSlateDrawElement::MakeText(Out, Layer + 5, G.ToPaintGeometry(Size, FSlateLayoutTransform(FVector2f(24.f + Indent, Top + 7.f))), Label, BoldFont, ESlateDrawEffect::None, FLinearColor(1.f, 1.f, 1.f, 0.9f));
 
 		// Previous key, add key at the playhead, next key.
@@ -354,6 +389,7 @@ void SAnimStitchTimeline::PickOtherBone()
 	for (int32 b = 0; b < Ref.GetNum(); ++b)
 	{
 		if (b == 0 && HasRootOffsetTrack()) { continue; } // the root track exists: the root is no longer offered
+		if (!FAnimStitchManualEdits::IsControlBone(Skeleton, Ref.GetBoneName(b))) { continue; } // sockets and virtual bones are never controls
 		if (!HasTrackFor(Ref.GetBoneName(b), EAnimStitchTrackKind::Bone)) { Items->Add(MakeShared<FString>(Ref.GetBoneName(b).ToString())); }
 	}
 	TSharedRef<TSharedPtr<FString>> Chosen = MakeShared<TSharedPtr<FString>>();
@@ -456,17 +492,76 @@ void SAnimStitchTimeline::PickOtherBone()
 void SAnimStitchTimeline::BakeToControlRig()
 {
 	if (!Asset->GetSkeleton()) { return; }
+
+	// The options are asked for first; the defaults (every frame, all controls) are what a plain "Bake" does.
+	TSharedRef<UAnimStitchTimelineAsset::FRigBakeOptions> Options = MakeShared<UAnimStitchTimelineAsset::FRigBakeOptions>();
+	TSharedRef<bool> bConfirmed = MakeShared<bool>(false);
+	auto Radio = [](const FText& Label, const FText& Tip, TFunction<bool()> IsOn, TFunction<void()> Set)
+	{
+		return SNew(SCheckBox).Style(FAppStyle::Get(), "RadioButton").ToolTipText(Tip)
+			.IsChecked_Lambda([IsOn]() { return IsOn() ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+			.OnCheckStateChanged_Lambda([Set](ECheckBoxState State) { if (State == ECheckBoxState::Checked) { Set(); } })
+			[SNew(STextBlock).Text(Label)];
+	};
+	TSharedRef<SWindow> Window = SNew(SWindow).Title(LOCTEXT("BakeRigTitle", "Bake to Control Rig")).ClientSize(FVector2D(440.0, 270.0)).SupportsMinimize(false).SupportsMaximize(false);
+	Window->SetContent(
+		SNew(SBox).Padding(12.f)
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)[SNew(STextBlock).AutoWrapText(true).Text(LOCTEXT("BakeRigHint", "Converts the keys to Absolute and reveals the controls of the rig. The animation does not change. One undo step."))]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 3)[SNew(STextBlock).Font(FAppStyle::GetFontStyle("BoldFont")).Text(LOCTEXT("BakeRigDensity", "Key density"))]
+			+ SVerticalBox::Slot().AutoHeight()[Radio(LOCTEXT("DensityEvery", "Every frame"), LOCTEXT("DensityEveryTip", "A dense Absolute key on every frame (default)"), [Options]() { return Options->bEveryFrame; }, [Options]() { Options->bEveryFrame = true; })]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)[Radio(LOCTEXT("DensityExisting", "Existing keyframes only"), LOCTEXT("DensityExistingTip", "Absolute keys only at the frames that already carry keys (plus the first and last frame)"), [Options]() { return !Options->bEveryFrame; }, [Options]() { Options->bEveryFrame = false; })]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 3)[SNew(STextBlock).Font(FAppStyle::GetFontStyle("BoldFont")).Text(LOCTEXT("BakeRigScope", "Control scope"))]
+			+ SVerticalBox::Slot().AutoHeight()[Radio(LOCTEXT("ScopeAll", "All controls"), LOCTEXT("ScopeAllTip", "Reveal every control of the skeleton and convert them all (default)"), [Options]() { return Options->bAllControls; }, [Options]() { Options->bAllControls = true; })]
+			+ SVerticalBox::Slot().AutoHeight()[Radio(LOCTEXT("ScopeKeyed", "Controls with keys only"), LOCTEXT("ScopeKeyedTip", "Convert only the controls that carry keys; keyless controls stay hidden"), [Options]() { return !Options->bAllControls; }, [Options]() { Options->bAllControls = false; })]
+			+ SVerticalBox::Slot().FillHeight(1.f)[SNullWidget::NullWidget]
+			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+				[
+					SNew(SButton).Text(LOCTEXT("BakeRigGo", "Bake")).ToolTipText(LOCTEXT("BakeRigGoTip", "Run Bake to Control Rig with these options"))
+					.OnClicked_Lambda([bConfirmed, WeakWindow = TWeakPtr<SWindow>(Window)]() { *bConfirmed = true; if (TSharedPtr<SWindow> W = WeakWindow.Pin()) { W->RequestDestroyWindow(); } return FReply::Handled(); })
+				]
+				+ SHorizontalBox::Slot().AutoWidth()
+				[
+					SNew(SButton).Text(LOCTEXT("BakeRigCancel", "Cancel"))
+					.OnClicked_Lambda([WeakWindow = TWeakPtr<SWindow>(Window)]() { if (TSharedPtr<SWindow> W = WeakWindow.Pin()) { W->RequestDestroyWindow(); } return FReply::Handled(); })
+				]
+			]
+		]);
+	FSlateApplication::Get().AddModalWindow(Window, FSlateApplication::Get().GetActiveTopLevelWindow());
+	if (!*bConfirmed) { return; }
+
 	int32 Changed = 0;
 	{
 		const FScopedTransaction Tx(LOCTEXT("BakeToRigTx", "Bake to Control Rig"));
-		Changed = Asset->BakeToControlRig();
+		Changed = Asset->BakeToControlRig(*Options);
 	}
 	++TrackSelectionSerial;
 	SelectedKey = INDEX_NONE;
 	SelectedKeys.Reset();
-	FNotificationInfo Info(Changed > 0 ? FText::Format(LOCTEXT("BakedToRig", "Bake to Control Rig: {0} controls revealed or converted to Absolute keys."), Changed) : LOCTEXT("BakedToRigNothing", "Bake to Control Rig: the timeline could not be evaluated, nothing was changed."));
+	FNotificationInfo Info(Changed > 0 ? FText::Format(LOCTEXT("BakedToRig", "Bake to Control Rig: {0} controls revealed or converted to Absolute keys."), Changed) : LOCTEXT("BakedToRigNothing", "Bake to Control Rig: nothing to change (or the timeline could not be evaluated)."));
 	Info.ExpireDuration = 5.f;
 	FSlateNotificationManager::Get().AddNotification(Info);
+}
+void SAnimStitchTimeline::SwitchLimbAtPlayhead(FName Effector, bool bToIK)
+{
+	bool bOk = false;
+	{
+		const FScopedTransaction Tx(bToIK ? LOCTEXT("SwitchLimbIKTx", "Switch Limb to IK") : LOCTEXT("SwitchLimbFKTx", "Switch Limb to FK"));
+		bOk = Asset->SwitchLimbMode(Effector, bToIK, Playhead);
+	}
+	++TrackSelectionSerial;
+	SelectedKey = INDEX_NONE;
+	SelectedKeys.Reset();
+	if (!bOk)
+	{
+		FNotificationInfo Info(LOCTEXT("SwitchLimbFailed", "The limb could not be switched (no limb chain on this bone, or the timeline cannot be evaluated)."));
+		Info.ExpireDuration = 5.f;
+		FSlateNotificationManager::Get().AddNotification(Info);
+	}
 }
 
 void SAnimStitchTimeline::BuildCoreBoneMenu(FMenuBuilder& Menu)
@@ -532,6 +627,24 @@ void SAnimStitchTimeline::OpenTrackMenu(const FPointerEvent& Event, int32 TrackI
 	FMenuBuilder Menu(true, nullptr);
 	const FAnimStitchTrack& Track = Asset->Timeline.Tracks[TrackIndex];
 	const bool bIK = Track.Kind == EAnimStitchTrackKind::IKLimb;
+
+	// Per-limb FK/IK switch, keyed at the playhead.
+	if (Track.Kind == EAnimStitchTrackKind::Bone || Track.Kind == EAnimStitchTrackKind::IKLimb || Track.Kind == EAnimStitchTrackKind::IKPole)
+	{
+		const USkeleton* LimbSkeleton = Asset->GetSkeleton();
+		const FName Effector = LimbSkeleton ? FAnimStitchManualEdits::FindLimbEffector(LimbSkeleton->GetReferenceSkeleton(), Track.Bone) : FName();
+		if (!Effector.IsNone())
+		{
+			const int32 LimbIK = FAnimStitchManualEdits::FindIKTrack(Asset->Timeline.Tracks, Effector);
+			const bool bIKNow = LimbIK != INDEX_NONE && FAnimStitchManualEdits::IsLimbIKAt(Asset->Timeline.Tracks[LimbIK], Playhead) && FAnimStitchManualEdits::Sample(Asset->Timeline.Tracks[LimbIK], Playhead).Weight > 0.5f;
+			Menu.BeginSection("LimbMode", FText::Format(LOCTEXT("LimbModeSection", "Limb: {0} ({1})"), FText::FromName(Effector), bIKNow ? LOCTEXT("LimbModeIK", "IK") : LOCTEXT("LimbModeFK", "FK")));
+			Menu.AddMenuEntry(LOCTEXT("SwitchToIK", "Switch to IK at playhead"), LOCTEXT("SwitchToIKTip", "From the playhead on the limb is driven by its IK target and pole vector, placed exactly where the limb is now (no pop). Before the playhead it stays as it is."), FSlateIcon(),
+				FUIAction(FExecuteAction::CreateLambda([this, Effector]() { SwitchLimbAtPlayhead(Effector, true); }), FCanExecuteAction::CreateLambda([bIKNow]() { return !bIKNow; })));
+			Menu.AddMenuEntry(LOCTEXT("SwitchToFK", "Switch to FK at playhead"), LOCTEXT("SwitchToFKTip", "From the playhead on the limb is driven by its FK joint controls, set to the limb's current pose (no pop). Before the playhead it stays as it is."), FSlateIcon(),
+				FUIAction(FExecuteAction::CreateLambda([this, Effector]() { SwitchLimbAtPlayhead(Effector, false); }), FCanExecuteAction::CreateLambda([bIKNow]() { return bIKNow; })));
+			Menu.EndSection();
+		}
+	}
 
 	Menu.BeginSection("TrackExpansion", LOCTEXT("TrackExpansionSection", "Tracks"));
 	Menu.AddMenuEntry(LOCTEXT("ExpandAllTracks", "Expand All"), LOCTEXT("ExpandAllTip", "Open the value panel of every bone track"), FSlateIcon(),

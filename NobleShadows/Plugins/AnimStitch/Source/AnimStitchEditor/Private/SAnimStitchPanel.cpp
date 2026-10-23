@@ -1,4 +1,5 @@
 #include "SAnimStitchPanel.h"
+#include "Widgets/Input/SSearchBox.h"
 #include "SAnimStitchTimeline.h"
 #include "SAnimStitchKeyPanel.h"
 #include "SAnimStitchTransportBar.h"
@@ -178,6 +179,8 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 		.OnPlayheadChanged(FSimpleDelegate::CreateSP(this, &SAnimStitchPanel::OnTimelineScrubbed))
 		.OnWarnings(FAnimStitchWarningsDelegate::CreateSP(this, &SAnimStitchPanel::HandleWarnings));
 	Timeline->LiveKeyProvider = [this](int32 Track, FAnimStitchTrackKey& OutKey) { return Preview->GetIKLiveKey(Track, OutKey); };
+	Timeline->OnTrackFilterCleared.BindLambda([this]() { if (TrackSearchBox.IsValid()) { TrackSearchBox->SetText(FText::GetEmpty()); } });
+	Timeline->OnFrameViewport.BindLambda([this]() { if (Viewport.IsValid()) { Viewport->FrameSelection(); } });
 
 	// ---- The sections of the editor. Each one becomes a tab of its own, so it can be docked anywhere (see InitializeDocking). ----
 	ViewportSection = SNew(SVerticalBox)
@@ -512,6 +515,18 @@ void SAnimStitchPanel::Construct(const FArguments& InArgs)
 			[
 				// Value panels of the expanded tracks (created on demand by SyncKeyPanels); clicks fall through to the timeline outside them.
 				SAssignNew(KeyPanelOverlay, SOverlay).Visibility(EVisibility::SelfHitTestInvisible)
+			]
+			+ SOverlay::Slot().HAlign(HAlign_Left).VAlign(VAlign_Top)
+			.Padding(TAttribute<FMargin>::CreateLambda([this]() { return FMargin(6.f, Timeline.IsValid() ? Timeline->GetTrackAreaTop() - SAnimStitchTimeline::SearchBarHeight + 2.f : 0.f, 0.f, 0.f); }))
+			[
+				SNew(SBox).WidthOverride(268.f).HeightOverride(22.f)
+				.Visibility_Lambda([this]() { return Asset && (Asset->Timeline.Tracks.Num() > 0 || (Timeline.IsValid() && !Timeline->GetTrackFilter().IsEmpty())) ? EVisibility::Visible : EVisibility::Collapsed; })
+				[
+					SAssignNew(TrackSearchBox, SSearchBox)
+					.HintText(LOCTEXT("SearchTracksHint", "Search tracks"))
+					.ToolTipText(LOCTEXT("SearchTracksTip", "Filter the track list by name as you type (bone tracks and their Translation / Rotation / Scale lanes, IK and pole lanes). Esc or clearing the field shows every track again."))
+					.OnTextChanged_Lambda([this](const FText& Text) { if (Timeline.IsValid()) { Timeline->SetTrackFilter(Text.ToString()); Timeline->Invalidate(EInvalidateWidgetReason::Paint); } })
+				]
 			]
 			+ SOverlay::Slot().HAlign(HAlign_Right).VAlign(VAlign_Fill)
 			.Padding(TAttribute<FMargin>::CreateLambda([this]() { return FMargin(0.f, Timeline.IsValid() ? Timeline->GetTrackAreaTop() : 0.f, 0.f, 0.f); }))
@@ -1979,6 +1994,16 @@ FReply SAnimStitchPanel::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent&
 	{
 		Preview->SetShowGrid(!Preview->GetShowGrid());
 		return FReply::Handled();
+	}
+	// F: frame in the viewport, whichever panel has the focus (a text box keeps its own F).
+	{
+		const TSharedPtr<SWidget> FocusedWidget = FSlateApplication::Get().GetKeyboardFocusedWidget();
+		const bool bTypingNow = FocusedWidget.IsValid() && (FocusedWidget->GetType() == FName("SEditableText") || FocusedWidget->GetType() == FName("SMultiLineEditableText"));
+		if (!bTypingNow && !InKeyEvent.IsRepeat() && !InKeyEvent.IsControlDown() && !InKeyEvent.IsAltDown() && !InKeyEvent.IsShiftDown() && FAnimStitchShortcuts::Matches(EAnimStitchShortcut::FrameSelection, InKeyEvent) && Viewport.IsValid())
+		{
+			Viewport->FrameSelection();
+			return FReply::Handled();
+		}
 	}
 	// Never steal keys from a text box (searching the Content Browser, typing a value).
 	const TSharedPtr<SWidget> Focused = FSlateApplication::Get().GetKeyboardFocusedWidget();

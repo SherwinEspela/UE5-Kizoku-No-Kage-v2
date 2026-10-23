@@ -247,6 +247,19 @@ struct ANIMSTITCHEDITOR_API FAnimStitchControlStyle
 	FVector Offset = FVector::ZeroVector;
 };
 
+/** One FK/IK switch of a limb, keyed on its IK track: from Time on the limb evaluates in IK (bIK) or FK mode, until the next switch. */
+USTRUCT()
+struct ANIMSTITCHEDITOR_API FAnimStitchLimbSwitch
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	double Time = 0.0;
+
+	UPROPERTY()
+	bool bIK = true;
+};
+
 /** A transform lane under the clip lanes (Sequencer style). Corrections are applied after foot prediction and foot lock: manual wins. */
 USTRUCT()
 struct ANIMSTITCHEDITOR_API FAnimStitchTrack
@@ -291,13 +304,23 @@ struct ANIMSTITCHEDITOR_API FAnimStitchTrack
 	UPROPERTY()
 	int32 GroupId = 0;
 
-	/** Bone tracks: channels (AnimStitchChannel bits) whose lane is unlocked for editing. Translation and Scale start locked. */
+	/**
+	 * Bone tracks: channels (AnimStitchChannel bits) whose lane is unlocked for editing. The struct default stays Rotation only so lock states stored in existing
+	 * projects (which do not store a value equal to the default) load exactly as saved; a NEW track gets Translation + Rotation unlocked (Scale stays locked), see UAnimStitchTimelineAsset::AddTrack.
+	 */
 	UPROPERTY()
 	uint8 UnlockedChannels = AnimStitchChannel::Rotation;
 
 	/** Sorted by time. */
 	UPROPERTY()
 	TArray<FAnimStitchTrackKey> Keys;
+
+	/**
+	 * IK limb tracks: the FK/IK switches keyed on this limb (sorted by time). Empty = the limb is IK wherever the IK weight says so (older projects, never switched).
+	 * Otherwise the limb is in IK mode only between an IK switch and the next FK switch; elsewhere the IK weight is forced to 0 and the limb's FK joints drive it.
+	 */
+	UPROPERTY()
+	TArray<FAnimStitchLimbSwitch> LimbSwitches;
 };
 /** One clip on the (single) track. Times are in seconds. Trimming is non-destructive. */
 USTRUCT()

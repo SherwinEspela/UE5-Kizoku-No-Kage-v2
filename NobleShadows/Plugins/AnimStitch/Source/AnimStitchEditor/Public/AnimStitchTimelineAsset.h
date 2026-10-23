@@ -29,6 +29,8 @@ public:
 	virtual void PostLoad() override;
 	/** Brings a project saved by an older version up to the current format (idempotent). Called on load; public so tests can run it on a constructed project. */
 	void MigrateToCurrentFormat();
+	/** IK key edits: short weight ramps next to far-away IK-off keys, then every key keeps a full target (see FAnimStitchManualEdits::NormalizeIKKeys). */
+	void ShapeIKRamps(FAnimStitchTrack& Track, double KeyTime);
 
 	/** Playback range start (seconds). Only affects preview playback, never the bake. */
 	UPROPERTY()
@@ -137,7 +139,22 @@ void SetTrim(int32 Index, double NewTrimIn, double NewTrimOut);
 	 * Bake to Control Rig: reveals every node and converts every bone-track key to Absolute (per-frame keys that reproduce the current result).
 	 * One undoable change when called inside a transaction. Returns the number of controls revealed or converted.
 	 */
-	int32 BakeToControlRig();
+	struct FRigBakeOptions
+	{
+		/** true: a dense Absolute key on every frame (default). false: Absolute keys only at frames that already carry keys. */
+		bool bEveryFrame = true;
+		/** true: reveal every rig node and convert every control (default). false: only controls that already carry keys are converted; keyless controls stay hidden. */
+		bool bAllControls = true;
+	};
+	int32 BakeToControlRig(const FRigBakeOptions& Options = FRigBakeOptions());
+
+	/**
+	 * Per-limb FK/IK switch, keyed at Time (call inside a transaction): the limb evaluates in its old mode before Time and in the new one from it until the next switch.
+	 * Pose-matched, so nothing pops: FK->IK puts the IK target and pole at the limb's current evaluated pose (creating the IK track and pole lane if the limb had none);
+	 * IK->FK initialises the FK joint controls (created if missing) from the current pose and carries that offset on while the limb stays in FK.
+	 * Effector = the hand / foot bone. Returns false if the limb or timeline is invalid.
+	 */
+	bool SwitchLimbMode(FName Effector, bool bToIK, double Time);
 
 	/** Bumped by every track/key edit (and undo/redo): the preview re-applies the manual corrections. */
 	uint32 GetManualCounter() const { return ManualCounter; }

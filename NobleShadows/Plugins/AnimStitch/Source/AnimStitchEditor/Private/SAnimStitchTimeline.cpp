@@ -588,7 +588,7 @@ void SAnimStitchTimeline::SelectTrackFromViewport(int32 Track)
 	SelectedKey = INDEX_NONE;
 	SelectedKeys.Reset();
 	// Scroll the lane into view.
-	const float Top = Track * (TrackLaneHeight + 2.f) + ExpandedAbove(Track) * ExpanderHeight;
+	const float Top = VisibleTracksBefore(Track) * (TrackLaneHeight + 2.f) + ExpandedAbove(Track) * ExpanderHeight;
 	const float View = GetTrackViewHeight();
 	if (Top < VScroll) { SetTrackScroll(Top); }
 	else if (Top + TrackLaneHeight > VScroll + View) { SetTrackScroll(Top + TrackLaneHeight - View + 4.f); }
@@ -1451,6 +1451,19 @@ FCursorReply SAnimStitchTimeline::OnCursorQuery(const FGeometry& G, const FPoint
 
 FReply SAnimStitchTimeline::OnKeyDown(const FGeometry& G, const FKeyEvent& Event)
 {
+	// F always means "frame in the viewport" (the selection, else the preview mesh), never a timeline zoom.
+	if (!Event.IsRepeat() && !Event.IsControlDown() && !Event.IsAltDown() && !Event.IsShiftDown() && FAnimStitchShortcuts::Matches(EAnimStitchShortcut::FrameSelection, Event) && OnFrameViewport.IsBound())
+	{
+		OnFrameViewport.Execute();
+		return FReply::Handled();
+	}
+	if (Event.GetKey() == EKeys::Escape && !TrackFilter.IsEmpty())
+	{
+		TrackFilter.Reset(); // Esc restores the full track list
+		VScroll = 0.f;
+		OnTrackFilterCleared.ExecuteIfBound();
+		return FReply::Handled();
+	}
 	if (!Event.IsRepeat() && FAnimStitchShortcuts::Matches(EAnimStitchShortcut::AddKey, Event) && AddKeyAtPlayhead()) { return FReply::Handled(); }
 	if (FAnimStitchShortcuts::Matches(EAnimStitchShortcut::CopyKeys, Event)) { CopySelectedKeys(); return FReply::Handled(); }
 	if (FAnimStitchShortcuts::Matches(EAnimStitchShortcut::PasteKeys, Event)) { PasteKeys(); return FReply::Handled(); }
